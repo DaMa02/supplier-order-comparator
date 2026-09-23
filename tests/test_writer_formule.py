@@ -76,7 +76,9 @@ def listino_con_una_formula(percorso: Path, ritocca: Callable[[str], str]) -> Pa
 
     with zipfile.ZipFile(percorso) as contenitore:
         parti = {nome: contenitore.read(nome) for nome in contenitore.namelist()}
-    foglio_xml = parti["xl/worksheets/sheet1.xml"].decode("utf-8")
+    # Con lxml openpyxl scrive `<v></v>`, senza (la CI su Windows) `<v />`:
+    # e' lo stesso elemento vuoto, e il ritocco qui sotto cerca la prima forma.
+    foglio_xml = parti["xl/worksheets/sheet1.xml"].decode("utf-8").replace("<f>5</f><v />", _FORMULA_DI_OPENPYXL)
     assert _FORMULA_DI_OPENPYXL in foglio_xml, foglio_xml
     parti["xl/worksheets/sheet1.xml"] = ritocca(foglio_xml).encode("utf-8")
     with zipfile.ZipFile(percorso, "w", zipfile.ZIP_DEFLATED) as contenitore:
