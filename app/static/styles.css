@@ -1,0 +1,4705 @@
+/* ---------------------------------------------------------------------------
+   La soglia dichiarata: nessun testo destinato a essere letto sta sotto
+   0,78rem, cioe' 12,5 px. Non c'e' `font-size` ne' su `:root` ne' su `body`,
+   quindi la base e' 16 px e i rem sono px per 16.
+
+   Vale per tutto il foglio, comprese le regole dentro le @media, e non ha
+   eccezioni. Ne aveva una — il campo dello sconto di testata — e non ce l'ha
+   piu': un valore che si legge non sta sotto la soglia nemmeno quando il campo
+   che lo contiene e' piccolo di proposito. Quel campo resta stretto e senza
+   imbottitura, che e' quello che la decisione scritta proteggeva.
+
+   Chi aggiunge una regola nuova sotto questa soglia sta scrivendo qualcosa che
+   in negozio, su un monitor che nessuno ha calibrato, non si legge.
+
+   LE QUATTRO SOGLIE RESPONSIVE, e non ce ne sono altre. Sono tutte
+   `max-width`, cioe' il foglio parte dal desktop e stringe:
+
+     1050 px  il confronto fra fornitori smette di stare in sei colonne e si
+              impila; ogni numero si riprende la sua etichetta
+      760 px  la barra in alto, i passi e la pagina passano a una colonna
+      620 px  la mappatura guidata delle colonne e le uguaglianze dichiarate
+      470 px  telefono: i pulsanti diventano larghi quanto la riga
+
+   Erano cinque, e due distavano venti pixel: c'era anche `40rem`, che fa
+   640 px, per il solo blocco delle uguaglianze. Due punti di rottura dove chi
+   legge il foglio se ne aspetta uno, e uno in un'unita' diversa dalle altre
+   quattro. Una regola responsive nuova va in uno di questi quattro blocchi.
+   --------------------------------------------------------------------------- */
+
+:root {
+  --ink: #14212b;
+  --muted: #5d6a75;
+  --line: #dce3e8;
+  --line-strong: #c6d0d8;
+  /* Il confine di un controllo — campo, tendina, pulsante secondario, contatore
+     — non e' un separatore: e' il segno che dice dove si puo' premere, e WCAG
+     gli chiede 3:1. `--line-strong` su bianco vale 1,57:1, cioe' meta' soglia,
+     e su un monitor da negozio non calibrato sparisce. Questo vale 3,49:1 su
+     bianco e 3,25:1 su `--surface-soft`. `--line-strong` resta ai separatori e
+     ai contenitori, dove la soglia non si applica. */
+  --line-control: #7d8b98;
+  /* L'anello di fuoco: unico segnale per chi si muove con la tastiera, quindi
+     opaco. Lo stesso blu di prima al 35 % componeva #b7d0e0, che su bianco fa
+     1,60:1 dove WCAG ne chiede 3. Pieno fa 4,75:1 su bianco e 4,18:1 sullo
+     sfondo della pagina. */
+  --focus: #3179a6;
+  --surface: #ffffff;
+  --surface-soft: #f5f7f8;
+  --navy: #16324f;
+  --navy-2: #234d70;
+  --blue-soft: #eaf2f8;
+  --green: #147a55;
+  --green-soft: #e8f5ef;
+  --amber: #a85e08;
+  --amber-soft: #fff3df;
+  --red: #b3261e;
+  --red-soft: #fdecea;
+  /* Tre ombre e tre soli significati. Ce n'erano quindici valori distinti su
+     ventiquattro dichiarazioni, e cinque di quelli — alfa da 0,045 a 0,1 —
+     erano lo stesso livello scritto cinque volte. Su un monitor da negozio non
+     calibrato un'ombra all'8 % non si vede: quello che stacca un riquadro dal
+     fondo e' il bordo, e l'ombra serve dove qualcosa sta DAVVERO davanti a
+     qualcos'altro. */
+  --ombra-scheda: 0 1px 2px rgba(25, 45, 62, 0.05);
+  --ombra-fascia: 0 2px 8px rgba(25, 45, 62, 0.08);
+  --ombra-finestra: 0 22px 60px rgba(9, 27, 39, 0.3);
+  /* Nome vecchio, valore nuovo: `--shadow` e' usato in sei punti e sono tutti
+     riquadri appoggiati sul fondo, non cose che stanno davanti. */
+  --shadow: var(--ombra-scheda);
+  /* Due raggi, e la pillola. `--radius-lg` a 18 px faceva sembrare un pannello
+     di lavoro una scheda di marketing; adesso vale quanto `--radius-md`, cosi'
+     non c'e' da riscrivere undici regole per accorgersene. */
+  --radius-lg: 10px;
+  --radius-md: 10px;
+  --radius-sm: 6px;
+  /* La spaziatura, su base 4 px. Non c'era nessuna scala: sessanta combinazioni
+     di padding e trentaquattro di gap, con numeri a due decimali arrivati uno
+     alla volta (0,48 / 0,55 / 0,58 / 0,62 / 0,68 / 0,72 rem). Si vedeva:
+     scendendo lungo la pagina 2 il bordo sinistro del testo cadeva su sette
+     posizioni diverse nell'arco di trenta pixel.
+
+     ⚠ La scala c'e', la conversione delle regole esistenti no: i token si
+     usano in diciassette punti, e nel foglio restano sessantotto combinazioni
+     letterali di imbottitura. Chi tocca una regola la porti sui token; chi ne
+     scrive una nuova non usi un valore che non e' in questo elenco.
+
+     E la scala delle dimensioni del testo, che sono sette e non ventisette:
+     0,78 · 0,88 · 1 · 1,15 · 1,3 · 1,5 · 1,75 rem. Fra 0,78 e 0,88 il foglio
+     dichiarava nove passi che nessun occhio distingue — 0,16 px fra il primo e
+     il secondo. E i pesi sono tre — 400, 600, 700 — perche' la pila e' di soli
+     caratteri di sistema: sul PC del negozio, con Segoe UI, i nove pesi
+     dichiarati cadevano su due soli tagli veri. */
+  --s1: 0.25rem;
+  --s2: 0.5rem;
+  --s3: 0.75rem;
+  --s4: 1rem;
+  --s5: 1.5rem;
+  --s6: 2rem;
+  --content: 1480px;
+  /* Il carattere del sistema su cui il programma gira, e nient'altro. La pila
+     cominciava con `Inter`, che nel progetto non c'e' in nessuna forma: niente
+     @font-face, nessun file di carattere, nessun collegamento a un servizio
+     esterno. Sul Mac di chi sviluppa Inter c'e' quasi sempre installata, sul PC
+     del negozio no — quindi le due macchine rendevano la stessa pagina con due
+     caratteri di metriche diverse, e ogni controllo visivo fatto in sviluppo
+     descriveva una pagina che il negozio non vede. */
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", ui-sans-serif, sans-serif;
+  color: var(--ink);
+  background: #edf1f3;
+  font-synthesis: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+  min-height: 100%;
+  background: #edf1f3;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  /* ⚠ Qui c'era un `radial-gradient` decorativo con la posizione in
+     percentuale: si risolveva sull'altezza del `body`, che cambia con quanti
+     prodotti sono caricati. Misurato: in pagina 1 la macchia si vedeva sotto la
+     barra dei passi; in pagina 2, dove il body e' alto tremila pixel, finiva
+     tutta nascosta. La stessa decorazione c'era o non c'era a seconda del
+     contenuto — e su un pannello non calibrato una sfumatura larga a basso
+     contrasto e' anche il caso in cui si vedono le bande. */
+  background: #edf1f3;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button,
+select,
+input[type="checkbox"],
+input[type="radio"] {
+  cursor: pointer;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+summary:focus-visible,
+a:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+a {
+  color: var(--navy-2);
+}
+
+/* `#workspace` riceve il fuoco da «Vai al contenuto» e a ogni cambio di pagina
+   (`goToStep`). L'anello si toglie solo quando il fuoco NON arriva dalla
+   tastiera: se ci arriva — Invio su «Continua», oppure lo skip-link — deve
+   vedersi, altrimenti dopo ogni passo il fuoco c'e' e non si sa dov'e'. */
+.workspace:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.workspace:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: -3px;
+}
+
+p {
+  margin: 0;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  line-height: 1.18;
+}
+
+.skip-link {
+  position: fixed;
+  top: 0.5rem;
+  left: 0.5rem;
+  z-index: 100;
+  padding: 0.65rem 0.9rem;
+  border-radius: var(--radius-sm);
+  color: #fff;
+  background: var(--navy);
+  transform: translateY(-150%);
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+/* ⚠ La barra in alto era un'insegna: 93 px di altezza, un occhiello maiuscolo
+   spaziato sopra un titolo che rendeva a 30 px — cioe' il testo piu' grande
+   dello schermo era quello che non cambia mai e che l'unica persona che usa il
+   programma sa a memoria. Il titolo che dice in che pagina sei ne rendeva 27.
+   Con i passi sotto facevano 162 px di intestazione prima del lavoro.
+   Adesso e' una riga sola: a sinistra chi e' il programma, a destra come sta.
+   Il gradiente a 120 gradi se n'e' andato con l'insegna — e con lui il fatto
+   che la stessa riga di testo avesse due contrasti diversi a seconda di dove
+   cadeva. */
+.topbar {
+  color: #fff;
+  background: var(--navy);
+}
+
+.topbar__inner {
+  width: min(calc(100% - 2.5rem), var(--content));
+  margin: 0 auto;
+  padding: var(--s2) 0;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--s2) var(--s4);
+}
+
+.topbar h1 {
+  flex: 1 1 auto;
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+
+.eyebrow {
+  flex: 0 0 auto;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.66;
+}
+
+.topbar__status {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.save-status {
+  color: rgba(255, 255, 255, 0.76);
+  font-size: 0.88rem;
+}
+
+/* La versione che sta girando: c'e' per essere trovata quando la si cerca, non
+   per farsi notare mentre si lavora. Percio' e' piu' smorta di `.save-status`,
+   che invece parla del lavoro in corso e va letta subito. La gerarchia resta;
+   cambia solo l'alfa. ⚠ Il numero che la giustificava — 4,22:1 — si riferiva
+   alla parte chiara del gradiente che questa stessa onda ha tolto, quindi sul
+   foglio di oggi non si riproduce piu': su `--navy` pieno il vecchio 0,55
+   avrebbe fatto 5,08:1, gia' conforme ma indistinguibile da `.save-status`.
+   A 0,68 fa 6,89:1, e la gerarchia con lo stato del salvataggio (8,24:1) si
+   legge ancora. */
+.versione-pubblicata {
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 0.78rem;
+}
+
+.stepper-shell {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  border-bottom: 1px solid var(--line);
+  /* Bianco pieno. C'era un `backdrop-filter: blur(12px)` sotto un bianco al
+     96 %: il contenuto sottostante contribuiva per il 4 %, quindi sfocarlo non
+     produceva niente di visibile, e in cambio obbligava il browser a un livello
+     di composizione ridipinto a ogni fotogramma di scorrimento su una pagina
+     alta ottomila pixel. */
+  background: var(--surface);
+}
+
+/* ⚠ Erano cerchi numerati uniti da una linea che diventava verde, con la
+   spunta: il disegno dell'ordine online in cinque passi. Qui non c'e' nessun
+   avanzamento da rappresentare — le tre voci sono premibili in qualsiasi
+   ordine e in qualsiasi momento, cioe' sono schede e non tappe — e il disegno
+   prometteva una cosa che il comportamento non manteneva.
+   Adesso sono tre schede col nome per esteso, quella attiva evidenziata, e la
+   parola «fatto» dove un fatto c'e' davvero. */
+.stepper {
+  width: min(calc(100% - 2.5rem), var(--content));
+  margin: 0 auto;
+  padding: 0;
+  display: grid;
+  /* Tre colonne quando i passi sono tre, quattro quando le Impostazioni sono
+     aperte e la barra prende la loro voce. */
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  list-style: none;
+}
+
+/* ⚠ `min-width: 0` qui e sul pulsante, per la terza volta nello stesso foglio:
+   il valore iniziale di `min-width` per un elemento di griglia o di flex e'
+   `auto`, e il nome del passo e' `white-space: nowrap`. Senza lo zero il passo
+   non poteva stringersi sotto il proprio nome intero, e a 320 px usciva dallo
+   schermo. Il taglio con i puntini c'e' gia': gli mancava solo il permesso. */
+.stepper__item {
+  min-width: 0;
+  display: flex;
+}
+
+.stepper__button {
+  width: 100%;
+  min-width: 0;
+  min-height: 3rem;
+  padding: var(--s3) var(--s2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s2);
+  border: 0;
+  border-bottom: 3px solid transparent;
+  color: var(--muted);
+  background: transparent;
+  font-weight: 600;
+}
+
+.stepper__button:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--surface-soft);
+}
+
+.stepper__label {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* «fatto», non una spunta verde: la spunta e' un'affermazione, e va usata solo
+   dove il fatto c'e'. Qui il fatto c'e', ed e' scritto a parole perche' una
+   parola si legge anche su un monitor che il verde non lo rende. */
+.stepper__fatto {
+  flex: 0 0 auto;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  color: #0c6847;
+  background: var(--green-soft);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.stepper__item.is-active .stepper__button {
+  color: var(--navy);
+  border-bottom-color: var(--navy);
+  background: var(--blue-soft);
+}
+
+.workspace {
+  width: min(calc(100% - 2.5rem), var(--content));
+  margin: 0 auto;
+  padding: 1.6rem 0 4rem;
+}
+
+.global-message:empty {
+  display: none;
+}
+
+.global-message {
+  margin-bottom: 1rem;
+}
+
+/* Il comando che sta sotto l'avviso in cima: oggi ce n'e' uno solo, «Riprova a
+   salvare», e compare quando ci sono modifiche che non sono arrivate sul disco.
+   Sta fuori dal riquadro dell'avviso e non dentro perche' l'avviso e' un
+   componente condiviso: un pulsante dentro il suo markup lo avrebbe ereditato
+   ogni altro avviso della pagina. */
+.global-message__comando {
+  margin: calc(var(--s3) * -1) 0 1rem;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.page-heading {
+  margin-bottom: 1.25rem;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--s5);
+}
+
+/* ⚠ Era `clamp(1.55rem, 2vw, 2rem)` contro il `clamp(1.45rem, 2.2vw, 2.2rem)`
+   del titolo del programma: non due gradini di una scala, due formule che si
+   incrociano. Sotto i 1.127 px di finestra il titolo di pagina era piu' grande,
+   sopra era il contrario, e a 1.127 px esatti erano identici. Un rapporto
+   gerarchico non puo' dipendere da quanto e' larga la finestra: due valori
+   fissi, e il titolo di pagina piu' grande del nome del programma sempre. */
+.page-heading h2 {
+  font-size: 1.75rem;
+  letter-spacing: -0.02em;
+}
+
+.page-heading p {
+  max-width: 52rem;
+  margin-top: 0.4rem;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+/* A destra del titolo: la data del confronto e, quando c'è, il comando che non
+   fa parte del percorso (le Impostazioni). Stanno insieme perché sono
+   entrambi contorno: quello che si fa in questa pagina è scritto al centro. */
+.page-heading__meta {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+  text-align: right;
+}
+
+.panel,
+.loading-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.panel {
+  padding: 1.25rem;
+}
+
+.panel + .panel {
+  margin-top: 1rem;
+}
+
+.panel__header {
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.panel__header h3 {
+  font-size: 1rem;
+}
+
+.panel__header p {
+  margin-top: 0.25rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.loading-card {
+  min-height: 14rem;
+  padding: var(--s6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+}
+
+.loading-card p {
+  margin-top: 0.25rem;
+  color: var(--muted);
+}
+
+.spinner {
+  width: 2rem;
+  height: 2rem;
+  border: 3px solid var(--line);
+  border-top-color: var(--navy-2);
+  border-radius: 999px;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 1.7rem;
+  padding: 0.25rem 0.58rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.badge--neutral {
+  color: #425260;
+  background: #eef2f4;
+  border-color: #dbe2e7;
+}
+
+.topbar .badge--neutral {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.badge--success {
+  color: #0c6847;
+  background: var(--green-soft);
+  border-color: #bde4d2;
+}
+
+.badge--warning {
+  color: #86500f;
+  background: var(--amber-soft);
+  border-color: #f1d29e;
+}
+
+.badge--danger {
+  color: #9f211a;
+  background: var(--red-soft);
+  border-color: #f3c2be;
+}
+
+.badge--info {
+  color: #235778;
+  background: var(--blue-soft);
+  border-color: #c9deeb;
+}
+
+.alert {
+  padding: 0.85rem 1rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.72rem;
+  border: 1px solid;
+  border-radius: var(--radius-md);
+  line-height: 1.45;
+}
+
+.alert + .alert {
+  margin-top: 0.65rem;
+}
+
+.alert__icon {
+  flex: 0 0 auto;
+  width: 1.45rem;
+  height: 1.45rem;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.alert__body {
+  min-width: 0;
+  flex: 1;
+}
+
+.alert__body strong {
+  display: block;
+  margin-bottom: 0.12rem;
+}
+
+.alert__body p {
+  color: inherit;
+  font-size: 0.88rem;
+}
+
+/* Un gruppo di avvisi che dicono la stessa cosa: il titolo una volta, il
+   numero accanto, e i messaggi — che sono tutti diversi — in elenco. Quello
+   bloccante è un `div` e resta aperto; gli altri sono `details` e partono
+   chiusi, perché sono decine e non fermano niente. */
+.alert--gruppo {
+  display: block;
+  padding: 0;
+}
+
+.alert--gruppo > summary {
+  padding: 0.85rem 1rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.72rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.alert--gruppo > summary::-webkit-details-marker {
+  display: none;
+}
+
+.alert--gruppo[role="alert"] {
+  padding: 0.85rem 1rem;
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 0.72rem;
+}
+
+.alert--gruppo .alert__body {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.alert--gruppo .alert__body strong {
+  margin-bottom: 0;
+}
+
+.alert--gruppo > summary .alert__body strong::before {
+  content: "›";
+  display: inline-block;
+  margin-right: 0.5rem;
+  transition: transform 150ms ease;
+}
+
+.alert--gruppo[open] > summary .alert__body strong::before {
+  transform: rotate(90deg);
+}
+
+/* Il comando scritto sull'avviso: «Vai alle conferme», «Vai ai prodotti da
+   confermare». Sta sotto la frase, staccato, e resta un pulsante: dentro un
+   riquadro giallo una parola sottolineata non si legge come una cosa da
+   premere. */
+.alert__comando {
+  margin-top: 0.55rem;
+}
+
+.alert__comandi {
+  padding: 0 1rem 0.9rem 3.2rem;
+}
+
+.alert--gruppo[role="alert"] > .alert__comandi {
+  flex: 1 1 100%;
+  padding-left: 2.2rem;
+}
+
+.alert__elenco {
+  margin: 0;
+  padding: 0 1rem 0.9rem 3.2rem;
+  display: grid;
+  gap: 0.4rem;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.alert--gruppo[role="alert"] > .alert__elenco {
+  flex: 1 1 100%;
+  padding-left: 2.2rem;
+}
+
+.alert__elenco > li {
+  list-style: disc;
+}
+
+.alert--warning {
+  color: #70450d;
+  background: var(--amber-soft);
+  border-color: #eccb91;
+}
+
+.alert--warning .alert__icon {
+  color: #fff;
+  background: var(--amber);
+}
+
+.alert--danger {
+  color: #85211c;
+  background: var(--red-soft);
+  border-color: #efbcb7;
+}
+
+.alert--danger .alert__icon {
+  color: #fff;
+  background: var(--red);
+}
+
+.alert--success {
+  color: #0e6346;
+  background: var(--green-soft);
+  border-color: #b7ddcc;
+}
+
+.alert--success .alert__icon {
+  color: #fff;
+  background: var(--green);
+}
+
+.alert--info {
+  color: #264f69;
+  background: var(--blue-soft);
+  border-color: #c6dce9;
+}
+
+.alert--info .alert__icon {
+  color: #fff;
+  background: var(--navy-2);
+}
+
+.import-sections {
+  display: grid;
+  gap: 1rem;
+}
+
+.import-panel {
+  display: grid;
+  gap: 1rem;
+}
+
+.import-panel > .panel__header {
+  margin-bottom: 0;
+}
+
+.dropzone--compact {
+  min-height: 7.5rem;
+}
+
+.empty-state--small {
+  min-height: 7rem;
+  padding: 1rem;
+}
+
+/* «I documenti sono cambiati»: la fascia resta finché il confronto non è
+   rifatto. Non blocca niente — è ambra, non rossa — ma non è nemmeno un
+   avviso da leggere di sfuggita. La striscia da 6 px sul fianco se n'è andata:
+   qui la stessa cosa era già detta tre volte — icona, fondo ambra e bordo
+   ambra — e la quarta era la meno leggibile delle quattro. */
+.stale-comparison {
+  margin-bottom: 1rem;
+  padding: 0.85rem 1rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  border: 1px solid #d2a45a;
+  border-radius: var(--radius-md);
+  background: var(--amber-soft);
+}
+
+.stale-comparison__icon {
+  flex: none;
+  width: 1.4rem;
+  height: 1.4rem;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  color: #fff;
+  background: var(--amber);
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.stale-comparison__body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.stale-comparison__body strong {
+  color: #6f3f05;
+  font-size: 1rem;
+}
+
+.stale-comparison__body p {
+  color: #70450d;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.stale-comparison .button {
+  flex: none;
+  align-self: center;
+}
+
+/* La frase sotto un pulsante: dice che cosa manca perché sia premibile, o che
+   cosa succede se lo si preme adesso. */
+.button-hint {
+  margin-top: 0.4rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.button-hint--end {
+  text-align: right;
+}
+
+/* Il comando spento durante il ricalcolo, con il perché accanto. */
+.import-locked {
+  color: var(--amber);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.dropzone.is-locked {
+  border-style: solid;
+  border-color: var(--line-strong);
+  background: var(--surface-soft);
+  opacity: 0.75;
+}
+
+.button.is-disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* Il ricalcolo del confronto: barra, nove fasi, numeri che scorrono. */
+.pipeline-panel {
+  margin-top: 1.2rem;
+}
+
+.pipeline-progress {
+  margin: 0.9rem 0;
+}
+
+.pipeline-progress__bar {
+  height: 0.55rem;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+
+/* La riga che dice a che punto e' il ricalcolo mentre gira: e' il testo che si
+   guarda per due o tre minuti mentre si aspetta. Senza una regola prendeva il
+   colore pieno a 16 px ed era il testo piu' grande e piu' scuro del riquadro,
+   piu' delle nove fasi, che sono l'informazione strutturata. Il messaggio che
+   passa non deve pesare piu' della struttura che resta. */
+/* Da quanto gira. Sta subito sotto la barra e prima del messaggio, perche' la
+   domanda che ci si fa guardando una barra ferma e' in quest'ordine: «a che
+   punto e'» e poi «da quanto e' li'». */
+.pipeline-progress__tempo {
+  margin: 0.45rem 0 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.operation-message {
+  margin: 0.6rem 0 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.pipeline-progress__fill {
+  height: 100%;
+  background: var(--navy-2);
+  transition: width 0.3s ease;
+}
+
+.pipeline-details {
+  margin-top: 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+}
+
+.pipeline-details > summary {
+  padding: 0.65rem 0.8rem;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.pipeline-details .pipeline-phases {
+  margin: 0;
+  padding: 0 0.7rem 0.7rem;
+}
+
+.pipeline-phases {
+  margin: 0.8rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 0.5rem;
+}
+
+.pipeline-phase {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-size: 0.88rem;
+}
+
+.pipeline-phase small {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.pipeline-phase--completato {
+  border-color: #bcdccc;
+  background: var(--green-soft);
+}
+
+.pipeline-phase--in_corso {
+  border-color: #b9d5e5;
+  background: var(--blue-soft);
+}
+
+.pipeline-phase--errore {
+  border-color: #f0c3bf;
+  background: var(--red-soft);
+}
+
+/* Configurazione guidata degli schemi sconosciuti. L'anteprima scorre in
+   orizzontale: stringere le colonne renderebbe il listino illeggibile proprio
+   nel punto in cui l'utente deve confrontarlo con i menu. */
+.schema-mapping {
+  margin-top: 1rem;
+  display: grid;
+  gap: 1rem;
+}
+
+.schema-mapping__intro,
+.schema-document__head,
+.schema-mapping__actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+}
+
+.schema-mapping__intro p,
+.schema-document__head p {
+  margin-top: 0.25rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.schema-document {
+  padding: 1rem;
+  display: grid;
+  gap: 0.9rem;
+  border: 1px solid #eccb91;
+  border-radius: var(--radius-md);
+  background: #fffdfa;
+}
+
+.schema-document h4 {
+  overflow-wrap: anywhere;
+}
+
+.schema-routing,
+.schema-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12.5rem, 1fr));
+  gap: 0.7rem;
+}
+
+.schema-preview {
+  max-width: 100%;
+  overflow: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: #fff;
+}
+
+.schema-preview table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+
+.schema-preview th,
+.schema-preview td {
+  max-width: 18rem;
+  padding: 0.4rem 0.5rem;
+  overflow: hidden;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.schema-preview thead th,
+.schema-preview tbody th {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  color: var(--navy);
+  background: var(--surface-soft);
+  font-weight: 700;
+}
+
+.schema-preview thead th {
+  top: 0;
+  z-index: 2;
+}
+
+.schema-preview .is-header td,
+.schema-preview .is-header th {
+  color: var(--navy);
+  background: var(--blue-soft);
+  font-weight: 700;
+}
+
+.schema-preview .is-mapped {
+  box-shadow: inset 0 -2px 0 #6ea4c4;
+}
+
+/* La riga che separa i prodotti dal resto: e' il punto in cui il listino viene
+   tagliato, e finche' non si vedeva si poteva solo indovinare. */
+.schema-preview .is-break td,
+.schema-preview .is-break th {
+  border-bottom: 2px solid var(--navy);
+  font-weight: 700;
+}
+
+.schema-optional {
+  border-top: 1px solid var(--line);
+  padding-top: 0.75rem;
+}
+
+.schema-optional > summary {
+  color: var(--navy-2);
+  cursor: pointer;
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.schema-optional .schema-fields {
+  margin-top: 0.75rem;
+}
+
+.schema-validation {
+  padding: 0.75rem 0.85rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.65rem;
+  border: 1px solid #b7ddcc;
+  border-radius: var(--radius-sm);
+  color: #0e6346;
+  background: var(--green-soft);
+}
+
+.schema-validation ul {
+  flex-basis: 100%;
+  margin: 0.35rem 0 0;
+  padding-left: 1.2rem;
+  color: var(--ink);
+  font-size: 0.78rem;
+}
+
+.schema-mapping__actions {
+  justify-content: flex-end;
+}
+
+/* «Prova le colonne» è facoltativo: la nota lo dice invece di lasciarlo capire
+   da un pulsante spento. */
+.schema-mapping__nota {
+  margin-top: -0.4rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.45;
+  text-align: right;
+}
+
+@media (max-width: 620px) {
+  .schema-mapping__intro,
+  .schema-document__head,
+  .schema-mapping__actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .schema-mapping__actions .button {
+    width: 100%;
+  }
+}
+
+.file-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 0.75rem;
+}
+
+.file-card {
+  min-width: 0;
+  padding: 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+}
+
+.file-card__top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.65rem;
+}
+
+.file-card__name {
+  overflow: hidden;
+  font-size: 0.88rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-card__meta {
+  margin-top: 0.45rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.75rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.file-card__message {
+  margin-top: 0.55rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+/* «Quali colonne legge»: una tabella stretta dentro la scheda del documento.
+   Sta chiusa finché non serve — la si apre quando si sospetta che il programma
+   stia leggendo la colonna sbagliata — e si ricorda di essere aperta perché il
+   riquadro passa da `apribile()`. */
+.doc-columns {
+  margin-top: 0.55rem;
+  border-top: 1px solid var(--line);
+  padding-top: 0.5rem;
+}
+
+.doc-columns > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.doc-columns > summary:hover {
+  color: var(--ink);
+}
+
+.doc-columns__note {
+  margin: 0.45rem 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.doc-columns__table {
+  width: 100%;
+  margin-top: 0.5rem;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+  table-layout: fixed;
+}
+
+.doc-columns__table th,
+.doc-columns__table td {
+  padding: 0.28rem 0.4rem;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.doc-columns__table thead th {
+  color: var(--muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+}
+
+.doc-columns__table td:first-child,
+.doc-columns__table th:first-child {
+  width: 2.6rem;
+}
+
+.doc-columns__sample {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Una colonna dichiarata dal registro che nel documento non c'è più: è il caso
+   per cui questa tabella esiste, e deve saltare all'occhio. */
+.doc-columns__table tr.is-missing td {
+  color: #85211c;
+}
+
+/* «Le offerte di questo listino non le legge nessuno»: è l'unica riga di
+   questa tabella che chiede di fare qualcosa, e si legge come tale. Sta qui
+   dentro e non in un riquadro nuovo perché è la stessa domanda delle altre
+   colonne — dove sta scritta una cosa — e perché il riquadro parte chiuso: chi
+   non ha offerte da leggere non se lo trova davanti. */
+.doc-columns__note--manca {
+  color: #70450d;
+}
+
+/* La riga della colonna d'ordine porta il comando per spostarla: il pulsante
+   sta accanto alla frase, non sotto, perché è la stessa informazione — dov'è
+   adesso e come si cambia. */
+.doc-columns__note--ordine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.colonna-dialog {
+  width: min(38rem, 100%);
+  padding: 1.2rem;
+  display: grid;
+  gap: 0.8rem;
+  border-radius: var(--radius-lg);
+  background: #fff;
+  box-shadow: var(--ombra-finestra);
+}
+
+.colonna-dialog__avviso {
+  margin: 0;
+  padding: 0.55rem 0.7rem;
+  border-radius: var(--radius-sm);
+  background: #fdf3e2;
+  color: #70450d;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.colonna-dialog__nota {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.doc-columns__origin {
+  margin: 0.5rem 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.file-card__actions,
+.compilazione__actions {
+  margin-top: 0.65rem;
+  padding-top: 0.55rem;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  border-top: 1px solid var(--line);
+  color: var(--red);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.file-card__actions .button,
+.compilazione__actions .button {
+  min-height: 2.15rem;
+  padding: 0.4rem 0.65rem;
+  font-size: 0.78rem;
+}
+
+/* La domanda prima di eliminare: dice che cosa sparisce e che cosa resta. È una
+   frase intera, quindi occupa la riga per conto suo invece di stringersi
+   accanto ai due pulsanti. */
+.file-card__confirm,
+.compilazione__confirm {
+  flex: 1 1 100%;
+  color: var(--ink);
+  font-size: 0.88rem;
+  line-height: 1.45;
+  text-align: left;
+}
+
+/* Le righe che non sono entrate nel confronto, fornitore per fornitore. Stanno
+   nella pagina dei documenti perché è lì che si guarda se un listino è entrato
+   tutto: i numeri arrivano dall'audit della run, la pagina non ne calcola. */
+.audit-disclosure {
+  padding: 0;
+  overflow: hidden;
+}
+
+.audit-disclosure__summary {
+  min-height: 3.2rem;
+  padding: 0.9rem 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.audit-disclosure__summary::-webkit-details-marker {
+  display: none;
+}
+
+.audit-disclosure__title {
+  font-weight: 600;
+}
+
+.audit-disclosure__title::before {
+  content: "›";
+  display: inline-block;
+  margin-right: 0.55rem;
+  color: var(--muted);
+  transition: transform 150ms ease;
+}
+
+.audit-disclosure[open] .audit-disclosure__title::before {
+  transform: rotate(90deg);
+}
+
+.audit-disclosure__body {
+  padding: 0 1rem 1rem;
+  border-top: 1px solid var(--line);
+}
+
+.audit-disclosure__body > p {
+  margin: 0.8rem 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.discarded-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.7rem;
+}
+
+.discarded-rows li {
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: #fff;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.discarded-rows strong {
+  font-size: 1rem;
+}
+
+.discarded-rows span {
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.4;
+}
+
+.dropzone {
+  min-height: 11rem;
+  padding: 1.25rem;
+  display: grid;
+  place-items: center;
+  border: 2px dashed #aebbc5;
+  border-radius: var(--radius-lg);
+  color: var(--muted);
+  background: var(--surface-soft);
+  text-align: center;
+  transition: 140ms ease;
+}
+
+/* Il riquadro acceso mentre ci si trascina sopra un documento: cambia colore e
+   bordo, che e' quello che dice «lascialo qui». Il pixel di sollevamento faceva
+   ballare il riquadro sotto il puntatore e non aggiungeva niente. */
+.dropzone.is-dragging {
+  border-color: var(--navy-2);
+  color: var(--navy);
+  background: var(--blue-soft);
+}
+
+.dropzone strong {
+  display: block;
+  color: var(--ink);
+}
+
+.dropzone p {
+  margin: 0.3rem 0 0.8rem;
+  font-size: 0.88rem;
+}
+
+/* Quando i documenti ci sono già, il riquadro tratteggiato non è più il
+   protagonista della pagina: diventa una riga sotto le schede, che continua ad
+   accettare il trascinamento e a offrire il selettore, senza occupare lo
+   spazio di un invito a caricare. */
+.dropzone--riga {
+  min-height: 0;
+  padding: 0.7rem 0.9rem;
+  place-items: stretch;
+  text-align: left;
+}
+
+.dropzone--riga > div {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+}
+
+.dropzone--riga strong {
+  font-size: 0.88rem;
+}
+
+.dropzone--riga p {
+  margin: 0;
+}
+
+.dropzone--riga .button {
+  margin-left: auto;
+}
+
+.dropzone input[type="file"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.pending-files {
+  margin: 0.9rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.45rem;
+  list-style: none;
+}
+
+/* I documenti rimasti fuori dal caricamento. In ambra e non in rosso: non e'
+   un guasto, e' una notizia — quel fornitore non entrera' nel confronto se non
+   si porta il suo listino in un formato leggibile. Restano finche' non li si
+   toglie, perche' un messaggio che vive 3,6 secondi non e' un posto in cui
+   un'informazione esiste. */
+.file-scartati {
+  margin: 0.9rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.45rem;
+  list-style: none;
+}
+
+.file-scartati li {
+  padding: 0.58rem 0.7rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  border: 1px solid #d2a45a;
+  border-radius: var(--radius-sm);
+  color: #6b4a05;
+  background: var(--amber-soft);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.file-scartati strong {
+  overflow-wrap: anywhere;
+}
+
+.pending-files li {
+  padding: 0.58rem 0.7rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  font-size: 0.88rem;
+}
+
+.pending-files span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Quattro campi e un comando: su tre colonne diventavano tre righe alte 224 px,
+   e prima del primo prodotto si scendeva di una schermata e mezza. Stanno in
+   riga: sono i filtri di un elenco, non un modulo da compilare. */
+.toolbar {
+  margin-bottom: 0.9rem;
+  padding: 0.85rem;
+  display: grid;
+  grid-template-columns: minmax(13rem, 1.5fr) repeat(3, minmax(8.5rem, 0.65fr)) auto;
+  align-items: end;
+  gap: 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--ombra-scheda);
+}
+
+.toolbar__reset {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--s1) var(--s2);
+}
+
+/* Il perimetro del comando, accanto al comando: e' l'unica cosa che
+   l'etichetta da sola non poteva dire senza diventare una frase. */
+.toolbar__reset-nota {
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.field {
+  min-width: 0;
+}
+
+.field label {
+  display: block;
+  margin-bottom: 0.3rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.input,
+.select,
+.quantity-input {
+  width: 100%;
+  min-height: 2.65rem;
+  padding: 0.62rem 0.72rem;
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  background: #fff;
+}
+
+.input:hover,
+.select:hover,
+.quantity-input:hover {
+  border-color: var(--muted);
+}
+
+.product-list {
+  display: grid;
+  gap: 0.65rem;
+}
+
+/* ⚠ `min-width: 0` non e' decorazione, e' la stessa trappola due volte. La
+   scheda e' un elemento di una griglia, e il valore iniziale di `min-width` per
+   un elemento di griglia e' `auto`: la scheda non poteva scendere sotto il suo
+   contenuto minimo, e a finestra stretta era lei a spingere fuori tutta la
+   pagina. Misurato a 470 px: 617 px di contenuto in 470 di finestra, con la
+   barra di scorrimento orizzontale su tutto. Con lo zero: 470, e niente fuori. */
+.product-card {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--ombra-scheda);
+}
+
+/* ⚠ Erano due strisce laterali da 4 px, ambra e rossa, e fra loro correvano
+   1,33:1: la sola cosa che distingueva «da guardare» da «blocca la
+   compilazione» era un colore che su un monitor da negozio, o per chi ha una
+   carenza sul rosso-verde, e' lo stesso. La distinzione adesso la porta
+   l'etichetta nella riga dei distintivi — «Da controllare» e «Da sistemare» —
+   e questo resta il rinforzo: bordo pieno e fondo appena tinto, che si vedono
+   anche quando il colore non arriva. */
+.product-card.has-warning {
+  border-color: #d2a45a;
+  background: #fffdf7;
+}
+
+.product-card.has-blocker {
+  border-color: #cf8e88;
+  background: #fffaf9;
+}
+
+.product-card.is-excluded {
+  border-color: var(--line-strong);
+  background: var(--surface-soft);
+  box-shadow: none;
+}
+
+/* Cambio fornitore con pezzi per collo diversi: evidenzia la scheda, poi sparisce da
+   sola. Il testo esplicito (.supplier-change-notice) resta finché lo stato non lo
+   rimuove, qualche secondo dopo. */
+.product-card.is-supplier-changed {
+  animation: supplier-change-flash 4.5s ease-out;
+}
+
+@keyframes supplier-change-flash {
+  0%, 65% {
+    box-shadow: 0 0 0 3px rgba(168, 94, 8, 0.45), var(--ombra-scheda);
+  }
+  100% {
+    box-shadow: var(--ombra-scheda);
+  }
+}
+
+.supplier-change-notice {
+  margin: 0 1rem 1rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid #eccb91;
+  border-radius: var(--radius-sm);
+  color: #70450d;
+  background: var(--amber-soft);
+  font-size: 0.88rem;
+  font-weight: 600;
+  line-height: 1.4;
+  animation: supplier-change-fade 4.5s ease-out forwards;
+}
+
+@keyframes supplier-change-fade {
+  0%, 75% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+.product-card__header {
+  padding: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.product-order-row {
+  padding: 0 1rem 1rem;
+  display: grid;
+  grid-template-columns: minmax(14rem, 0.75fr) minmax(16rem, 1fr) minmax(11rem, 0.55fr);
+  align-items: end;
+  gap: 1rem;
+}
+
+.quantity-block__label,
+.selected-choice > span,
+.price-summary > span {
+  display: block;
+  margin-bottom: 0.35rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.quantity-block__label-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.35rem;
+}
+
+.quantity-block__label-row .quantity-block__label {
+  margin-bottom: 0;
+}
+
+.source-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.14rem 0.5rem;
+  border: 1px solid #c9deeb;
+  border-radius: 999px;
+  color: #235778;
+  background: var(--blue-soft);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.quantity-stepper {
+  display: grid;
+  grid-template-columns: 3rem minmax(4.5rem, 6rem) 3rem;
+  align-items: stretch;
+}
+
+.quantity-stepper .quantity-input {
+  min-height: 3rem;
+  border-radius: 0;
+  text-align: center;
+  font-size: 1rem;
+}
+
+.quantity-stepper__button {
+  min-width: 3rem;
+  min-height: 3rem;
+  border: 1px solid var(--line-control);
+  color: var(--navy);
+  background: #fff;
+  font-size: 1.3rem;
+  font-weight: 700;
+}
+
+.quantity-stepper__button:first-child {
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+
+.quantity-stepper__button:last-child {
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.selected-choice strong {
+  display: block;
+  color: var(--navy);
+  font-size: 1rem;
+}
+
+.selected-choice small,
+.price-summary small {
+  display: block;
+  margin-top: 0.25rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.button--danger-soft {
+  color: #8e251f;
+  background: #fff;
+  border-color: #e4b9b5;
+}
+
+.product-comparison {
+  padding: 1rem;
+  border-top: 1px solid var(--line);
+  background: var(--surface-soft);
+}
+
+.product-comparison > h4 {
+  margin-bottom: 0.75rem;
+  font-size: 1rem;
+}
+
+.product-issues {
+  margin-bottom: 0.7rem;
+  display: grid;
+  gap: 0.6rem;
+}
+
+/* La decisione già presa su una riga proposta: si vede, e si può cambiare
+   finché dura questo confronto. */
+.candidate-decisions {
+  margin-bottom: 0.7rem;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.candidate-decision {
+  padding: 0.6rem 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.9rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  font-size: 0.88rem;
+}
+
+.candidate-decision.is-accepted {
+  border-color: #bcdccc;
+  background: var(--green-soft);
+}
+
+.candidate-decision__text {
+  flex: 1 1 18rem;
+  min-width: 0;
+  line-height: 1.45;
+}
+
+.candidate-decision__note {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.candidate-check {
+  padding: 0.8rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem 1rem;
+  border: 1px solid #eccb91;
+  border-radius: var(--radius-md);
+  background: var(--amber-soft);
+}
+
+.candidate-check__body {
+  min-width: 0;
+  display: grid;
+  gap: 0.18rem;
+}
+
+.candidate-check__body strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.candidate-check__body span {
+  color: #70450d;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.candidate-check__supplier {
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.candidate-check__actions {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 0.4rem;
+}
+
+.candidate-check__actions > span {
+  grid-column: 1 / -1;
+  color: #70450d;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.candidate-check__actions .button {
+  min-height: 2.4rem;
+}
+
+.candidate-check__details {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.candidate-check__details summary {
+  width: max-content;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.candidate-check__details p {
+  margin-top: 0.4rem;
+  line-height: 1.45;
+}
+
+.excluded-message {
+  padding: 0 1rem 1rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.undo-bar {
+  margin-bottom: 1rem;
+  padding: 0.8rem 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: #fff;
+  box-shadow: var(--shadow);
+}
+
+/* La conferma di «Inizia nuova comparazione»: una riga, non una finestra.
+   Quello che il comando toglie sono copie — i documenti in ingresso sono di
+   sola lettura — quindi il gesto non merita il peso di una finestra modale,
+   che ferma la pagina e si chiude con la tastiera. Ha la forma della barra di
+   annullamento perché è la stessa cosa: una frase e la sua risposta, larghe
+   quanto la pagina, sopra a quello che riguardano.
+   ⚠ Il bordo è quello forte e non il rosso pieno: qui non si sta per perdere
+   niente che non torni ricaricando i documenti, e il rosso pieno del programma
+   è riservato a quello che ferma la compilazione. */
+.conferma-riga {
+  margin-bottom: 1rem;
+  padding: 0.8rem 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem 1rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  line-height: 1.45;
+}
+
+.conferma-riga > span:first-child {
+  flex: 1 1 20rem;
+}
+
+.conferma-riga__comandi {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.product-main {
+  min-width: 0;
+}
+
+.product-main__title {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+/* ⚠ `min-width: 0` non e' decorazione. Il nome del prodotto e' un elemento
+   flessibile dentro `.product-main__title`, e il valore iniziale di `min-width`
+   per un elemento flessibile e' `auto`: con `white-space: nowrap` vuol dire
+   «non scendere sotto la larghezza dell'intero nome». Il taglio con i puntini
+   non entrava mai in funzione, e a finestra stretta era il nome del prodotto a
+   spingere fuori tutta la pagina — misurato a 470 px: 617 px di contenuto in
+   470 di finestra, con la barra di scorrimento orizzontale su tutto. */
+.product-main h3,
+.product-main h4 {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 1rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.product-main__meta {
+  margin-top: 0.28rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.7rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.quantity-input {
+  min-height: 2.45rem;
+  padding: 0.48rem 0.58rem;
+  text-align: right;
+  font-weight: 700;
+}
+
+.price-summary {
+  text-align: right;
+}
+
+/* ⚠ Cifre incolonnate anche qui. `tabular-nums` c'era sui numeri piccoli — la
+   griglia delle offerte, la fascia dei totali, le righe del riepilogo — e
+   mancava proprio sui quattro numeri grandi. Con le cifre proporzionali del
+   carattere di sistema «1111,11» occupa 46 px e «8888,88» ne occupa 63: il 36 %
+   in piu', cioe' una colonna di prezzi che balla. */
+.price-summary strong {
+  font-variant-numeric: tabular-nums;
+  display: block;
+  font-size: 1rem;
+}
+
+.price-summary span {
+  display: block;
+  margin-top: 0.16rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.nested-details > summary {
+  padding: 0.65rem 0.9rem;
+  color: var(--navy-2);
+  font-size: 0.78rem;
+  font-weight: 700;
+  list-style-position: inside;
+}
+
+.nested-details[open] > summary {
+  background: var(--blue-soft);
+}
+
+.component-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+
+.component-table th,
+.component-table td {
+  padding: 0.48rem 0.55rem;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+
+.component-table th {
+  color: var(--muted);
+  font-size: 0.78rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.component-table td:last-child,
+.component-table th:last-child {
+  text-align: right;
+}
+
+/* Il confronto dei fornitori: una riga per fornitore, le intestazioni scritte
+   una volta sola in cima e i numeri incolonnati. Intestazione e righe usano lo
+   stesso `grid-template-columns`, e sono tutte frazioni: due griglie sorelle
+   larghe uguali risolvono le stesse colonne, quindi restano allineate senza
+   che serva `subgrid`. */
+.offer-grid {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.offer-grid__head,
+.offer-card {
+  display: grid;
+  grid-template-columns:
+    minmax(0, 1.75fr) minmax(0, 1fr) minmax(0, 1fr)
+    minmax(0, 0.8fr) minmax(0, 1.05fr) minmax(0, 1.3fr);
+  align-items: center;
+  gap: 0.35rem 0.7rem;
+}
+
+/* Le sei intestazioni del confronto sono le uniche etichette visibili di quei
+   numeri: sopra i 1050 px le etichette per cella sono nascoste. Erano a
+   0,67rem, cioe' 10,7 px, maiuscole e spaziate — l'informazione piu' densa
+   della pagina scritta piu' piccola di tutto il resto. La spaziatura fra le
+   lettere se ne va con la dimensione: a maiuscoletto piccolo aggiungeva solo
+   rumore. */
+.offer-grid__head {
+  padding: 0 0.75rem 0.15rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.offer-grid__head > span {
+  text-align: right;
+}
+
+.offer-grid__head > span:first-child {
+  text-align: left;
+}
+
+.offer-card {
+  position: relative;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: #fff;
+}
+
+.offer-card.is-selected {
+  border-color: var(--green);
+  box-shadow: inset 0 0 0 1px var(--green);
+  background: #fbfffd;
+}
+
+/* «Spenta» si ottiene coi colori, non con la trasparenza. `opacity: 0.62`
+   sbiadiva anche il motivo per cui quel fornitore e' fuori da questo prodotto,
+   e quel motivo va letto: composto faceva 2,47:1, contro i 4,5:1 che WCAG
+   chiede a un testo di 13 px. A piena opacita' lo stesso testo fa 5,16:1.
+   ⚠ Il rilievo [19] dell'onda 5 dichiarava 5,26 e correggeva il revisore che
+   aveva scritto 5,16: rifatto il conto, aveva ragione il revisore. Non cambia
+   niente — sono tutti e due sopra la soglia — ma su questo progetto i numeri
+   misurati si scrivono giusti.
+   Che l'offerta non si possa scegliere e' gia' detto due volte: dal distintivo
+   «Non disponibile» e dall'assenza del pulsante di scelta. */
+.offer-card.is-unavailable {
+  border-style: dashed;
+  background: var(--surface-soft);
+}
+
+.offer-card.is-unavailable .offer-card__supplier {
+  color: var(--muted);
+}
+
+.offer-card__cell {
+  min-width: 0;
+}
+
+.offer-card__numero {
+  text-align: right;
+}
+
+.offer-card__numero strong {
+  display: block;
+  font-size: 1rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.offer-card__cell--totale strong {
+  font-weight: 700;
+}
+
+/* L'etichetta di ogni numero c'è sempre nel markup: qui la legge solo la
+   sintesi vocale, perché l'intestazione in cima dice già la stessa cosa. Sugli
+   schermi stretti torna visibile (vedi la regola a 1050 px). */
+.offer-card__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.offer-card__identita {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.45rem;
+}
+
+.offer-card__supplier {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-weight: 700;
+}
+
+/* Il nome che il fornitore usa sul suo listino: è l'unico posto in cui si
+   legge il colore o la variante, e l'EAN uguale non li garantisce. */
+.offer-card__riga-fornitore {
+  display: block;
+  width: 100%;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+/* Come quella riga e' stata abbinata, quando e' andata come doveva: testo, non
+   distintivo. Vedi il commento su ABBINAMENTI_NORMALI in app.js. */
+.offer-card__abbinamento {
+  color: var(--muted);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.offer-card__niente {
+  color: var(--muted);
+}
+
+/* Quello che non sta in una colonna — l'offerta del fornitore, un avviso sulla
+   riga — prende la larghezza intera sotto i numeri. */
+.offer-card__intera {
+  grid-column: 1 / -1;
+}
+
+.offer-grid__mancanti {
+  padding: 0.15rem 0.75rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+/* Quanto dura un no: una riga sola sotto i riquadri dei rifiuti, non una copia
+   della stessa frase dentro ciascuno. Stessa taglia e stesso grigio della riga
+   dei fornitori che non ce l'hanno — sono due note dello stesso tipo, sotto la
+   stessa tabella. */
+.offer-grid__regola-del-no {
+  padding: 0.15rem 0.75rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.offer-card__unavailable {
+  min-height: 3.2rem;
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.promotion {
+  padding: 0.4rem 0.55rem;
+  border: 1px solid #eccb91;
+  border-radius: var(--radius-sm);
+  color: #70450d;
+  background: var(--amber-soft);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.promotion-summary-panel {
+  margin-top: 1rem;
+}
+
+.promotion-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.promotion-summary-item {
+  padding: 0.85rem 0.95rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+}
+
+.promotion-summary-item span {
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.35;
+}
+
+.promotion-summary-item strong {
+  color: var(--navy);
+  font-size: 1.3rem;
+}
+
+.promotion-summary-item.is-earned {
+  border-color: #b8d9c4;
+  background: var(--green-soft);
+}
+
+.promotion-summary-item.is-near {
+  border-color: #eccb91;
+  background: var(--amber-soft);
+}
+
+.promotion-summary-item.is-review {
+  border-color: #b9d5e5;
+  background: var(--blue-soft);
+}
+
+/* Ordini non ancora ricevuti, in cima alla pagina 2: una domanda per fornitore,
+   testo grande e due risposte esplicite (nessuna finestra di conferma). */
+
+.pending-orders {
+  margin-bottom: 1rem;
+  padding: 0.9rem 1rem 1rem;
+  display: grid;
+  gap: 0.6rem;
+  border: 1px solid #eccb91;
+  border-radius: var(--radius-lg);
+  background: var(--amber-soft);
+  box-shadow: var(--shadow);
+}
+
+/* Il riquadro quando l'elenco non si è potuto leggere: non è la stessa notizia
+   di un elenco pieno, e non deve avere lo stesso aspetto. Rosso, perché qui
+   l'utente sta per riordinare merce che forse ha già ordinato. */
+.pending-orders--failed {
+  border-color: #e3a2a2;
+  background: var(--red-soft);
+}
+
+.pending-orders--failed .pending-orders__label,
+.pending-orders--failed .pending-orders__note {
+  color: #8a2b2b;
+}
+
+.pending-orders__label {
+  color: #70450d;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.pending-orders__note {
+  color: #70450d;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+/* «Chi annulli sparisce dall'elenco e non ti viene più chiesto.» Sta sotto i
+   tre pulsanti perché è la conseguenza del terzo, non una premessa. */
+.pending-order__note {
+  margin-top: 0.5rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.pending-order {
+  padding: 0.85rem 0.95rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+  border: 1px solid #eccb91;
+  border-radius: var(--radius-md);
+  background: #fff;
+}
+
+.pending-order__text {
+  flex: 1 1 20rem;
+  min-width: 0;
+}
+
+.pending-order__question {
+  display: block;
+  color: var(--ink);
+  font-size: 1rem;
+  line-height: 1.35;
+}
+
+.pending-order__meta {
+  display: block;
+  margin-top: 0.3rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.pending-order__actions {
+  /* Cresce fino a occupare la riga quando va a capo: i tre pulsanti restano
+     larghi e facili da centrare anche su schermi stretti. */
+  flex: 1 1 24rem;
+  max-width: 34rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 0.6rem;
+}
+
+/* Avviso sulla scheda prodotto. Stessa geometria di .supplier-change-notice ma
+   senza dissolvenza: resta finché la merce non viene dichiarata ricevuta. */
+.pending-order-notice {
+  margin: 0 1rem 1rem;
+  padding: 0.7rem 0.85rem;
+  display: grid;
+  gap: 0.3rem;
+  border: 1px solid #eccb91;
+  border-radius: var(--radius-sm);
+  color: #70450d;
+  background: var(--amber-soft);
+  font-size: 0.88rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+/* Pannello offerte in cima alla pagina 2 (scelta prodotti e fornitori). */
+
+.promotion-panel {
+  margin-bottom: 1rem;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.promotion-highlights {
+  padding: 0.85rem 1rem;
+  display: grid;
+  gap: 0.55rem;
+  border: 1px solid #eccb91;
+  border-radius: var(--radius-lg);
+  background: var(--amber-soft);
+  box-shadow: var(--shadow);
+}
+
+.promotion-highlights__label {
+  color: #70450d;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.promotion-highlights__list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.promotion-highlights__more {
+  color: #70450d;
+  font-size: 0.78rem;
+}
+
+.promotion-highlight {
+  padding: 0.6rem 0.75rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.75rem;
+  border: 1px solid #eccb91;
+  border-radius: var(--radius-sm);
+  background: #fff;
+}
+
+.promotion-highlight.is-earned {
+  border-color: #b8d9c4;
+  background: var(--green-soft);
+}
+
+.promotion-highlight__supplier {
+  color: var(--navy);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.promotion-highlight__text {
+  flex: 1 1 16rem;
+  min-width: 0;
+  color: var(--ink);
+  font-size: 0.88rem;
+  line-height: 1.4;
+}
+
+.promotion-highlight__action {
+  flex: 0 0 auto;
+  min-height: 2.15rem;
+  padding: 0.4rem 0.7rem;
+  font-size: 0.78rem;
+}
+
+.promotion-catalog {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.promotion-catalog > summary {
+  padding: 1rem 1.25rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem 1rem;
+  list-style: none;
+  cursor: pointer;
+}
+
+.promotion-catalog > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* ⚠ Il triangolino era un elemento a sé dentro un `summary` in
+   `space-between`: con tre voci al posto di due il titolo finiva **in mezzo**
+   alla riga, come una didascalia centrata in una pagina che non centra niente
+   altro. Sta dentro il titolo, come nelle altre sezioni apribili. */
+.promotion-catalog > summary h3::before {
+  content: "›";
+  display: inline-block;
+  margin-right: 0.55rem;
+  color: var(--muted);
+  transition: transform 120ms ease;
+}
+
+.promotion-catalog[open] > summary h3::before {
+  transform: rotate(90deg);
+}
+
+.promotion-catalog > summary h3 {
+  display: inline;
+  font-size: 1rem;
+}
+
+.promotion-catalog__counts {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.promotion-catalog__body {
+  padding: 0.25rem 1.25rem 1.25rem;
+  border-top: 1px solid var(--line);
+}
+
+.promotion-catalog__group h4 {
+  margin: 1rem 0 0.55rem;
+  color: var(--navy);
+  font-size: 0.88rem;
+}
+
+.promotion-catalog__items {
+  display: grid;
+  gap: 0.55rem;
+  list-style: none;
+}
+
+.promotion-catalog__item {
+  padding: 0.7rem 0.85rem;
+  display: grid;
+  gap: 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+}
+
+.promotion-catalog__item-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.promotion-catalog__kind {
+  color: var(--navy);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.promotion-catalog__source {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-style: italic;
+  line-height: 1.4;
+}
+
+.promotion-catalog__message {
+  color: var(--ink);
+  font-size: 0.88rem;
+  line-height: 1.4;
+}
+
+.promotion-catalog__item-bottom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.promotion-catalog__item-bottom span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.promotion-filter-chip {
+  margin-bottom: 0.9rem;
+  padding: 0.6rem 0.9rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 0.75rem;
+  border: 1px solid #c9deeb;
+  border-radius: var(--radius-md);
+  color: #235778;
+  background: var(--blue-soft);
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+/* Due usi, e non e' una svista: la differenza di prezzo rispetto al piu'
+   conveniente, e l'avviso che accompagna un'offerta. Sono tutt'e due la stessa
+   cosa — una riga di contorno sotto il dato principale. */
+.offer-card__delta {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.offer-card__numero .offer-card__delta {
+  display: block;
+  margin-top: 0.1rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.offer-card__last-price {
+  display: inline-block;
+  padding: 0.2rem 0.45rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.78rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.offer-card__last-price.is-lower {
+  color: #0c6847;
+  background: var(--green-soft);
+}
+
+.offer-card__last-price.is-higher {
+  color: #9f211a;
+  background: var(--red-soft);
+}
+
+.confirmation {
+  margin-top: 0.65rem;
+  padding: 0.72rem 0.85rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  border: 1px solid #eccb91;
+  border-radius: var(--radius-sm);
+  color: #70450d;
+  background: var(--amber-soft);
+  font-size: 0.88rem;
+  line-height: 1.4;
+}
+
+/* ⚠ Niente più `.confirmation input`, `.confirmation label`: il sì era una
+   casella con la sua etichetta, e dal 22 agosto 2026 è un pulsante — come il
+   no, che risponde alla stessa domanda. Il riquadro non ha più due colonne. */
+.confirmation > div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.confirmation span {
+  display: block;
+}
+
+.confirmation details {
+  margin-top: 0.2rem;
+  color: var(--muted);
+}
+
+.confirmation details summary {
+  width: max-content;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.confirmation details p {
+  margin-top: 0.35rem;
+}
+
+/* Il motivo per cui la conferma serve. Era dietro un «Perché serve?»: chiedeva
+   di spuntare prima di dire in base a che cosa. Adesso si legge sempre. */
+.confirmation__why {
+  margin-top: 0.3rem;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+/* Una domanda a cui si è già risposto non è più una domanda: il riquadro
+   perde l'ambra dell'avviso e prende il verde di una cosa a posto. Resta
+   dov'era — dentro la riga del prodotto a cui si riferisce — perché è lì che
+   la si rilegge, e perché toglierla di lì vorrebbe dire un riquadro a parte
+   che ripete di quale prodotto sta parlando. */
+.confirmation.is-answered {
+  border-color: #b3ddca;
+  color: #14563c;
+  background: var(--green-soft);
+}
+
+.confirmation__gia {
+  margin-top: 0.3rem;
+  line-height: 1.45;
+}
+
+/* Le due risposte, e la conseguenza di quella che toglie qualcosa. I pulsanti
+   in riga perché sono due risposte alla stessa domanda: incolonnarli li
+   farebbe leggere come due comandi diversi. La frase va a capo da sé quando
+   non ci sta, e non trascina i pulsanti con sé. */
+.confirmation__risposte {
+  margin-top: 0.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.5rem;
+  line-height: 1.45;
+}
+
+.confirmation__risposte > span {
+  display: block;
+  flex: 1 1 14rem;
+}
+
+/* La riga di un fornitore uscito per decisione di chi ordina, non per colpa
+   sua: resta tratteggiata come le altre non disponibili, e il pulsante che
+   riapre la domanda sta dentro la frase che la spiega. */
+.offer-card.is-rifiutata .offer-card__unavailable {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.supplier-totals-strip {
+  position: sticky;
+  /* Sotto la barra dei passi, che adesso e' alta 3rem invece di 4,25. Le due
+     quote devono restare in accordo: sono i due soli elementi agganciati in
+     alto. ⚠ I 3 px del bordo inferiore del passo attivo e il pixel del bordo
+     della fascia dei passi vanno contati: senza, la fascia dei totali si
+     sovrapponeva alla barra di un pixel. */
+  top: calc(3rem + 4px);
+  z-index: 15;
+  margin-bottom: 0.85rem;
+  padding: 0.45rem 0.6rem;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  overflow-x: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  /* Come sopra: sotto un bianco al 97 % non c'era niente da vedere
+     attraverso. */
+  background: var(--surface);
+  box-shadow: var(--ombra-fascia);
+}
+
+.supplier-totals-strip__label {
+  flex: 0 0 auto;
+  padding: 0 0.3rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.supplier-totals-strip__item {
+  flex: 0 0 auto;
+  padding: 0.32rem 0.55rem;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--surface-soft);
+  font-size: 0.78rem;
+}
+
+.supplier-totals-strip__item.is-active {
+  color: var(--navy);
+  background: var(--blue-soft);
+}
+
+.supplier-totals-strip__item strong {
+  color: inherit;
+  font-size: 0.88rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Il totale dell'ordine chiude la fascia, staccato dai fornitori: è la loro
+   somma, non uno di loro. */
+.supplier-totals-strip__item--totale {
+  margin-left: auto;
+  padding-left: 0.8rem;
+  color: var(--ink);
+  background: transparent;
+  border-left: 1px solid var(--line-strong);
+  border-radius: 0;
+}
+
+.supplier-totals-strip__item--totale > span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.supplier-totals-strip__item--totale strong {
+  font-size: 1rem;
+}
+
+/* Lo sconto di testata: sta accanto al totale del fornitore perché è lì che si
+   vede l'effetto. Piccolo di proposito — è un campo che si tocca una volta a
+   settimana, non un comando da mettere in evidenza. */
+.supplier-discount {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.1rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* L'etichetta che mancava. Sta prima del «−» e non sopra il campo perche' la
+   fascia e' `sticky` e alta poco: una riga in piu' la farebbe crescere su tutte
+   e tre le pagine. In minuscolo e in grigio, perche' e' il nome del campo, non
+   un comando. */
+.supplier-discount__etichetta {
+  color: var(--muted);
+}
+
+.supplier-discount__input {
+  width: 2.6rem;
+  padding: 0.08rem 0.2rem;
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  /* ⚠ Era a 0,72rem, ed era l'eccezione dichiarata alla soglia. Non lo e' piu':
+     il numero dentro il campo si legge, e un valore che si legge non sta sotto
+     la soglia. La decisione scritta due regole sopra — «piccolo di proposito,
+     non un comando da mettere in evidenza» — resta vera e resta rispettata: il
+     campo e' largo 2,6rem e senza imbottitura, cioe' e' la MISURA a tenerlo
+     defilato, non la dimensione del testo. */
+  font-size: 0.78rem;
+  text-align: right;
+}
+
+.supplier-discount__input::-webkit-outer-spin-button,
+.supplier-discount__input::-webkit-inner-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
+}
+
+.supplier-totals-strip__item.has-discount {
+  color: var(--navy);
+  background: var(--blue-soft);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+
+.supplier-summary {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: #fff;
+}
+
+.supplier-summary + .supplier-summary {
+  margin-top: 0.75rem;
+}
+
+.supplier-summary__head {
+  padding: 0.85rem 0.95rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  background: var(--surface-soft);
+  border-bottom: 1px solid var(--line);
+}
+
+.supplier-summary__head strong {
+  font-size: 1rem;
+}
+
+.supplier-summary__head span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+/* L'intestazione del fornitore è premibile SOLO nel riepilogo raggruppato per
+   fornitore, dove è un `<summary>`: raggruppando per prodotto la stessa classe
+   sta su un `<div>` che non apre niente, e un puntatore a manina lì
+   prometterebbe un comando che non c'è. Per questo il selettore nomina
+   l'elemento. */
+summary.supplier-summary__head {
+  cursor: pointer;
+  /* I tre modi di togliere il triangolino di serie: `display: flex` basta a
+     Chrome, `list-style` serve a Firefox, la pseudo-classe a Safari. Al suo
+     posto c'è il chevron, che è l'unico segno «qui si apre» del programma. */
+  list-style: none;
+}
+
+summary.supplier-summary__head::-webkit-details-marker {
+  display: none;
+}
+
+.supplier-summary__chi strong::before {
+  content: "›";
+  display: inline-block;
+  margin-right: 0.55rem;
+  color: var(--muted);
+  transition: transform 150ms ease;
+}
+
+.supplier-summary[open] .supplier-summary__chi strong::before {
+  transform: rotate(90deg);
+}
+
+.supplier-summary__total {
+  text-align: right;
+}
+
+.supplier-summary__total strong {
+  font-variant-numeric: tabular-nums;
+  display: block;
+  font-size: 1.15rem;
+}
+
+.order-lines {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* ⚠ Le colonne erano `auto`, cioè larghe quanto il loro contenuto: una riga da
+   «9,06 €» e una da «17,85 €» avevano l'ultima colonna di larghezza diversa, e
+   con lei si spostavano i comandi − 1 + × di tutta la riga. Quattrocento righe
+   con i comandi che ballano di dieci pixel non sono un riepilogo. Le colonne
+   dei numeri hanno una larghezza fissa e le cifre sono tabellari.
+   ⚠ Dal 21 settembre 2026 anche quella dei comandi (8,75rem = tre bottoni da
+   2rem, lo spazio e la ×, misurati 139,6 px): ogni riga è una griglia a sé, e
+   nell'intestazione quella cella è vuota — con `auto` era larga zero e
+   «Quantità» finiva sopra i comandi. */
+.order-lines li {
+  padding: 0.68rem 0.95rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 5.5rem 8.75rem 5.5rem 5.5rem;
+  align-items: center;
+  gap: 0.8rem;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.78rem;
+}
+
+.order-lines li > strong {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* Il prezzo di un pezzo, accanto al totale della riga: grigio perché è un
+   numero da leggere, non da sommare — non entra in nessun totale. È lo stesso
+   della colonna «Prezzo per pezzo» di pagina 2, quello con cui il fornitore è
+   stato scelto. La parola «al pezzo» serve solo dove l'intestazione sparisce. */
+.order-lines__pezzo {
+  position: relative;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* Nascosta alla vista e non ai lettori di schermo, come `.offer-card__label`. */
+.order-lines__pezzo-etichetta {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* L'intestazione delle colonne, una per elenco. Stesso aspetto di quella della
+   griglia delle offerte (`.offer-grid__head`), e come lei sparisce quando la
+   riga si impila. */
+.order-lines .order-lines__intestazione {
+  padding-top: 0.45rem;
+  padding-bottom: 0.35rem;
+  color: var(--muted);
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.order-lines__intestazione > span {
+  text-align: right;
+}
+
+.order-lines__intestazione > span:first-child {
+  text-align: left;
+}
+
+.order-lines li:last-child {
+  border-bottom: 0;
+}
+
+.order-lines__name {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ⚠ `font-size` esplicito: senza, questi due `<small>` prendevano lo `smaller`
+   del browser — 0,833 volte i 12,48 px della riga, cioe' 10,4 px — ed erano
+   l'unico testo del foglio sotto la soglia dichiarata in testa. Le tre regole
+   `small` sorelle ce l'hanno tutte. Sono «EAN fornitore: …» e «Offerta: …», e
+   compaiono su ogni riga del riepilogo, in pagina 2 e in pagina 3. */
+.order-lines__name small {
+  font-size: 0.78rem;
+  display: block;
+  margin-top: 0.2rem;
+  overflow: hidden;
+  color: var(--amber);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.order-lines__name .order-lines__ean {
+  color: var(--muted);
+}
+
+.order-lines__qty {
+  color: var(--muted);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.order-lines__supplier {
+  color: var(--navy);
+  font-weight: 700;
+}
+
+.order-lines--product li {
+  grid-template-columns: minmax(14rem, 1fr) minmax(8rem, 0.45fr) 5.5rem 8.75rem 5.5rem 5.5rem;
+}
+
+.order-lines--product .order-lines__intestazione > span:nth-child(2) {
+  text-align: left;
+}
+
+/* ⚠ Il «×» sta staccato dagli altri tre, e non e' una scelta d'aspetto: azzera
+   la quantita' e fa sparire il prodotto da questa pagina nello stesso istante,
+   mentre il «+» accanto e' il bersaglio che si preme piu' spesso. Il bersaglio
+   piu' distruttivo non confina con quello piu' frequente. Il contorno resta
+   attorno ai soli tre comandi della quantita': il «×» ha il suo. */
+.summary-quantity {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.summary-quantity__gruppo {
+  display: inline-grid;
+  grid-template-columns: repeat(3, 2rem);
+  align-items: center;
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: #fff;
+}
+
+.summary-quantity button,
+.summary-quantity strong {
+  width: 2rem;
+  min-height: 2rem;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-right: 1px solid var(--line);
+  color: var(--navy);
+  background: #fff;
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.summary-quantity strong {
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.summary-quantity__gruppo > :last-child {
+  border-right: 0;
+}
+
+.summary-quantity .summary-quantity__remove {
+  border: 1px solid #e4b9b5;
+  border-radius: var(--radius-sm);
+  color: #8e251f;
+  background: var(--red-soft);
+  font-size: 1.15rem;
+}
+
+/* Sposta tutto su un altro fornitore (pagina 3).
+   Il comando sta su ogni scheda fornitore. Quando il subtotale è sotto soglia
+   la riga si accende: è il caso in cui serve davvero. */
+
+.supplier-summary__move {
+  padding: 0.7rem 0.95rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem 1rem;
+  border-bottom: 1px solid var(--line);
+  background: #fff;
+}
+
+.supplier-summary__move.is-below {
+  border-bottom-color: #eccb91;
+  background: var(--amber-soft);
+}
+
+.supplier-summary__move-hint {
+  flex: 1 1 18rem;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.supplier-summary__move.is-below .supplier-summary__move-hint {
+  color: #70450d;
+  font-weight: 600;
+}
+
+.move-dialog {
+  width: min(52rem, 100%);
+  max-height: min(46rem, calc(100vh - 2rem));
+  padding: 1.2rem;
+  display: grid;
+  grid-template-rows: auto minmax(8rem, 1fr) auto;
+  gap: 1rem;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: #fff;
+  box-shadow: var(--ombra-finestra);
+}
+
+.move-dialog__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.move-dialog__header p {
+  margin-top: 0.35rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.move-dialog__body {
+  min-height: 0;
+  overflow: auto;
+}
+
+.move-dialog__hint {
+  margin-top: 0.7rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.move-dialog__footer {
+  padding-top: 0.8rem;
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  border-top: 1px solid var(--line);
+}
+
+.move-options {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.55rem;
+  border: 0;
+}
+
+/* Riga di scelta: nome della destinazione, quanti prodotti si spostano e la
+   differenza di costo già calcolata dal servizio locale. */
+.move-option {
+  padding: 0.8rem 0.9rem;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+  cursor: pointer;
+}
+
+.move-option.is-selected {
+  border-color: var(--navy-2);
+  background: var(--blue-soft);
+  box-shadow: inset 0 0 0 1px var(--navy-2);
+}
+
+.move-option__radio {
+  margin-top: 0.2rem;
+  width: 1.15rem;
+  height: 1.15rem;
+}
+
+.move-option__body {
+  min-width: 0;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.move-option__title {
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.move-option__meta {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.move-option__left {
+  color: #70450d;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.move-option__note,
+.move-undo__note {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.move-option__note.is-good,
+.move-undo__note.is-good {
+  color: #0c6847;
+}
+
+.move-option__note.is-bad,
+.move-undo__note.is-bad {
+  color: #9f211a;
+}
+
+.move-option__note.is-warn,
+.move-undo__note.is-warn {
+  color: #70450d;
+}
+
+.move-option__delta {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.move-option__delta strong {
+  font-variant-numeric: tabular-nums;
+  display: block;
+  font-size: 1rem;
+}
+
+.move-option__delta small {
+  display: block;
+  margin-top: 0.15rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.move-option__delta.is-higher strong {
+  color: #9f211a;
+}
+
+.move-option__delta.is-lower strong {
+  color: #0c6847;
+}
+
+.move-option__delta.is-equal strong {
+  color: var(--muted);
+}
+
+/* Spendere meno ricevendo meno merce non è un risparmio: il colore non deve
+   dire il contrario di quello che dicono le parole. */
+.move-option__delta.is-neutral strong {
+  color: var(--ink);
+}
+
+.move-option__goods {
+  color: var(--ink);
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.promotion-catalog__search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0 0.85rem 0.8rem;
+}
+
+.promotion-catalog__search label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.promotion-catalog__search .input {
+  flex: 1 1 16rem;
+}
+
+.promotion-catalog__empty {
+  margin: 0;
+  padding: 0 0.85rem 0.8rem;
+  color: var(--muted);
+}
+
+/* Le condizioni già comprese nel prezzo restano consultabili ma non occupano
+   il posto di quelle che chiedono una decisione. */
+.promotion-catalog__included {
+  margin: 0.4rem 0.85rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+}
+
+.promotion-catalog__included > summary {
+  cursor: pointer;
+  padding: 0.6rem 0.8rem;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.promotion-catalog__included-note {
+  margin: 0;
+  padding: 0 0.8rem 0.6rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.move-details__total {
+  margin: 0;
+  padding: 0 0.85rem 0.7rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.move-details__total strong {
+  color: var(--ink);
+}
+
+.move-details {
+  margin-top: 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: #fff;
+}
+
+.move-details > summary {
+  padding: 0.65rem 0.85rem;
+  color: var(--navy);
+  font-size: 0.88rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.move-details__list,
+.move-details__notes {
+  margin: 0;
+  padding: 0 0.85rem 0.7rem;
+  display: grid;
+  gap: 0.5rem;
+  list-style: none;
+}
+
+.move-details__list li {
+  padding-top: 0.5rem;
+  display: grid;
+  gap: 0.15rem;
+  border-top: 1px solid var(--line);
+  font-size: 0.88rem;
+}
+
+.move-details__name {
+  font-weight: 700;
+}
+
+.move-details__to,
+.move-details__prices {
+  color: var(--muted);
+}
+
+.move-details__factor {
+  color: #70450d;
+  font-weight: 600;
+}
+
+.move-details__confirm {
+  color: var(--navy);
+  font-weight: 600;
+}
+
+.move-details__notes li {
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.move-details__notes li.is-good {
+  color: #0c6847;
+}
+
+.move-details__notes li.is-bad {
+  color: #9f211a;
+}
+
+.move-details__notes li.is-warn {
+  color: #70450d;
+}
+
+.move-details__confirm-count {
+  padding: 0 0.85rem 0.8rem;
+  color: #70450d;
+  font-size: 0.88rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.move-undo__text {
+  display: grid;
+  gap: 0.25rem;
+  line-height: 1.4;
+}
+
+.summary-toolbar {
+  margin-bottom: 1rem;
+  padding: 0.8rem;
+  display: grid;
+  grid-template-columns: minmax(18rem, 1.1fr) minmax(12rem, 0.65fr) minmax(13rem, 0.65fr);
+  align-items: end;
+  gap: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+}
+
+.segmented-control {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border: 0;
+}
+
+.segmented-control legend {
+  margin-bottom: 0.3rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.segmented-control button {
+  min-height: 2.65rem;
+  border: 1px solid var(--line-control);
+  color: var(--navy);
+  background: #fff;
+  font-weight: 700;
+}
+
+.segmented-control button:first-of-type {
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+
+.segmented-control button:last-of-type {
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  border-left: 0;
+}
+
+.segmented-control button.is-active {
+  color: #fff;
+  background: var(--navy);
+  border-color: var(--navy);
+}
+
+/* ⚠ Niente `position: sticky` qui. In pagina questa classe esiste solo come
+   `compile-card compile-card--bottom`, che rimetteva `position: static`, e c'era
+   pure una terza regola a 1050 px che la rimetteva statica una seconda volta:
+   chi leggeva il foglio contava tre quote di aggancio in alto e ne esistevano
+   due. Le due agganciate alla pagina sono la barra dei passi e la fascia dei
+   totali; le intestazioni delle due tabelle si agganciano al loro riquadro che
+   scorre, non alla pagina. */
+.compile-card {
+  padding: 1.15rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: #fff;
+  box-shadow: var(--shadow);
+}
+
+.compile-card--bottom {
+  margin-top: 1rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(15rem, 0.45fr);
+  align-items: center;
+  gap: 1rem 1.5rem;
+}
+
+.compile-card--bottom > .confirmation,
+.compile-card--bottom > .button,
+.compile-card--bottom > .compile-progress,
+.compile-card--bottom > .results {
+  grid-column: 1 / -1;
+}
+
+/* Il segno che la compilazione sta lavorando. È l'unico movimento del
+   programma che non sia il giracarte del caricamento, e non contraddice la
+   regola «niente movimento che non dica niente»: qui il movimento È quello che
+   si ha da dire, perché fra la pressione e i documenti scritti non c'è nessun
+   altro segno.
+   ⚠ Indeterminata. Il processo che scrive i listini non riporta avanzamenti:
+   una barra che si riempie prometterebbe una percentuale che nessuno ha. Vedi
+   `renderCompileProgress` in app.js. */
+.compile-progress {
+  margin-top: -0.25rem;
+}
+
+.compile-progress__bar {
+  position: relative;
+  /* La stessa altezza della barra del ricalcolo: sono la stessa cosa detta due
+     volte in due pagine, e devono somigliarsi. */
+  height: 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface-soft);
+  overflow: hidden;
+}
+
+.compile-progress__bar::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 38%;
+  border-radius: 999px;
+  background: var(--navy-2);
+  animation: compilazione-in-corso 1.4s ease-in-out infinite;
+}
+
+@keyframes compilazione-in-corso {
+  from { left: -40%; }
+  to { left: 100%; }
+}
+
+.compile-progress__nota {
+  margin: 0.45rem 0 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+/* Chi ha chiesto meno movimento non riceve una barra ferma: una barra ferma è
+   proprio la cosa che si legge come «si è piantato», ed è il difetto che
+   questa aggiunta doveva togliere. Resta la frase, che dice la stessa cosa a
+   parole. La regola generale più in basso azzera le durate: se la barra
+   restasse, resterebbe immobile. */
+@media (prefers-reduced-motion: reduce) {
+  .compile-progress__bar {
+    display: none;
+  }
+
+  .compile-progress__nota {
+    margin-top: 0;
+  }
+}
+
+.compile-card--bottom > div > p {
+  margin-top: 0.35rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.compile-card--bottom .no-send-message {
+  color: var(--green);
+  font-weight: 700;
+}
+
+.compile-card__total {
+  margin: 0.8rem 0;
+  padding: 0.8rem 0;
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 1rem;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+/* Quante copie e per chi, subito sotto il totale e sopra il pulsante. Non e'
+   un riepilogo: e' il numero di documenti che tra un attimo esisteranno su
+   disco, che e' l'unica cosa che quella scheda non diceva. */
+.compile-card__copie {
+  grid-column: 1 / -1;
+  margin-top: -0.2rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.compile-card__total span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.compile-card__total strong {
+  font-variant-numeric: tabular-nums;
+  font-size: 1.75rem;
+  letter-spacing: -0.04em;
+}
+
+.button-row,
+.page-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.product-pagination {
+  margin-top: 1rem;
+  padding: 0.8rem;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.product-pagination > strong {
+  text-align: center;
+}
+
+.page-actions {
+  margin-top: 1.1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+}
+
+.button {
+  min-height: 2.65rem;
+  padding: 0.62rem 1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-weight: 700;
+  text-decoration: none;
+  transition: 120ms ease;
+}
+
+/* Il passaggio del mouse scurisce, non solleva. `translateY(-1px)` produceva
+   micro-scatti sotto il puntatore su una pagina che si usa col mouse, e non
+   diceva niente che il colore non dica gia'. */
+.button:hover:not(:disabled) {
+  filter: brightness(0.94);
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.button--primary {
+  color: #fff;
+  background: var(--navy);
+}
+
+.button--success {
+  color: #fff;
+  background: var(--green);
+}
+
+.button--secondary {
+  color: var(--navy);
+  background: #fff;
+  border-color: var(--line-control);
+}
+
+.button--ghost {
+  color: var(--muted);
+  background: transparent;
+}
+
+.button--wide {
+  width: 100%;
+  min-height: 3.15rem;
+  font-size: 1rem;
+}
+
+/* Un comando di contorno, in testa alla pagina: deve leggersi come un comando
+   e non pesare quanto il passo successivo. */
+.button--small {
+  min-height: 2.1rem;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.78rem;
+}
+
+.button--ghost.button--small {
+  border-color: var(--line-control);
+}
+
+.empty-state {
+  min-height: 10rem;
+  padding: var(--s5);
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-md);
+  color: var(--muted);
+  background: var(--surface-soft);
+  text-align: center;
+}
+
+.empty-state strong {
+  display: block;
+  margin-bottom: 0.25rem;
+  color: var(--ink);
+}
+
+.results {
+  margin-top: 1rem;
+  padding: 0.95rem;
+  border: 1px solid #b7ddcc;
+  border-radius: var(--radius-md);
+  color: #0e6346;
+  background: var(--green-soft);
+}
+
+.results ul {
+  margin: 0.65rem 0 0;
+  padding-left: 1.2rem;
+}
+
+.results li + li {
+  margin-top: 0.35rem;
+}
+
+/* Una compilazione che ha scartato una copia, o che non è entrata fra gli
+   ordini da controllare, non è verde: il verde vuol dire «finito bene». */
+.results--partial {
+  border-color: #eccb91;
+  color: #6f3f05;
+  background: var(--amber-soft);
+}
+
+.results--failed {
+  border-color: #efbcb7;
+  color: #85211c;
+  background: var(--red-soft);
+}
+
+.results__original {
+  margin-top: 0.4rem;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.results__issues-block {
+  margin-top: 0.7rem;
+}
+
+.results__issues-block > strong {
+  display: block;
+  margin-bottom: 0.25rem;
+  font-size: 0.88rem;
+}
+
+/* L'elenco dei prodotti fermi sotto una compilazione non riuscita: uno per
+   riga, con il nome, perché è così che si ritrovano fra cinquecento. */
+.results__issues-intro {
+  margin-top: 0.6rem;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.results__issues {
+  margin: 0;
+  padding-left: 1.2rem;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.results__issues span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.results__detail {
+  margin-top: 0.6rem;
+}
+
+.results__detail > summary {
+  cursor: pointer;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.results__detail p {
+  margin-top: 0.35rem;
+  font-size: 0.88rem;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+/* «3 prodotti erano assegnati a CIPRESSO: ora sono passati a BETULLA.» */
+.reassignment-panel {
+  margin-bottom: 1rem;
+}
+
+.reassignment-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.reassignment-list > li {
+  padding: 0.6rem 0.75rem;
+  border: 1px solid #eccb91;
+  border-radius: var(--radius-sm);
+  background: var(--amber-soft);
+  font-size: 0.88rem;
+}
+
+.reassignment-list__which {
+  margin-top: 0.3rem;
+}
+
+.reassignment-list__which > summary {
+  cursor: pointer;
+  color: #70450d;
+  font-size: 0.78rem;
+}
+
+.reassignment-list__which p {
+  margin-top: 0.25rem;
+  color: #70450d;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.fatal-card {
+  min-height: 17rem;
+  padding: var(--s6);
+  display: grid;
+  place-items: center;
+  border: 1px solid #efbcb7;
+  border-radius: var(--radius-lg);
+  color: #85211c;
+  background: var(--red-soft);
+  text-align: center;
+}
+
+.fatal-card p {
+  max-width: 44rem;
+  margin: 0.5rem auto 1rem;
+  line-height: 1.55;
+}
+
+.dialog-backdrop {
+  position: fixed;
+  z-index: 70;
+  inset: 0;
+  padding: 1rem;
+  display: grid;
+  place-items: center;
+  background: rgba(13, 29, 42, 0.58);
+}
+
+.catalog-dialog {
+  width: min(48rem, 100%);
+  max-height: min(44rem, calc(100vh - 2rem));
+  padding: 1.2rem;
+  display: grid;
+  grid-template-rows: auto auto minmax(8rem, 1fr) auto;
+  gap: 1rem;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: #fff;
+  box-shadow: var(--ombra-finestra);
+}
+
+.catalog-dialog__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.catalog-dialog__header p {
+  margin-top: 0.35rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.dialog-close {
+  flex: 0 0 auto;
+  width: 2.8rem;
+  height: 2.8rem;
+  border: 1px solid var(--line-control);
+  border-radius: 999px;
+  color: var(--navy);
+  background: #fff;
+  font-size: 1.5rem;
+  line-height: 1;
+}
+
+.catalog-dialog__body {
+  min-height: 0;
+  overflow: auto;
+}
+
+.catalog-dialog__footer {
+  padding-top: 0.8rem;
+  display: flex;
+  justify-content: flex-end;
+  border-top: 1px solid var(--line);
+}
+
+.catalog-results {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.55rem;
+  list-style: none;
+}
+
+.catalog-results li {
+  padding: 0.8rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+}
+
+.catalog-results strong,
+.catalog-results span {
+  display: block;
+}
+
+.catalog-results span {
+  margin-top: 0.25rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.loading-inline {
+  min-height: 7rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  color: var(--muted);
+}
+
+.loading-inline .spinner {
+  width: 1.6rem;
+  height: 1.6rem;
+}
+
+.toast-region {
+  position: fixed;
+  z-index: 80;
+  right: 1rem;
+  bottom: 1rem;
+  width: min(24rem, calc(100% - 2rem));
+  display: grid;
+  gap: 0.55rem;
+  pointer-events: none;
+}
+
+.toast {
+  padding: 0.8rem 0.95rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  color: #fff;
+  background: var(--navy);
+  box-shadow: var(--ombra-finestra);
+  animation: toast-in 160ms ease-out;
+}
+
+.toast.is-error {
+  background: var(--red);
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(0.5rem); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.noscript {
+  margin: 1rem;
+  padding: 1rem;
+  border: 1px solid #efbcb7;
+  border-radius: var(--radius-md);
+  color: #85211c;
+  background: var(--red-soft);
+}
+
+/* Pagina Impostazioni.
+   I limiti della fase AI stanno in colonne, ma non sono un campo qualsiasi:
+   una classe propria evita che ritoccare l'una sposti l'altra. */
+.impostazioni-griglia {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 1rem;
+}
+
+/* Le note che spiegano che cosa fa una voce, e che cosa succede alla chiave.
+   Sono testo da leggere davvero, non didascalie: si tengono leggibili. */
+/* ⚠ Il quinto riquadro della pagina Impostazioni — «Codici dichiarati lo stesso
+   articolo» — e' l'unico che non usa `.panel`, e le sue due classi non avevano
+   nessuna regola: rendeva senza sfondo, senza bordo, senza imbottitura e senza
+   margine, incollato al riquadro bianco sopra, col testo lungo quanto tutta la
+   pagina. Era una delle otto classi «usate senza regola» rimaste da decidere:
+   decisa. */
+.settings-card {
+  margin-top: var(--s4);
+  padding: 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.settings-card__intro {
+  max-width: 52rem;
+  margin-top: 0.45rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.settings-note {
+  max-width: 52rem;
+  margin-top: 0.45rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.settings-note + .button-row,
+.settings-note + .field {
+  margin-top: 0.9rem;
+}
+
+/* --- La consegna: pulsante dello zip e compilazioni precedenti ------------ */
+
+/* Il pulsante sta su una riga sua, sopra l'elenco dei singoli documenti: è la
+   cosa che si fa dopo aver compilato, e va trovata senza cercarla. */
+.results__consegna {
+  margin-top: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.results__zip-nome,
+.compilazione__zip-nome {
+  color: var(--muted);
+  font-size: 0.78rem;
+  word-break: break-word;
+}
+
+.compilazioni-panel {
+  margin-top: 1rem;
+  padding: 0;
+  overflow: hidden;
+}
+
+.compilazioni-panel__summary {
+  min-height: 3.2rem;
+  padding: 0.9rem 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.compilazioni-panel__summary::-webkit-details-marker {
+  display: none;
+}
+
+.compilazioni-panel__summary::before {
+  content: "›";
+  color: var(--muted);
+  transition: transform 120ms ease;
+}
+
+.compilazioni-panel[open] .compilazioni-panel__summary::before {
+  transform: rotate(90deg);
+}
+
+.compilazioni-panel__summary > strong {
+  margin-right: auto;
+}
+
+.compilazioni-panel__body {
+  padding: 0 1rem 1rem;
+  border-top: 1px solid var(--line);
+}
+
+.compilazioni {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+  list-style: none;
+}
+
+.compilazione {
+  padding: 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+}
+
+/* La compilazione di cui non si legge l'audit resta nell'elenco — i suoi file
+   ci sono — e si distingue a colpo d'occhio da quelle complete. */
+.compilazione.is-incompleta {
+  border-color: #e6cf9e;
+  background: var(--amber-soft);
+}
+
+.compilazione__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.compilazione__meta {
+  display: block;
+  margin-top: 0.15rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.compilazione__nota {
+  margin-top: 0.5rem;
+  color: #6b4a05;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+/* I documenti che l'audit dichiara e nella cartella non ci sono più. */
+.compilazione__mancanti {
+  margin-top: 0.5rem;
+  color: #6b4a05;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.compilazione__fornitori {
+  margin: 0.65rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.25rem;
+  list-style: none;
+}
+
+.compilazione__fornitori li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.88rem;
+}
+
+.compilazione__consegna {
+  margin-top: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.compilazione__file {
+  margin: 0.65rem 0 0;
+  padding-left: 1.2rem;
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.88rem;
+}
+
+.compilazione__tipo {
+  margin-left: 0.4rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+@media (max-width: 1050px) {
+  .price-summary {
+    grid-column: 3;
+  }
+
+  .product-order-row {
+    grid-template-columns: minmax(14rem, 0.8fr) minmax(16rem, 1fr);
+  }
+
+  .product-order-row .price-summary {
+    grid-column: 2;
+  }
+
+  .summary-toolbar {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .summary-toolbar .segmented-control {
+    grid-column: 1 / -1;
+  }
+
+  .order-lines--product li {
+    grid-template-columns: minmax(13rem, 1fr) minmax(8rem, 0.45fr) 8.75rem 5.5rem 5.5rem;
+  }
+
+  .order-lines--product .order-lines__qty {
+    grid-column: 1 / -1;
+  }
+
+  /* Qui la quantità va su una riga sua e l'intestazione non si allinea più. */
+  .order-lines--product .order-lines__intestazione {
+    display: none;
+  }
+
+  /* I due numeri restano nelle ultime due colonne, a destra come sopra i
+     1050 px: senza, la riga dei comandi li metteva sotto il fornitore. */
+  .order-lines--product .order-lines__pezzo {
+    grid-column: 4;
+  }
+
+  .order-lines--product li > strong {
+    grid-column: 5;
+  }
+
+  .order-lines--product .order-lines__pezzo-etichetta {
+    position: static;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    clip-path: none;
+  }
+
+  /* Sotto questa larghezza le sei colonne del confronto diventano illeggibili:
+     la tabella si impila e ogni numero si riprende la sua etichetta, che nel
+     markup c'è sempre. */
+  .offer-grid__head {
+    display: none;
+  }
+
+  .offer-card {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .offer-card__identita {
+    grid-column: 1 / -1;
+  }
+
+  .offer-card__numero {
+    text-align: left;
+  }
+
+  /* ⚠ Tutte e sei le proprieta' della regola base, non quattro: senza
+     annullare anche `overflow` e `white-space` l'etichetta ricompariva, non
+     poteva andare a capo e veniva tagliata di netto dalla colonna — misurato a
+     375 px: «Rispetto all'ultimo pagato» perdeva 56 px, cioe' si leggeva
+     «Rispetto all'ultimo pa». */
+  .offer-card__label {
+    position: static;
+    width: auto;
+    height: auto;
+    clip-path: none;
+    overflow: visible;
+    white-space: normal;
+    display: block;
+    color: var(--muted);
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+  }
+}
+
+@media (max-width: 760px) {
+  .topbar__inner,
+  .stepper,
+  .workspace {
+    width: min(calc(100% - 1.25rem), var(--content));
+  }
+
+  .topbar__inner,
+  .page-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .topbar__status {
+    justify-content: flex-start;
+  }
+
+  .page-heading__meta {
+    text-align: left;
+  }
+
+  /* Sotto i 760 px il passo va in colonna — etichetta sopra, «fatto» sotto —
+     e la barra cresce: misurata 55 px, contro i 51 che c'erano qui. Erano
+     quattro pixel di sovrapposizione. */
+  .supplier-totals-strip {
+    top: 3.6rem;
+  }
+
+  .candidate-check {
+    grid-template-columns: 1fr;
+  }
+
+  .candidate-check__actions {
+    justify-self: stretch;
+  }
+
+  /* A schermo stretto il nome per esteso non ci sta in tre colonne: si accorcia
+     con i puntini, e la parola «fatto» va sotto invece che accanto. */
+  .stepper__button {
+    padding: var(--s2) var(--s1);
+    flex-direction: column;
+    gap: 0.18rem;
+    font-size: 0.78rem;
+  }
+
+  .workspace {
+    padding-top: 1rem;
+  }
+
+  .toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .product-card__header,
+  .undo-bar,
+  .promotion-catalog > summary,
+  .promotion-highlight,
+  .promotion-filter-chip,
+  .supplier-summary__move,
+  .pending-order {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  /* A schermo stretto la differenza di costo va a capo sotto al nome della
+     destinazione, allineata a sinistra come il resto della riga. */
+  .move-option {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .move-option__delta {
+    grid-column: 2;
+    text-align: left;
+  }
+
+  .product-order-row,
+  .summary-toolbar,
+  .compile-card--bottom,
+  .promotion-summary-grid,
+  .product-pagination,
+  .pending-order__actions {
+    grid-template-columns: 1fr;
+  }
+
+  /* A scheda impilata la base flessibile diventa un'altezza: senza questo i due
+     pulsanti diventerebbero alti quanto mezza pagina. */
+  .pending-order__text,
+  .pending-order__actions {
+    flex: 0 0 auto;
+  }
+
+  .product-order-row .price-summary,
+  .compile-card--bottom > * {
+    grid-column: 1;
+  }
+
+  .product-main {
+    grid-column: 1 / -1;
+  }
+
+  .price-summary {
+    grid-column: 2;
+  }
+
+  .catalog-results li {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .catalog-results .button {
+    width: 100%;
+  }
+
+  .order-lines li {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .order-lines--product li {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .order-lines--product .order-lines__supplier,
+  .order-lines--product .order-lines__qty {
+    grid-column: 1 / -1;
+  }
+
+  .order-lines li > :last-child {
+    grid-column: 2;
+  }
+
+  .order-lines .order-lines__intestazione {
+    display: none;
+  }
+
+  /* Sotto il totale, su una riga sua e allineato a destra. Due classi, come
+     la regola dei 1050 px che sostituisce: a parità, vince questa perché
+     viene dopo. */
+  .order-lines .order-lines__pezzo {
+    order: 1;
+    grid-column: 1 / -1;
+  }
+
+  .order-lines__pezzo-etichetta {
+    position: static;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    clip-path: none;
+  }
+}
+
+@media (max-width: 470px) {
+  .product-main,
+  .price-summary {
+    grid-column: 1;
+  }
+
+  .price-summary {
+    text-align: left;
+  }
+
+  .button-row,
+  .page-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .button {
+    width: 100%;
+  }
+
+  .supplier-summary__head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .supplier-summary__total {
+    text-align: left;
+  }
+
+  .move-dialog {
+    padding: 0.9rem;
+  }
+
+  .move-dialog__footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .compilazione__head,
+  .compilazione__consegna,
+  .results__consegna {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* --- Il visualizzatore dei listini ---------------------------------------- */
+/* Mostra il listino di un fornitore come il programma l'ha letto: è la sola via
+   d'uscita quando l'abbinamento automatico non poteva farcela, cioè quando il
+   nome del gestionale non dice la variante e il fornitore usa un altro codice a
+   barre. Più larga della finestra del catalogo perché qui si legge una tabella,
+   non un elenco di risultati. */
+.listino-dialog {
+  width: min(72rem, 100%);
+  max-height: min(46rem, calc(100vh - 2rem));
+  padding: 1.2rem;
+  display: grid;
+  grid-template-rows: auto auto auto minmax(8rem, 1fr) auto auto;
+  gap: 0.8rem;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: #fff;
+  box-shadow: var(--ombra-finestra);
+}
+
+.listino-dialog__comandi {
+  display: flex;
+  gap: 0.9rem;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.listino-dialog__comandi .field--larga {
+  flex: 1 1 18rem;
+}
+
+.listino-dialog__conto {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.listino-dialog__esito {
+  margin: 0;
+  padding: 0.55rem 0.75rem;
+  border-radius: var(--radius-sm);
+  background: rgba(21, 128, 61, 0.1);
+  color: #14532d;
+  font-weight: 600;
+}
+
+.listino-dialog__corpo {
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.listino-tabella {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.listino-tabella th,
+.listino-tabella td {
+  padding: 0.4rem 0.6rem;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.listino-tabella thead th {
+  position: sticky;
+  top: 0;
+  background: var(--surface-soft);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+/* La riga già abbinata a questo prodotto, e quella su cui la finestra si è
+   aperta: senza, su ottomila righe si cerca a mano una cosa che il programma
+   sa già. */
+.listino-tabella tr.is-abbinata {
+  background: rgba(21, 128, 61, 0.08);
+}
+
+.listino-tabella tr.is-fuoco td {
+  box-shadow: inset 0 0 0 2px rgba(21, 128, 61, 0.35);
+}
+
+.listino-tabella__codice,
+.listino-tabella__scartata {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.listino-tabella__scartata {
+  color: #92400e;
+}
+
+.listino-tabella__gia {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #14532d;
+}
+
+.listino-dialog__pagine {
+  display: flex;
+  gap: 0.8rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* Le dichiarazioni «questi due codici sono lo stesso articolo», in
+   Impostazioni. Due lati e un uguale in mezzo: la forma dice da sola che cosa
+   è stato dichiarato, e i due nomi sono la ragione per cui questo elenco è
+   stato spostato qui — con i soli codici non si poteva giudicare niente. */
+.uguaglianze {
+  margin: 0.6rem 0 0;
+  padding-left: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.uguaglianza {
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  display: grid;
+  gap: 0.5rem;
+}
+
+.uguaglianza__lati {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 0.7rem;
+  align-items: center;
+}
+
+.uguaglianza__lato {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.uguaglianza__lato strong {
+  font-size: 0.88rem;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.uguaglianza__chi {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.uguaglianza__lato code,
+.uguaglianza__codice {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.uguaglianza__uguale {
+  font-size: 1.15rem;
+  color: var(--muted);
+}
+
+.uguaglianza__coda {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+@media (max-width: 620px) {
+  .uguaglianza__lati {
+    grid-template-columns: 1fr;
+  }
+
+  .uguaglianza__uguale {
+    justify-self: start;
+  }
+}
+
+.button--piccolo {
+  padding: 0.28rem 0.6rem;
+  font-size: 0.88rem;
+}
+
+.offer-grid__sfoglia {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 0.5rem 0 0;
+  font-size: 0.88rem;
+  color: var(--muted);
+}

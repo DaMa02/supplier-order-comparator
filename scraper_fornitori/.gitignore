@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+# I cataloghi scaricati non entrano nel repository: sono dati di un fornitore,
+# pesano, e invecchiano in una settimana.
+output/
+output-*/

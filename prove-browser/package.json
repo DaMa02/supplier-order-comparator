@@ -1,0 +1,12 @@
+{
+  "name": "prove-browser",
+  "private": true,
+  "description": "Le prove che premono i pulsanti per davvero. Separate dal programma: il negozio non le installa e non le esegue.",
+  "scripts": {
+    "prove": "playwright test",
+    "prove:vedi": "playwright test --headed"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.0"
+  }
+}

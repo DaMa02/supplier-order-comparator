@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#16324f">
+    <title>Confronto ordini fornitori</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#workspace">Vai al contenuto</a>
+
+    <header class="topbar">
+      <div class="topbar__inner">
+        <p class="eyebrow">Ordini ai fornitori</p>
+        <h1>Confronta e prepara gli ordini</h1>
+        <div class="topbar__status" aria-live="polite">
+          <span id="mode-badge" class="badge badge--neutral">Caricamento</span>
+          <span id="save-status" class="save-status">Preparazione…</span>
+          <!-- Fuori dagli annunci del blocco: `topbar__status` e' `aria-live`
+               perche' badge e stato del salvataggio cambiano mentre si lavora,
+               mentre la versione e' ferma e non va annunciata come se fosse
+               successo qualcosa. -->
+          <span id="versione-pubblicata" class="versione-pubblicata" aria-live="off"></span>
+        </div>
+      </div>
+    </header>
+
+    <nav class="stepper-shell" aria-label="Fasi del lavoro">
+      <ol id="stepper" class="stepper"></ol>
+    </nav>
+
+    <main id="workspace" class="workspace" tabindex="-1">
+      <div id="global-message" class="global-message" aria-live="assertive"></div>
+      <!-- Niente `aria-live` qui: `render()` sostituisce questo contenitore per
+           intero, quindi ogni ridisegno sarebbe il cambiamento dell'intera
+           regione e il lettore di schermo rileggerebbe tutta la pagina — e
+           durante il ricalcolo il ridisegno e' una volta al secondo. Gli
+           annunci hanno gia' il loro posto: `#global-message`, `#toast-region`
+           e `#avanzamento-annuncio`, che sono elementi fermi con dentro un
+           testo che cambia, cioe' il modo in cui `aria-live` e' fatto per
+           funzionare. -->
+      <section id="app">
+        <div class="loading-card">
+          <span class="spinner" aria-hidden="true"></span>
+          <div>
+            <strong>Sto leggendo i tuoi documenti</strong>
+            <p>Controllo l’elenco del gestionale e i listini dei fornitori.</p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+
+    <!-- A che punto e' il ricalcolo, per chi non vede la barra. E' fermo qui e
+         gli cambia solo il testo: una regione viva creata insieme al proprio
+         contenuto non viene annunciata da diversi lettori di schermo. -->
+    <p id="avanzamento-annuncio" class="visually-hidden" role="status"></p>
+
+    <noscript>
+      <div class="noscript">Il programma di navigazione non permette di usare il comparatore. Attiva l’esecuzione delle pagine interattive e riprova.</div>
+    </noscript>
+
+    <script type="module" src="/static/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,20 @@
+# ---------------------------------------------------------------------------
+# I dati di lavoro (stato, conferme, ordini, memoria AI, gli adattatori
+# imparati, le esecuzioni) cambiano mentre il programma gira: non stanno sotto
+# git, cosi' l'aggiornamento da GitHub non li tocca mai.
+# ---------------------------------------------------------------------------
+app/data/
+
+# ---------------------------------------------------------------------------
+# Il resto.
+# ---------------------------------------------------------------------------
+node_modules/
+__pycache__/
+*.pyc
+*.tmp
+.DS_Store
+
+# Le prove di browser: dipendenze e scarti di esecuzione.
+prove-browser/node_modules/
+prove-browser/test-results/
+prove-browser/playwright-report/

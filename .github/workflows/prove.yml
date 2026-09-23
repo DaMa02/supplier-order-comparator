@@ -1,0 +1,126 @@
+# Le prove, su Windows, prima che il codice arrivi al PC che lo esegue.
+#
+# Perche' esiste. Il programma installato si aggiorna da solo dal ramo
+# predefinito a ogni avvio (`fetch` + `reset --hard`): fra un push e un ordine
+# sbagliato non c'e' nessun passaggio umano. Questa e' la rete di sicurezza.
+#
+
+name: Prove
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Tre push di fila non pagano tre esecuzioni: le prime due si annullano da sole.
+concurrency:
+  group: prove-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows — la macchina del negozio
+    runs-on: windows-latest
+    # La suite misurata dura ~6 minuti. Il tetto e' per il caso in cui un passo
+    # si impianti: senza, un collaudo appeso brucerebbe il monte ore da solo.
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Il lanciatore si legge senza errori di sintassi
+        shell: pwsh
+        run: |
+          # AVVIA_COMPARATORE.ps1 e' il file che, se si rompe, vuol dire «il
+          # programma non parte». Non lo prova nessun collaudo, e chi sviluppa
+          # su Mac non ha PowerShell per accorgersene. Qui almeno si controlla
+          # che si legga.
+          $rotto = $false
+          foreach ($script in @("AVVIA_COMPARATORE.ps1")) {
+            $errori = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $script), [ref]$null, [ref]$errori)
+            if ($errori) {
+              Write-Host "[ERRORE] $script non si legge:" -ForegroundColor Red
+              $errori | ForEach-Object { Write-Host "  $_" }
+              $rotto = $true
+            } else {
+              Write-Host "[OK] $script"
+            }
+          }
+          if ($rotto) { exit 1 }
+
+      - uses: actions/setup-python@v6
+        with:
+          # La stessa riga installata sul PC del negozio il 19 agosto 2026.
+          python-version: '3.13'
+
+      - uses: actions/setup-node@v5
+        with:
+          # La stessa del negozio. Serve al writer che scrive i listini, che
+          # usa solo la libreria standard di Node: non si installa niente.
+          node-version: '24'
+
+      - name: Le dipendenze — soltanto quelle che ha il negozio
+        # Dal file, non a mano: se un giorno la riga qui e quella di
+        # `requirements.txt` divergono, la CI prova con una versione che il
+        # negozio non ha e nessuno se ne accorge.
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      # ⚠ `lxml` NON si installa, ed e' voluto. openpyxl serializza con lxml
+      # quando lo trova e con xml.etree quando non lo trova, e le due scrivono
+      # l'elemento vuoto in modo diverso: e' costato tre collaudi rossi sul PC
+      # del negozio che qui passavano.  Questa
+      # macchina deve somigliare al negozio, non al Mac di chi sviluppa.
+      - name: Con che cosa stiamo provando
+        run: |
+          python -c "import sys, openpyxl; from openpyxl.xml import LXML; print('Python', sys.version); print('openpyxl', openpyxl.__version__, '| usa lxml:', LXML)"
+          node --version
+
+      - name: La suite
+        # Sempre con `discover`, mai il modulo singolo: altrimenti diciannove
+        # classi diventano `skipped` in silenzio.
+        run: python -m unittest discover -s tests -p "test_*.py"
+
+  browser:
+    name: Ubuntu — le prove che premono i pulsanti
+    runs-on: ubuntu-latest
+    # Girano in due secondi e mezzo misurati; il tetto e' per il caso in cui il
+    # server di prova non si alzi. Su ubuntu, che costa meta' di windows: qui
+    # non si prova il sistema, si prova la pagina.
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+
+      - name: Le dipendenze del programma
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Playwright e il suo browser
+        working-directory: prove-browser
+        # `--with-deps` installa anche le librerie di sistema che chromium vuole
+        # su una macchina nuda: senza, il browser si alza e muore subito.
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Le prove
+        working-directory: prove-browser
+        run: npx playwright test
+
+      - name: Se e' andata storta, la traccia
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: traccia-prove-browser
+          path: prove-browser/test-results/
+          retention-days: 7

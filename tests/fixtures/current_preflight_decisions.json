@@ -1,0 +1,48 @@
+{
+  "decisions": [
+    {
+      "file_name": "prova2.xlsx",
+      "state": "SCHEMA_NOTO",
+      "role": "master",
+      "supplier_id": null,
+      "adapter_id": "gestionale_v1",
+      "confidence": "ALTA",
+      "rationale": "Firma gestionale coerente: riga documento, intestazioni attese e righe prodotto marcate C.",
+      "field_mapping": null,
+      "user_confirmation": {"required": false, "status": "NOT_REQUIRED"}
+    },
+    {
+      "file_name": "LISTINO BETULLA VALIDO FINO AL 01-09-26.xlsx",
+      "state": "SCHEMA_NOTO",
+      "role": "supplier",
+      "supplier_id": "betulla",
+      "adapter_id": "betulla_v1",
+      "confidence": "ALTA",
+      "rationale": "Intestazioni BETULLA complete e significato commerciale invariato.",
+      "field_mapping": null,
+      "user_confirmation": {"required": false, "status": "NOT_REQUIRED"}
+    },
+    {
+      "file_name": "32.1 03-06 ago.xlsx",
+      "state": "SCHEMA_NOTO",
+      "role": "supplier",
+      "supplier_id": "larice",
+      "adapter_id": "larice_v1",
+      "confidence": "ALTA",
+      "rationale": "Struttura commerciale Larice coerente nelle colonne B, C, G, O, P, Q e R; foglio canvass variabile correttamente riconosciuto.",
+      "field_mapping": null,
+      "user_confirmation": {"required": false, "status": "NOT_REQUIRED"}
+    },
+    {
+      "file_name": "noce_nof_catalog_clean.csv",
+      "state": "SCHEMA_NOTO",
+      "role": "supplier",
+      "supplier_id": "noce",
+      "adapter_id": "noce_csv_v1",
+      "confidence": "ALTA",
+      "rationale": "CSV validato con tutte le intestazioni Noce attese.",
+      "field_mapping": null,
+      "user_confirmation": {"required": false, "status": "NOT_REQUIRED"}
+    }
+  ]
+}

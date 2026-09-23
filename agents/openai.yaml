@@ -1,0 +1,4 @@
+interface:
+  display_name: "Compara ordini fornitori"
+  short_description: "Confronta listini e prepara ordini fornitori"
+  default_prompt: "Usa $supplier-order-comparator per confrontare i listini correnti e preparare il comparativo ordini."

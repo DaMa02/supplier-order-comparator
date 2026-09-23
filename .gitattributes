@@ -1,0 +1,37 @@
+# Le fini riga le decide questo file, non la configurazione di git della
+# macchina che fa il checkout.
+#
+# ⚠ Perche' esiste, e non e' una pulizia formale.
+#
+# `ai_client.leggi_prompt()` legge i **byte** del file e li manda al modello
+# cosi' come sono. E' scritto nel suo docstring ed e' voluto: «il file contiene
+# il testo del prompt e nient'altro: quello che ci sta dentro e' esattamente
+# quello che il modello riceve».
+#
+# Senza questa dichiarazione, quei byte li decideva `core.autocrlf` della
+# macchina che aveva fatto il checkout. Su Windows quel valore e' `true` per
+# impostazione predefinita: git scrive i prompt con CRLF, e il modello riceve
+# un testo diverso da quello che era stato misurato — con un'impronta diversa
+# nella memoria AI, cioe' domande gia' pagate che si ripagano.
+#
+# Il PC del negozio oggi ha `autocrlf` spento e non se ne accorgeva. Bastava
+# una reinstallazione di git con le opzioni predefinite. L'ha trovato la CI
+# alla sua prima esecuzione, il 19 agosto 2026, con
+# `test_23_il_prompt_v1_e_quello_misurato_alla_lettera`.
+
+* text=auto eol=lf
+
+# I file di comando di Windows restano CRLF. Oggi sono una riga sola e non
+# cambierebbe niente, ma un batch con etichette e `goto` scritto con solo LF si
+# comporta in modo strano, e non e' il posto dove scoprirlo.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Binari: nessuna traduzione e nessun diff testuale. `text=auto` li
+# riconoscerebbe da se', ma i listini di prova sono la materia del programma e
+# un solo byte tradotto per sbaglio li rende illeggibili senza dire perche'.
+*.xlsx binary
+*.xls  binary
+*.wasm binary
+*.db   binary
+*.png  binary

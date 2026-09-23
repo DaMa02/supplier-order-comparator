@@ -1,0 +1,23 @@
+# Le dipendenze esterne di questo programma sono UNA.
+#
+# ⚠ Sul PC del negozio da questo file non si installa niente, e non è una
+# dimenticanza: il programma non esegue nessun `pip install`. Il lanciatore
+# cerca un Python che abbia già openpyxl fra i candidati che conosce e, se non
+# lo trova, si ferma e spiega come aggiungerlo — non lo aggiunge da sé.
+#
+# Allora a che serve. A due cose. Dice alla CI con che cosa provare, così la
+# macchina che vede i commit prima del negozio somiglia al negozio; e dice a
+# chi apre il repository che cosa deve già avere, che fino al 20 agosto 2026
+# non stava scritto da nessuna parte.
+#
+# ⚠ Il limite superiore non è prudenza generica. openpyxl serializza con lxml
+# quando lo trova e con xml.etree quando non lo trova, e le due scrivono
+# l'elemento vuoto in modo diverso: sono tre collaudi rossi in negozio che sul
+# Mac passavano. Un salto di versione minore si guarda prima di prenderlo,
+# verificando che openpyxl serializzi l'elemento vuoto allo stesso modo con
+# e senza lxml installato.
+openpyxl>=3.1,<3.2   # provato con 3.1.5
+
+# Node 18+ serve a scrivere gli `.xlsx` e qui non compare, perché non si
+# installa niente: il writer usa soltanto la libreria standard di Node, ed è
+# `find_node_runtime()` a trovare l'eseguibile.

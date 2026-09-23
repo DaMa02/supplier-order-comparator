@@ -1,0 +1,816 @@
+{
+  "schema_version": 1,
+  "adapters": [
+    {
+      "id": "gestionale_v1",
+      "schema_version": 1,
+      "kind": "master",
+      "display_name": "Export gestionale",
+      "file_types": [
+        ".xlsx"
+      ],
+      "sheet_selector": {
+        "preferred_name": "Foglio1",
+        "required_row_marker": {
+          "column": "A",
+          "value": "C"
+        }
+      },
+      "header_signature": {
+        "kind": "headers",
+        "sheet": "FIRST",
+        "header_row": 1,
+        "data_start_row": 2,
+        "note": "La riga dell'intestazione non e' fissa: nell'export vero e' la 2, sotto una riga di testata con numero e data del documento. Il numero qui e' un ripiego per capire se il foglio ha merce, non un confronto: la riga vera la trova chi riconosce.",
+        "columns_note": "Il lettore del gestionale legge per posizione (EAN da row[1], prezzo da row[7]) e non guarda le intestazioni. Le posizioni 2-11 sono le stesse nell'export vero e nel collaudo; la colonna 1 porta il marcatore di riga «C» e non ha intestazione.",
+        "columns": {
+          "codice": 2,
+          "descrizione": 4,
+          "um": 5,
+          "colli": 6,
+          "quantita": 7,
+          "prezzo": 8,
+          "sconto": 9,
+          "iva": 10,
+          "totale": 11
+        },
+        "required": [
+          "codice",
+          "colli",
+          "descrizione",
+          "iva",
+          "prezzo",
+          "quantita",
+          "sconto"
+        ],
+        "known": [
+          "codice",
+          "codint",
+          "colli",
+          "descrizione",
+          "iva",
+          "prezzo",
+          "quantita",
+          "sconto",
+          "tipo",
+          "totale",
+          "um"
+        ]
+      },
+      "header_aliases": {
+        "ean": [
+          "Codice"
+        ],
+        "description": [
+          "Descrizione"
+        ],
+        "unit": [
+          "UM"
+        ],
+        "suggested_colli": [
+          "Colli"
+        ],
+        "source_quantity_ignored": [
+          "Quantità",
+          "Quantita"
+        ],
+        "last_unit_price": [
+          "Prezzo"
+        ],
+        "source_discount": [
+          "Sconto"
+        ],
+        "vat": [
+          "IVA"
+        ],
+        "historical_total": [
+          "Totale"
+        ]
+      },
+      "row_rules": {
+        "row_type_column": "A",
+        "product_value": "C"
+      }
+    },
+    {
+      "id": "betulla_v1",
+      "schema_version": 1,
+      "kind": "supplier",
+      "supplier_id": "betulla",
+      "display_name": "BETULLA",
+      "file_types": [
+        ".xlsx"
+      ],
+      "sheet_selector": {
+        "first_matching_header": true
+      },
+      "header_signature": {
+        "kind": "headers",
+        "sheet": "FIRST",
+        "header_row": 1,
+        "data_start_row": 2,
+        "note": "«Totale» resta fuori da required: il listino vero scrive TOTALE e il collaudo TOTALI, ed e' lo stesso schema. Le obbligatorie sono le stesse che pretende il lettore dedicato.",
+        "columns_note": "Il lettore di BETULLA legge per posizione (prezzo da row[5]), quindi qui sta anche dove ogni intestazione deve trovarsi. Misurate sul listino vero dell'11 agosto 2026. Senza, una colonna in piu' in testa faceva leggere 12,00 euro al posto di 3,98 senza nessun avviso.",
+        "columns": {
+          "ean": 1,
+          "codart": 2,
+          "ordine": 3,
+          "descrcommerciale": 4,
+          "pzct": 5,
+          "cessione": 6,
+          "pedana": 7,
+          "iva": 8
+        },
+        "required": [
+          "cessione",
+          "codart",
+          "ean",
+          "ordine",
+          "pzct"
+        ],
+        "known": [
+          "cessione",
+          "codart",
+          "descrcommerciale",
+          "ean",
+          "iva",
+          "ordine",
+          "pedana",
+          "pzct",
+          "totale"
+        ]
+      },
+      "header_aliases": {
+        "ean": [
+          "EAN"
+        ],
+        "supplier_code": [
+          "CodArt",
+          "Cod Art"
+        ],
+        "order_quantity": [
+          "ORDINE"
+        ],
+        "description": [
+          "Descr.Commerciale",
+          "Descr Commerciale"
+        ],
+        "pieces_per_carton": [
+          "PzCt",
+          "Pz Ct"
+        ],
+        "unit_price_net": [
+          "Cessione"
+        ],
+        "pallet": [
+          "Pedana"
+        ],
+        "vat": [
+          "Iva",
+          "IVA"
+        ],
+        "line_total": [
+          "TOTALI",
+          "Totali"
+        ]
+      },
+      "commercial_rules": {
+        "promotion_included_in_product": true,
+        "price_basis": "net_unit",
+        "line_total": "order_quantity * pieces_per_carton * unit_price_net"
+      },
+      "order_write": {
+        "note": "Dove si scrive la quantita' ordinata dentro il listino BETULLA. Il lettore di BETULLA e' dedicato e non ha una field_mapping: senza questa dichiarazione la colonna C stava scritta nel codice del lanciatore, e nessun fornitore imparato avrebbe mai potuto diventare compilabile. «FIRST» qui vuol dire il primo foglio del documento: lo dichiara il registro, cioe' qualcuno che il listino l'ha guardato.",
+        "sheet": "FIRST",
+        "header_row": 1,
+        "data_start_row": 2,
+        "order_column": "C",
+        "expected_header": "ORDINE"
+      }
+    },
+    {
+      "id": "cipresso_v1",
+      "schema_version": 1,
+      "kind": "supplier",
+      "supplier_id": "cipresso",
+      "display_name": "CIPRESSO",
+      "file_types": [
+        ".xlsx"
+      ],
+      "sheet_selector": {
+        "first_matching_header": true
+      },
+      "header_signature": {
+        "kind": "headers",
+        "sheet": "FIRST",
+        "header_row": 1,
+        "data_start_row": 2,
+        "note": "«ordine» e' obbligatoria: il secondo schema CIPRESSO (intestazione in riga 2, senza colonna d'ordine) non e' questo adattatore e deve restare da interpretare.",
+        "required": [
+          "codart",
+          "codean",
+          "desarticolo",
+          "listino",
+          "ordine",
+          "qt",
+          "um"
+        ],
+        "known": [
+          "codart",
+          "codean",
+          "desarticolo",
+          "listino",
+          "ordine",
+          "qt",
+          "um"
+        ],
+        "columns_note": "Misurate su 3listino_Cipresso.xlsx il 13 agosto 2026. La lettura risolve per nome, ma la colonna dove si scrive l'ordine (G) e' posizionale: una colonna in piu' in testa la sposterebbe senza cambiare nessun nome, e la compilazione scriverebbe le quantita' nella colonna sbagliata del listino da rimandare.",
+        "columns": {
+          "codart": 1,
+          "desarticolo": 2,
+          "um": 3,
+          "qt": 4,
+          "listino": 5,
+          "codean": 6,
+          "ordine": 7
+        }
+      },
+      "header_aliases": {
+        "supplier_code": [
+          "COD.ART.",
+          "COD ART"
+        ],
+        "description": [
+          "DES.ARTICOLO",
+          "DES ARTICOLO"
+        ],
+        "unit": [
+          "UM"
+        ],
+        "pieces_per_carton": [
+          "QT"
+        ],
+        "unit_price_net": [
+          "LISTINO"
+        ],
+        "ean": [
+          "COD.EAN",
+          "COD EAN"
+        ],
+        "order_quantity": [
+          "ORDINE"
+        ]
+      },
+      "field_mapping": {
+        "sheet": "FIRST",
+        "header_row": 1,
+        "data_start_row": 2,
+        "columns": {
+          "supplier_code": "COD.ART.",
+          "description": "DES.ARTICOLO",
+          "unit": "UM",
+          "pieces_per_carton": "QT",
+          "unit_price_net": "LISTINO",
+          "ean": "COD.EAN"
+        },
+        "assume_available": true,
+        "vat_unavailable": true,
+        "order_column": "G",
+        "display_detection": {
+          "description_regex": "\\bEXPO\\b",
+          "exclude_description_regex": "\\bNO\\s+EXPO\\b",
+          "supplier_code_regex": "^E\\d{6}$",
+          "order_factor_equals": 1,
+          "declared_units_regex": "\\b\\d+\\s+[^+\\s]+\\s*\\+\\s*\\d+\\s+[^\\s]+\\b",
+          "confidence": "MEDIA"
+        }
+      },
+      "commercial_rules": {
+        "price_basis": "net_unit",
+        "order_quantity": "cartons",
+        "display_detection_requires_review": true
+      },
+      "order_write": {
+        "note": "Foglio e righe vengono dalla mappatura qui sopra, che e' quella confermata dall'utente; la colonna d'ordine la dichiara il registro e la mappatura deve dire la stessa cosa, altrimenti l'ordine finirebbe in una cella che nessuno ha verificato. La cella G dell'intestazione si va a leggere davvero nel documento prima di attivare la scrittura.",
+        "from_field_mapping": true,
+        "order_column": "G",
+        "expected_header": "ORDINE",
+        "required_columns": [
+          "supplier_code",
+          "description",
+          "pieces_per_carton",
+          "unit_price_net",
+          "ean"
+        ]
+      }
+    },
+    {
+      "id": "larice_v1",
+      "schema_version": 1,
+      "kind": "supplier",
+      "supplier_id": "larice",
+      "display_name": "LARICE",
+      "file_types": [
+        ".xlsx"
+      ],
+      "sheet_selector": {
+        "first_commercial_sheet": true
+      },
+      "column_shape_signature": {
+        "kind": "shape",
+        "note": "Il listino Larice non ha nessuna riga di intestazione e i fogli si chiamano «Canvass 28 06-10lug»: non c'e' niente da leggere per nome. Le colonne si riconoscono da come sono popolate.",
+        "min_columns": 18,
+        "required_columns": [
+          2,
+          3,
+          7,
+          15,
+          16,
+          18
+        ],
+        "min_score": 0.75,
+        "max_confidence": 0.97,
+        "checks": [
+          {
+            "column": 18,
+            "min_nonempty": 100,
+            "type_ratio": {
+              "any_of": [
+                "number",
+                "text"
+              ],
+              "min_exclusive": 0.95
+            },
+            "weight": 0.32,
+            "evidence": "colonna R popolata come EAN"
+          },
+          {
+            "column": 2,
+            "examples_include": [
+              "I"
+            ],
+            "weight": 0.22,
+            "evidence": "indicatore I in colonna B"
+          },
+          {
+            "column": 7,
+            "min_nonempty": 100,
+            "type_ratio": {
+              "any_of": [
+                "text"
+              ],
+              "min_exclusive": 0.7
+            },
+            "weight": 0.22,
+            "evidence": "descrizioni testuali in colonna G"
+          },
+          {
+            "column": 15,
+            "min_nonempty": 100,
+            "type_ratio": {
+              "any_of": [
+                "number"
+              ],
+              "min_exclusive": 0.7
+            },
+            "weight": 0.22,
+            "evidence": "prezzi numerici in colonna O"
+          }
+        ]
+      },
+      "column_map": {
+        "group_label": "A",
+        "indicator": "B",
+        "supplier_code": "C",
+        "order_quantity": "D",
+        "pieces_per_carton": "E",
+        "pallet": "F",
+        "description": "G",
+        "reward_description": "J",
+        "previous_price_note": "M",
+        "unit_price_pre_discount": "O",
+        "discount": "P",
+        "vat": "Q",
+        "ean": "R"
+      },
+      "display_column_map": {
+        "display_name": "A",
+        "parent_description": "G",
+        "component_quantity": "H",
+        "component_description": "I",
+        "component_unit_price_pre_discount": "O",
+        "component_discount": "P",
+        "component_ean": "R"
+      },
+      "commercial_rules": {
+        "numeric_discount": "unit_price_pre_discount * (1 - discount)",
+        "text_discount": "no discount"
+      },
+      "row_markers": {
+        "field": "discount_raw",
+        "note": "I testi che compaiono nella colonna sconto. Sono questi i codici ammessi: un testo diverso diventa un avviso, perche' vuol dire che il fornitore ha introdotto una convenzione che nessuno ha ancora letto.",
+        "codes": {
+          "TP": {
+            "means": "Prezzo di transito: nessuno sconto in colonna, la riga è merce normale.",
+            "orderable": true
+          },
+          "SM": {
+            "means": "Riga premio di una soglia con omaggio: ha codice, EAN e descrizione veri ma non è merce acquistabile.",
+            "orderable": false,
+            "row_type": "OMAGGIO"
+          }
+        }
+      },
+      "order_write": {
+        "note": "Il listino Larice non ha nessuna riga di intestazione: non c'e' niente da verificare sopra la colonna, e i dati cominciano alla riga 2. «FIRST» e' il primo foglio del documento.",
+        "sheet": "FIRST",
+        "data_start_row": 2,
+        "order_column": "D"
+      }
+    },
+    {
+      "id": "noce_xls_v1",
+      "schema_version": 1,
+      "kind": "supplier",
+      "supplier_id": "noce",
+      "display_name": "NOCE listino Excel 97-2003",
+      "file_types": [
+        ".xls",
+        ".xlsx"
+      ],
+      "note": "Il formato lo decidono i primi byte del file, non l'estensione: un .xls si legge con app/xls_reader.py, un .xlsx con openpyxl. La firma di questo listino sono le intestazioni, non il nome del file: Noce manda documenti chiamati per esempio formattato_104233.xls.",
+      "sheet_selector": {
+        "preferred_name": "Foglio1"
+      },
+      "header_signature": {
+        "kind": "headers",
+        "sheet": "Foglio1",
+        "header_row": 5,
+        "data_start_row": 6,
+        "note": "L'intestazione sta alla riga 5, e alla riga 4 c'e' una nota («i prezzi offerta sono in grassetto») che intestazione non e'. «descrizioneofferta» sta fra le obbligatorie perche' da quando la mappatura la legge il lettore la pretende: senza, la lettura si fermerebbe a meta' file invece di dire che il documento non ha la forma attesa.",
+        "required": [
+          "cat",
+          "codice",
+          "codiceabarre",
+          "descrizionearticolo",
+          "descrizioneofferta",
+          "importo",
+          "offerta",
+          "pezzixcartone",
+          "prezzo",
+          "quantita",
+          "ragionesociale"
+        ],
+        "known": [
+          "cartonixstra",
+          "cat",
+          "codice",
+          "codiceabarre",
+          "descrizionearticolo",
+          "descrizioneofferta",
+          "descrizionereparto",
+          "importo",
+          "iva",
+          "offerta",
+          "pezzixcartone",
+          "prezzo",
+          "quantita",
+          "ragionesociale",
+          "stratixpal",
+          "variato"
+        ],
+        "columns_note": "Misurate su formattato_104233.xls il 13 agosto 2026 (la colonna A non ha intestazione). La lettura risolve per nome, ma la colonna d'ordine (I, «quantita») si compila in posizione dentro il loro .xls: una colonna in piu' in testa sposterebbe tutto senza cambiare nessun nome.",
+        "columns": {
+          "codiceabarre": 2,
+          "codice": 3,
+          "descrizionearticolo": 4,
+          "pezzixcartone": 5,
+          "cartonixstra": 6,
+          "stratixpal": 7,
+          "prezzo": 8,
+          "quantita": 9,
+          "offerta": 10,
+          "importo": 11,
+          "descrizionereparto": 12,
+          "cat": 13,
+          "ragionesociale": 14,
+          "variato": 15,
+          "descrizioneofferta": 16,
+          "iva": 17
+        }
+      },
+      "header_aliases": {
+        "ean": [
+          "codice_a_barre"
+        ],
+        "supplier_code": [
+          "codice"
+        ],
+        "description": [
+          "descrizione_articolo"
+        ],
+        "pieces_per_carton": [
+          "pezzi_x_cartone"
+        ],
+        "cartons_per_layer": [
+          "cartoni_x_stra"
+        ],
+        "layers_per_pallet": [
+          "strati_x_pal"
+        ],
+        "unit_price_net": [
+          "prezzo"
+        ],
+        "order_quantity_ignored": [
+          "quantita"
+        ],
+        "offer_flag": [
+          "offerta"
+        ],
+        "line_total": [
+          "Importo"
+        ],
+        "department": [
+          "descrizione_reparto"
+        ],
+        "category": [
+          "cat"
+        ],
+        "manufacturer": [
+          "ragione_sociale"
+        ],
+        "changed": [
+          "variato"
+        ],
+        "offer_description": [
+          "descrizione_offerta"
+        ],
+        "vat": [
+          "Iva"
+        ]
+      },
+      "field_mapping": {
+        "sheet": "Foglio1",
+        "header_row": 5,
+        "data_start_row": 6,
+        "columns": {
+          "ean": "codice_a_barre",
+          "supplier_code": "codice",
+          "description": "descrizione_articolo",
+          "pieces_per_carton": "pezzi_x_cartone",
+          "unit_price_net": "prezzo",
+          "offer_flag": "offerta",
+          "category": "cat",
+          "vat": "Iva",
+          "availability": "descrizione_offerta"
+        },
+        "availability_note": "La colonna «descrizione_offerta» (P) e' dove Noce scrive le condizioni dell'offerta. Senza questa mappatura il campo availability restava vuoto su tutti i record e i rilevatori di promozioni non vedevano mai una riga di questo listino. Nel file del 6 agosto 2026 la colonna e' vuota su tutte e 8851 le righe tenute, quindi la mappatura non cambia nulla oggi: apre il canale per quando il fornitore la compilera'.",
+        "order_column": "I",
+        "assume_available": true,
+        "text_columns": [
+          "supplier_code"
+        ],
+        "data_end_rule": {
+          "last_row_with_any": [
+            "ean",
+            "supplier_code",
+            "description"
+          ]
+        },
+        "exclude_rows": [
+          {
+            "field": "category",
+            "equals": "FOOD",
+            "label": "food",
+            "reason": "L'utente non tratta l'alimentare: le righe FOOD non entrano nel confronto."
+          }
+        ],
+        "expiry_from_description": {
+          "regex": "<br>\\s*Scadenza\\s+(?P<giorno>\\d{1,2})/(?P<mese>\\d{1,2})/(?P<anno>\\d{4})",
+          "plausible_window_years": {
+            "back": 2,
+            "ahead": 10
+          }
+        },
+        "offer_from_bold": "unit_price_net"
+      },
+      "commercial_rules": {
+        "price_basis": "net_unit_piece",
+        "order_quantity": "cartons",
+        "line_total": "order_quantity * pieces_per_carton * unit_price_net",
+        "line_total_source": "La colonna Importo del listino contiene la formula =I*H*E, cioe' cartoni ordinati per prezzo al pezzo per pezzi per cartone: e' il listino stesso a dire che il prezzo e' al pezzo e l'ordine in cartoni."
+      },
+      "order_write": {
+        "note": "A Noce si rimanda il **loro** file e non una conversione: la copia si scrive in posizione dentro il .xls, quattro byte per cella. Foglio, righe e nome della colonna dell'EAN sono quelli della field_mapping qui sopra.",
+        "from_field_mapping": true,
+        "order_column": "I",
+        "mode": "patch_xls_in_posizione",
+        "required_columns": [
+          "ean"
+        ]
+      }
+    },
+    {
+      "id": "noce_csv_v1",
+      "schema_version": 1,
+      "kind": "supplier",
+      "supplier_id": "noce",
+      "display_name": "NOCE",
+      "file_types": [
+        ".csv"
+      ],
+      "header_signature": {
+        "kind": "headers",
+        "sheet": null,
+        "header_row": 1,
+        "data_start_row": 2,
+        "note": "Un CSV non ha fogli: «sheet» resta nullo. «variation» non e' obbligatoria perche' compare solo quando il fornitore segnala una variazione.",
+        "required": [
+          "availability",
+          "catalogpage",
+          "ean",
+          "packaging",
+          "price",
+          "product",
+          "unit"
+        ],
+        "known": [
+          "availability",
+          "catalogpage",
+          "ean",
+          "packaging",
+          "price",
+          "product",
+          "unit",
+          "variation"
+        ]
+      },
+      "header_aliases": {
+        "catalog_page": [
+          "catalog_page"
+        ],
+        "ean": [
+          "ean"
+        ],
+        "description": [
+          "product"
+        ],
+        "packaging": [
+          "packaging"
+        ],
+        "availability": [
+          "availability"
+        ],
+        "variation": [
+          "variation"
+        ],
+        "unit_price_net": [
+          "price"
+        ],
+        "unit": [
+          "unit"
+        ]
+      },
+      "commercial_rules": {
+        "order_multiplier_pattern": "^x\\s*([0-9]+(?:[.,][0-9]+)?)$",
+        "usable_when": "available and price valid and order multiplier valid"
+      }
+    },
+    {
+      "id": "offerte_v1",
+      "schema_version": 1,
+      "kind": "supplier",
+      "supplier_id": "offerte",
+      "display_name": "OFFERTE",
+      "file_types": [
+        ".xlsx"
+      ],
+      "sheet_selector": {
+        "first_commercial_sheet": true
+      },
+      "column_shape_signature": {
+        "kind": "shape",
+        "note": "Il foglio delle offerte arriva senza nessuna riga di intestazione: sopra i prodotti ci sono righe vuote e la sola parola ORDINE in colonna H. Non c'e' niente da leggere per nome, quindi le colonne si riconoscono da come sono popolate. ⚠ «Ci sono prezzi, pezzi per collo e codici a barre» non identifica niente: lo dicono quasi tutti i listini. A identificare questo foglio sono tre cose insieme — le colonne A-F piene, la G VUOTA, e in H una cella sola con scritto ORDINE. Senza la G vuota, un listino qualunque con l'intestazione alla riga 3 entrava qui dentro e diventava «OFFERTE» (misurato il 21 agosto 2026 su due fogli costruiti apposta).",
+        "min_columns": 8,
+        "required_columns": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          8
+        ],
+        "absent_columns": [
+          7
+        ],
+        "min_score": 0.9,
+        "max_confidence": 0.96,
+        "checks": [
+          {
+            "column": 8,
+            "max_nonempty": 1,
+            "examples_include": [
+              "ORDINE"
+            ],
+            "weight": 0.24,
+            "evidence": "in colonna H una cella sola, con scritto ORDINE"
+          },
+          {
+            "column": 3,
+            "min_nonempty": 10,
+            "examples_include": [
+              "PZ"
+            ],
+            "weight": 0.22,
+            "evidence": "unita' di misura PZ in colonna C"
+          },
+          {
+            "column": 6,
+            "min_nonempty": 10,
+            "type_ratio": {
+              "any_of": [
+                "text"
+              ],
+              "min_exclusive": 0.9
+            },
+            "weight": 0.22,
+            "evidence": "codici a barre come testo in colonna F"
+          },
+          {
+            "column": 5,
+            "min_nonempty": 10,
+            "type_ratio": {
+              "any_of": [
+                "number"
+              ],
+              "min_exclusive": 0.9
+            },
+            "weight": 0.18,
+            "evidence": "prezzi numerici in colonna E"
+          },
+          {
+            "column": 4,
+            "min_nonempty": 10,
+            "type_ratio": {
+              "any_of": [
+                "number"
+              ],
+              "min_exclusive": 0.9
+            },
+            "weight": 0.14,
+            "evidence": "pezzi per collo numerici in colonna D"
+          }
+        ]
+      },
+      "column_map": {
+        "supplier_code": "A",
+        "description": "B",
+        "unit": "C",
+        "pieces_per_carton": "D",
+        "unit_price_net": "E",
+        "ean": "F",
+        "order_quantity": "H",
+        "promotion_text": "K"
+      },
+      "field_mapping": {
+        "sheet": "FIRST",
+        "data_start_marker": {
+          "column": "H",
+          "equals": "ORDINE",
+          "offset": 1
+        },
+        "columns": {
+          "supplier_code": 1,
+          "description": 2,
+          "unit": 3,
+          "pieces_per_carton": 4,
+          "unit_price_net": 5,
+          "ean": 6
+        },
+        "italian_numbers": true,
+        "text_columns": [
+          "supplier_code",
+          "ean"
+        ],
+        "assume_available": true,
+        "vat_unavailable": true,
+        "order_column": "H"
+      },
+      "order_write": {
+        "note": "La colonna d'ordine e' la H, e sopra ci sta la sola parola ORDINE: e' l'unica intestazione del foglio. Quante righe vuote ci siano sopra di lei cambia di mese in mese, quindi «header_row» e «data_start_row» qui sotto sono quello che valevano il giorno in cui l'adattatore e' stato scritto, non una regola: la regola e' «expected_header_search», che va a cercare la parola nel documento di oggi. Se non c'e', o ce ne sono due, si tengono i numeri e la verifica rifiuta.",
+        "sheet": "FIRST",
+        "header_row": 3,
+        "data_start_row": 4,
+        "order_column": "H",
+        "expected_header": "ORDINE",
+        "expected_header_search": true
+      },
+      "commercial_rules": {
+        "price_basis": "net_unit",
+        "order_quantity": "cartons",
+        "display_detection_requires_review": true
+      }
+    }
+  ]
+}
