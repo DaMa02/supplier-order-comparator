@@ -1,29 +1,30 @@
-"""La colonna in cui il programma scrive le quantità ordinate, cambiabile.
+"""The column the app writes ordered quantities into, made changeable by the user.
 
-Fino al 18 agosto 2026 quella colonna si sceglieva **una volta sola**, dentro
-la mappatura guidata — e quella si apre soltanto quando il programma non
-riconosce le colonne di un documento. Per i quattro fornitori conosciuti la
-colonna stava nel registro (BETULLA C, LARICE D, CIPRESSO G, NOCE I) e la
-pagina la mostrava e basta: per spostarla bisognava aprire un file JSON.
+Before this module, that column could be set only once, through the guided
+mapping flow — which only opens when the app fails to recognize a
+document's columns. For the four known suppliers the column lives in the
+adapter registry (BETULLA C, LARICE D, CIPRESSO G, NOCE I) and the page only
+displayed it; moving it meant editing a JSON file by hand.
 
-⚠ **Qui non si verifica niente di nuovo.** La prova che la colonna scelta sia
-davvero scrivibile è la **stessa** che il programma fa prima di attivare la
-compilazione: `launcher.source_rule`. Si costruisce la dichiarazione che si
-vorrebbe scrivere, la si dà in pasto a quella funzione sul documento vero, e si
-scrive nel registro **solo se passa**. Una regola inventata qui sarebbe una
-seconda autorità sulla stessa domanda, ed è già costata una compilazione
-bloccata dal vivo (LARICE, 14 agosto 2026: un cablato sostituito con una regola
-inventata, trovata dal browser e non dai test).
+This module validates nothing new. The proof that a chosen column is
+actually writable is the same check the app runs before activating a
+compilation: `launcher.source_rule`. The candidate declaration is built, fed
+to that same function against the real document, and only written to the
+registry if it passes. A validation rule invented here would be a second
+authority on the same question — a real production compilation was blocked
+once by exactly that kind of drift, when a hard-coded rule was replaced with
+an invented one that the browser exercised but the tests hadn't.
 
-Le due famiglie di fornitori, che qui vanno trattate diversamente perché il
-registro le tratta diversamente:
+Two supplier families, handled differently because the adapter registry
+treats them differently:
 
-* **lettore dedicato** (BETULLA, LARICE): `order_write` dichiara da solo foglio,
-  righe e colonna. Cambiare la colonna vuol dire cambiare quella riga lì.
-* **`from_field_mapping`** (CIPRESSO, NOCE): `order_write` e la mappatura
-  confermata devono dire **la stessa** colonna, e `source_rule` si rifiuta se
-  divergono. Cambiarne una sola lascerebbe il fornitore non compilabile con una
-  frase che accusa la mappatura: si cambiano tutte e due, insieme.
+* Dedicated reader (BETULLA, LARICE): `order_write` declares sheet, rows and
+  column on its own. Changing the column means changing that one entry.
+* `from_field_mapping` (CIPRESSO, NOCE): `order_write` and the confirmed
+  field mapping must agree on the same column, and `source_rule` rejects
+  them if they diverge. Changing only one would leave the supplier
+  uncompilable with an error that blames the mapping; both are changed
+  together.
 """
 
 from __future__ import annotations
@@ -46,7 +47,7 @@ COLONNA_VALIDA = re.compile(r"[A-Z]{1,3}")
 
 
 def lettera_di_indice(indice: Any) -> str:
-    """1 → «A», 27 → «AA». Zero e i negativi non sono colonne: danno «»."""
+    """1 -> "A", 27 -> "AA". Zero and negatives aren't columns and return ""."""
 
     try:
         numero = int(indice)
@@ -62,10 +63,10 @@ def lettera_di_indice(indice: Any) -> str:
 
 
 def indice_di_lettera(lettera: Any) -> int | None:
-    """«A» → 1, «AA» → 27. Qualunque altra cosa è `None`, non uno zero.
+    """"A" -> 1, "AA" -> 27. Anything else is `None`, not a zero.
 
-    Uno zero silenzioso finirebbe in `foglio.cell(riga, 0)`, che openpyxl
-    rifiuta con un'eccezione lontana dal punto in cui la lettera era sbagliata.
+    A silent zero would end up in `foglio.cell(riga, 0)`, which openpyxl
+    rejects with an exception far from where the letter was actually wrong.
     """
 
     testo = str(lettera or "").strip().upper()
@@ -78,12 +79,12 @@ def indice_di_lettera(lettera: Any) -> int | None:
 
 
 def indice_scelto(valore: Any) -> int | None:
-    """Quale colonna intendeva chi ha risposto: «C», «3» e `3` sono la stessa.
+    """Resolve which column was meant: "C", "3" and `3` are the same column.
 
-    La pagina manda il numero (il `<select>` ha per valore l'indice, come nella
-    mappatura guidata), ma la stessa domanda arriva anche a voce e per lettera —
-    ed e' per lettera che il registro la scrive. Tradurre in un posto solo
-    evita che i due modi divergano su «AA» contro 27.
+    The page sends the numeric index (the `<select>`'s value, same as in the
+    guided mapping flow), but the same input can also arrive as a letter,
+    which is the form the registry stores it in. Translating in one place
+    avoids the two representations disagreeing over "AA" versus 27.
     """
 
     if isinstance(valore, bool) or valore in (None, ""):
@@ -98,16 +99,16 @@ def indice_scelto(valore: Any) -> int | None:
 
 
 def campo_che_occupa(effettiva: Any, indice: Any) -> str:
-    """Il nome leggibile del campo che quella colonna serve già a **leggere**.
+    """Return the readable name of the field that column is currently mapped to.
 
-    È l'unico rifiuto che questo modulo dà di suo, e non è una regola inventata:
-    è la stessa che la mappatura guidata applica da sempre («la colonna ordine
-    non puo' essere anche la colonna prezzo», `schema_mapping`). Vale la pena
-    dire perché è severa: la colonna d'ordine viene **azzerata e riscritta**
-    sulla copia, quindi indicarla sulla colonna del prezzo non darebbe un errore
-    — darebbe un listino compilato con i prezzi cancellati, e il controllo di
-    fedeltà non se ne accorgerebbe, perché quella cella il piano ha il diritto
-    di toccarla.
+    This is the only rejection this module makes on its own, and it isn't
+    an invented rule: it's the same one the guided mapping flow has always
+    applied ("the order column can't also be the price column",
+    `schema_mapping`). Worth stating why it's strict: the order column gets
+    overwritten on the copy, so pointing it at the price column wouldn't
+    raise an error — it would produce a compiled price list with its prices
+    wiped, and the fidelity check wouldn't catch it, since the order plan is
+    allowed to touch that cell.
     """
 
     if not isinstance(effettiva, dict) or not indice:
@@ -123,11 +124,11 @@ def campo_che_occupa(effettiva: Any, indice: Any) -> str:
 def colonne_per_la_scelta(
     effettiva: Any, colonne_foglio: Any
 ) -> list[dict[str, Any]]:
-    """Le colonne del documento, dicendo qual è l'attuale e quali sono occupate.
+    """List the document's columns, marking which is current and which are taken.
 
-    Le occupate si mostrano lo stesso, spente: nasconderle farebbe sembrare che
-    il documento abbia meno colonne di quelle che ha, e chi cerca «quella dopo
-    il prezzo» conta quelle che vede.
+    Taken columns are still shown, just disabled: hiding them would make the
+    document look like it has fewer columns than it does, and someone
+    looking for "the one after the price column" counts what they can see.
     """
 
     ordine = (effettiva or {}).get("orderColumn") if isinstance(effettiva, dict) else None
@@ -151,26 +152,24 @@ def colonne_per_la_scelta(
 def dichiarazione_aggiornata(
     order_write: Any, lettera: Any, intestazione: Any, *, c_e_intestazione: bool = True
 ) -> dict[str, Any]:
-    """`order_write` con la colonna nuova, e l'intestazione che il documento ha.
+    """Build `order_write` with the new column and the document's real header text.
 
-    Non si copia l'intestazione vecchia sulla colonna nuova: `expected_header` è
-    una **misura** del documento, non una preferenza. Se la colonna scelta ha un
-    titolo, quello diventa la cosa da verificare; se è vuota, si dichiara che è
-    vuota — e allora `source_rule` pretende che sia ancora vuota davvero, e in
-    più che sotto non ci siano testo o formule.
+    The old header text is never copied onto the new column: `expected_header`
+    is a measurement of the document, not a preference. If the chosen column
+    has a title, that becomes what gets verified; if it's blank, the
+    declaration says so, and then `source_rule` requires it to genuinely
+    still be blank, with no text or formulas underneath either.
 
-    ⚠ `c_e_intestazione` **falso** è il caso di LARICE, e va trattato a parte:
-    quel listino non ha nessuna riga di intestazione, quindi sopra la colonna
-    non c'è nessuna cella da guardare. Dichiarare lì «cella vuota confermata»
-    non renderebbe il controllo più severo — lo renderebbe **impossibile**:
-    `source_rule` pretende una riga di intestazione per poterlo fare e si
-    fermerebbe con «il registro non dichiara le righe da cui parte l'ordine»,
-    cioè accusando il registro di una cosa che il documento non ha. Misurato sul
-    listino vero il 18 agosto 2026, prima di scriverlo.
+    `c_e_intestazione=False` is for LARICE, whose price list has no header
+    row at all, so there's no cell above the column to look at.
+    Declaring "confirmed blank cell" there wouldn't make the check stricter,
+    it would make it impossible: `source_rule` needs a header row to perform
+    that check and would fail with an error blaming the registry for
+    something the document itself doesn't have.
 
-    ⚠ `mode`, `from_field_mapping` e `required_columns` restano dov'erano: sono
-    la procedura di scrittura di quel fornitore (il `.xls` di Noce si scrive
-    in posizione) e non hanno niente a che vedere con quale colonna si riempie.
+    `mode`, `from_field_mapping` and `required_columns` are left untouched:
+    they're that supplier's write procedure (one supplier's `.xls` is
+    patched in place) and have nothing to do with which column gets filled.
     """
 
     nuova = dict(order_write) if isinstance(order_write, dict) else {}
@@ -187,12 +186,12 @@ def dichiarazione_aggiornata(
     else:
         nuova.pop("expected_header", None)
         nuova["allow_blank_header_if_confirmed"] = True
-        # ⚠ La conferma della cella vuota, per un fornitore con un lettore
-        # dedicato (BETULLA), non ha una mappatura in cui stare: senza questa
-        # chiave `source_rule` non troverebbe nessuna conferma, `expected_header`
-        # sarebbe assente, e la colonna verrebbe scritta **senza nessun
-        # controllo**. Cioè: scegliere una colonna senza titolo spegnerebbe la
-        # difesa invece di accenderla.
+        # For a supplier with a dedicated reader (BETULLA), there's no field
+        # mapping for the blank-cell confirmation to live in. Without this
+        # key, `source_rule` would find no confirmation, `expected_header`
+        # would be absent, and the column would be written with no check at
+        # all — choosing a header-less column would turn the safeguard off
+        # instead of on.
         nuova["order_header_blank_confirmed"] = True
     return nuova
 
@@ -200,14 +199,14 @@ def dichiarazione_aggiornata(
 def mappatura_aggiornata(
     mappatura: Any, lettera: Any, intestazione: Any, *, c_e_intestazione: bool = True
 ) -> dict[str, Any]:
-    """La mappatura confermata che dice la stessa cosa di `order_write`.
+    """Build the confirmed field mapping that agrees with `order_write`.
 
-    Serve ai fornitori `from_field_mapping`. Le chiavi sono quelle che la
-    mappatura guidata scrive da sempre (`order_column`, `order_header_expected`,
-    `order_header_blank_confirmed`), perché è quella forma che
-    `impara_adattatore.verifica_intestazione_ordine` sa rileggere: inventarne
-    altre qui vorrebbe dire che la prossima volta che quel documento viene
-    imparato la colonna tornerebbe indietro.
+    Used for `from_field_mapping` suppliers. The keys match what the guided
+    mapping flow has always written (`order_column`, `order_header_expected`,
+    `order_header_blank_confirmed`), because that's the shape
+    `impara_adattatore.verifica_intestazione_ordine` knows how to read back;
+    inventing different keys here would mean the column reverts the next
+    time that document gets relearned.
     """
 
     nuova = dict(mappatura) if isinstance(mappatura, dict) else {}

@@ -1,6 +1,6 @@
-# Formato delle decisioni AI
+# AI decision format
 
-Salvare le decisioni in JSON come lista. Ogni elemento deve contenere:
+Decisions are saved as a JSON list. Each element must contain:
 
 ```json
 {
@@ -19,34 +19,33 @@ Salvare le decisioni in JSON come lista. Ogni elemento deve contenere:
 }
 ```
 
-Valori ammessi:
+Allowed values:
 
 - `action`: `ACCEPT`, `REJECT`, `UNRESOLVED`;
-- `supplier`: `betulla`, `larice`, `noce` o un adattatore registrato;
+- `supplier`: `betulla`, `larice`, `noce`, or any other adapter registered in `references/adapters.json`;
 - `confidence`: `ALTA`, `MEDIA`, `BASSA`;
-- `source_row`: obbligatoria solo per `ACCEPT` e deve appartenere **alla shortlist di quella coppia**, cioè all'insieme dei candidati che sono stati mostrati al modello.
+- `source_row`: required only for `ACCEPT`, and it must belong to that pair's shortlist, i.e. to the set of candidates that were actually shown to the model.
 
-## `ai_impronta_caso` — obbligatoria
+## `ai_impronta_caso` — required
 
-Le prime sedici cifre dell'impronta del caso **come il modello l'ha visto**: riga e fornitore del gestionale, descrizione dell'articolo cercato e l'elenco ordinato dei candidati con `source_row`, descrizione e punteggio. La calcola `build_semantic_shortlists.impronta_caso`, la scrive `scripts/valuta_shortlist.py` e la verifica `scripts/merge_match_decisions.py` ricalcolandola dalla shortlist della run corrente.
+The first sixteen hex digits of a hash of the case exactly as the model saw it: the management-software row and supplier, the searched item's description, and the ordered list of candidates with their `source_row`, description and score. `build_semantic_shortlists.impronta_caso` computes it, `scripts/valuta_shortlist.py` writes it, and `scripts/merge_match_decisions.py` verifies it by recomputing it from the current run's shortlist.
 
-Serve contro un caso che nessun altro controllo vede: **un file di decisioni di un'altra run**. Il gestionale è lo stesso file di settimana in settimana, quindi le coppie `(riga, fornitore)` si sovrappongono quasi tutte, i conteggi riconciliano e le altre guardie confrontano fra loro artefatti che sono tutti della run corrente. L'impronta è l'unico campo che porta con sé che cosa il modello aveva davanti.
+It guards against a case no other check sees: a decisions file from a different run. The management-software export is the same file week to week, so `(row, supplier)` pairs mostly overlap, counts reconcile, and the other guards only compare artifacts that all belong to the current run. The fingerprint is the only field that carries what the model actually had in front of it.
 
-Comprende **tutti** i candidati, non solo quello accettato: un `REJECT` vecchio dice «nessuno di questi va bene» a proposito di un elenco che oggi è un altro, e quel prodotto sparisce dal confronto presso quel fornitore senza che niente lo segnali.
+It covers every candidate, not only the accepted one: a stale `REJECT` says "none of these match" about a list that has since changed, and that product would silently disappear from the comparison at that supplier.
 
-Una decisione la cui impronta non corrisponde — o che non la porta affatto — non viene applicata: quella coppia torna a `DA_VERIFICARE` e `merge_match_decisions.py` esce con **3**. Le due cose restano distinte nella causa e nel messaggio, perché mandano a cercare il guasto in due posti diversi: `DECISIONE_DI_UNA_ALTRA_RUN` per un'impronta che non corrisponde, `DECISIONE_SENZA_IMPRONTA` per una che non c'è. L'avviso in cima alla pagina le conta tutte e due. Ammettere una decisione senza impronta renderebbe la guardia aggirabile dimenticandosi un campo.
+A decision whose fingerprint doesn't match — or that carries none at all — is not applied: that pair goes back to `DA_VERIFICARE` and `merge_match_decisions.py` exits with 3. The two causes are kept distinct in both the cause code and the message, because they point at different places to look: `DECISIONE_DI_UNA_ALTRA_RUN` for a mismatching fingerprint, `DECISIONE_SENZA_IMPRONTA` for a missing one. Exit 3 isn't a warning the run absorbs: the orchestrator only tolerates exit 4 or 5 and shows those as a banner while the comparison continues; exit 3 means the artifacts don't describe the same run, so the pipeline stops. Accepting a decision with no fingerprint would make the guard trivial to bypass by simply omitting a field.
 
-⚠ **Che cosa l'impronta prova, e che cosa no.** Prova che il caso valutato è **identico** a quello di oggi. Se il listino di un fornitore non cambia da una settimana all'altra, il caso è davvero lo stesso: l'impronta combacia e la decisione della settimana scorsa passa — ed è giusto, perché è quello che fa apposta la memoria delle risposte in `app/data/memoria_ai.json`. Quello che l'impronta **non** dice è con che cosa quella decisione è stata presa.
+What the fingerprint proves, and what it doesn't: it proves the case evaluated today is identical to the one the decision was made on. If a supplier's price list doesn't change from one week to the next, the case really is the same: the fingerprint matches and last week's decision is accepted — which is the point, since it's exactly what the answer memory in `app/data/memoria_ai.json` is for. What the fingerprint does not say is what that decision was made with.
 
-## `ai_modello`, `ai_versione_prompt`, `ai_versione_avversario` — obbligatorie
+## `ai_modello`, `ai_versione_prompt`, `ai_versione_avversario` — required
 
-La provenienza. Servono per il caso che l'impronta lascia passare: una decisione presa con il prompt `v1` — che sbagliava 5 `ALTA` su 400 casi e non aveva la verifica avversariale — su un caso che nel frattempo non è cambiato. Le scrive `scripts/valuta_shortlist.py` dalla configurazione viva.
+Provenance. These matter for the case the fingerprint lets through: a decision made with an older prompt version, on a case that hasn't changed since. `scripts/valuta_shortlist.py` writes them from the live configuration.
 
-`merge_match_decisions.py` le **legge e non le giudica**: la configurazione di oggi non ce l'ha. Il confronto è lavoro dell'orchestratore, che ce l'ha, e sta fra le cose dichiarate e non fatte della 6b.
+`merge_match_decisions.py` reads them without judging them: it has no access to today's configuration to compare against. That comparison is the orchestrator's job.
 
-`ai_articolo_mostrato` non viene verificata: porta la descrizione dell'articolo su cui la decisione è stata presa perché chi legge il file o il riepilogo capisca di che cosa si stava parlando.
+`ai_articolo_mostrato` is not verified; it carries the description of the item the decision was made about, so that anyone reading the file or the summary can tell what was being discussed.
 
-Le versioni precedenti ammettevano anche «i candidati EAN ambigui», cioè le righe di `usable_candidates` in `matching_result.json`. **Non vale più**: quelle righe al modello non arrivano — il passo AI costruisce i suoi casi dalle sole shortlist — e una riga ammessa ma mai mostrata è una porta aperta su un `ACCEPT` che nessuno ha davvero valutato. Una `source_row` fuori dalla shortlist fa uscire `merge_match_decisions.py` con **5** e degrada quella coppia a `DA_VERIFICARE`.
+A `source_row` must come from the shortlist shown to the model, because the AI evaluation step builds its cases from the shortlist alone. For an `EAN_AMBIGUO` case it must also carry the management-software EAN, i.e. belong to `usable_candidates` in `matching_result.json`: the shortlist there isn't EAN-ranked, so this second check keeps an `ACCEPT` from landing on an unrelated row with the same description. A `source_row` outside the shortlist, or (for `EAN_AMBIGUO`) without the EAN, makes `merge_match_decisions.py` exit with 5 and degrades that pair to `DA_VERIFICARE`.
 
-Non inventare righe, EAN o prezzi. La motivazione deve citare gli attributi che sostengono o impediscono il match. Se due candidati restano equivalenti, usare `UNRESOLVED`.
-
+Rows, EANs or prices must never be invented. The rationale must cite the attributes that support or rule out the match. When two candidates remain equivalent, `UNRESOLVED` is used.

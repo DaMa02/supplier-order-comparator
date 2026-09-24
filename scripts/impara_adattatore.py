@@ -1,27 +1,26 @@
 #!/usr/bin/env python3
-"""Manda nel registro gli schemi che l'utente ha confermato.
+"""Writes user-confirmed schemas into the adapter registry.
 
-Senza questo passaggio uno schema confermato resta scritto nel manifest della
-run e basta: la settimana dopo lo stesso listino torna sconosciuto, l'AI viene
-richiamata e all'utente viene chiesto di confermare di nuovo la stessa cosa.
-Il programma finito gira da solo e non ci sara' nessuno a copiare a mano una
-voce dentro ``references/adapters.json``.
+Without this step a confirmed schema stays written only in that run's
+manifest: the following week the same price list comes back unknown and the
+user has to map it again through the guided UI. In unattended runs there is
+nobody to copy an entry into ``references/adapters.json`` by hand.
 
-Due regole decidono la forma di tutto il resto:
+Two rules shape everything else here:
 
-- **Nel registro entra solo cio' che l'utente ha approvato.**  L'AI propone,
-  l'utente conferma: una voce senza ``user_confirmation.status == "CONFIRMED"``
-  non entra per nessuna ragione, nemmeno quando la mappatura sembra perfetta.
-- **Un rifiuto non e' mai silenzioso.**  Ogni voce non imparata esce nel
-  rapporto con il suo motivo scritto in italiano, e se una voce che doveva
-  essere imparata viene rifiutata l'uscita e' ``2``.  Un fallimento zitto qui
-  vorrebbe dire un fornitore che torna sconosciuto la settimana prossima senza
-  che nessuno sappia perche'.
+- Only what the user approved enters the registry. The mapping is proposed —
+  by the registry's deterministic scoring, or written by hand — and the user
+  confirms it: an entry without ``user_confirmation.status == "CONFIRMED"``
+  never enters, even when the mapping looks perfect.
+- A rejection is never silent. Every entry that isn't learned comes back in
+  the report with its reason, and if an entry that should have been learned
+  is rejected, the process exits with status 2. A silent failure here would
+  mean a supplier stays unknown next week with nobody knowing why.
 
-Uso::
+Usage::
 
     python scripts/impara_adattatore.py --manifest <input_manifest.json> \\
-        --adapters references\\adapters.json [--output <rapporto.json>] [--prova]
+        --adapters references\\adapters.json [--output <report.json>] [--prova]
 """
 
 from __future__ import annotations
@@ -35,11 +34,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-# Il motore del registro e il validatore del manifest stanno qui accanto.  Le
-# verifiche sulla mappatura sono quelle del validatore e non una seconda copia:
-# due elenchi di controlli che si allontanano di un campo vorrebbero dire una
-# mappatura accettata qui e rifiutata la' — o peggio il contrario — senza che
-# nessuno se ne accorga.
+# The registry engine and the manifest validator live right next to this
+# script. Mapping checks reuse the validator's own logic rather than a second
+# copy: two divergent rule sets would mean a mapping accepted here and
+# rejected there, or the reverse, with nothing to catch it.
 SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
@@ -48,34 +46,34 @@ import registro  # noqa: E402
 from validate_input_manifest import incomplete_mapping  # noqa: E402
 
 
-# I due stati in cui l'AI ha proposto qualcosa che il registro non sa ancora.
-# SCHEMA_NOTO non ha niente da imparare; AMBIGUO e FILE_NON_PERTINENTE non
-# hanno nemmeno una mappatura da scrivere.
+# The two states where the user mapped something the registry doesn't know
+# yet. `SCHEMA_NOTO` has nothing to learn; `AMBIGUO` and
+# `FILE_NON_PERTINENTE` don't even have a mapping to write.
 STATI_DA_IMPARARE = ("SCHEMA_VARIATO", "NUOVO_FORNITORE")
 
 CONFERMATO = "CONFIRMED"
 
-# Chi ha approvato lo schema.  E' una costante e non un campo perche' questo
-# script scrive solo cio' che l'utente ha confermato: se un giorno esistesse
-# una conferma automatica, sarebbe un valore diverso e si vedrebbe nel registro.
+# Who approved the schema. A constant, not a field, because this script only
+# ever writes what the user confirmed; an automated confirmation would carry
+# a different value here, visible in the registry.
 CONFERMATO_DA = "utente"
 
 
 class Rifiuto(Exception):
-    """Una voce confermata dall'utente che non si e' potuta imparare.
+    """A user-confirmed entry that couldn't be learned.
 
-    E' un'eccezione e non un valore di ritorno perche' un rifiuto interrompe
-    davvero la lavorazione di quella voce: proseguire con meta' adattatore
-    vorrebbe dire scrivere nel registro una voce che non descrive niente.
+    An exception rather than a return value because a rejection genuinely
+    aborts processing that entry: continuing with a half-built adapter would
+    mean writing a registry entry that describes nothing.
     """
 
 
 def voci_del_manifest(manifest: Any) -> list[dict[str, Any]]:
-    """I documenti elencati dal manifest, con i due nomi che il progetto usa.
+    """The documents listed in the manifest, under either of its two key names.
 
-    ``apply_preflight_decisions`` scrive ``files``, l'inspector ``profiles``:
-    leggerli entrambi evita di far dipendere l'apprendimento da quale dei due
-    file gli e' stato passato.
+    ``apply_preflight_decisions`` writes ``files``, the inspector writes
+    ``profiles``; reading both avoids making learning depend on which of the
+    two manifests was passed in.
     """
 
     if not isinstance(manifest, dict):
@@ -87,18 +85,18 @@ def voci_del_manifest(manifest: Any) -> list[dict[str, Any]]:
 
 
 def etichetta(voce: dict[str, Any]) -> str:
-    """Come si chiama questo documento nel rapporto."""
+    """This document's name in the report."""
 
     return str(voce.get("file_name") or Path(str(voce.get("path") or "")).name or "file-senza-nome")
 
 
 def motivo_per_saltare(voce: dict[str, Any]) -> str | None:
-    """Perche' questa voce non si impara, quando non e' un errore di nessuno.
+    """Why this entry isn't learned, for the two cases that aren't errors.
 
-    Sono i due casi normali: uno schema che il registro conosce gia' non ha
-    niente da insegnare, e uno schema che l'utente non ha confermato non deve
-    entrare — l'AI propone, l'utente approva.  Restano scritti lo stesso, con
-    il loro motivo: nessuno leggera' i log al posto suo.
+    Covers the two normal cases: a schema the registry already knows has
+    nothing to teach, and a schema the user hasn't confirmed must not enter —
+    the mapping is proposed, the user approves it. Both are still reported
+    with their reason: nobody reads logs on the user's behalf.
     """
 
     decisione = voce.get("ai_preflight") or {}
@@ -114,12 +112,12 @@ def motivo_per_saltare(voce: dict[str, Any]) -> str | None:
 
 
 def foglio_dichiarato(profilo: dict[str, Any], mappatura: dict[str, Any]) -> dict[str, Any]:
-    """Il foglio del profilo su cui la mappatura confermata dice di lavorare.
+    """The profile's sheet the confirmed mapping says to work on.
 
-    La scelta segue le stesse regole del lettore (``selected_sheet`` in
-    ``prepare_manifest_sources``), nome esatto compreso: imparare l'impronta da
-    un foglio che il lettore non aprirebbe vorrebbe dire un adattatore
-    riconosciuto e poi illeggibile.
+    Follows the same selection rule the reader uses (``selected_sheet`` in
+    ``prepare_manifest_sources``), exact name included: learning the
+    fingerprint from a sheet the reader wouldn't open would produce an
+    adapter that's recognized but then unreadable.
     """
 
     fogli = registro.fogli_del_profilo(profilo)
@@ -140,12 +138,12 @@ def foglio_dichiarato(profilo: dict[str, Any], mappatura: dict[str, Any]) -> dic
 
 
 def riga_dichiarata(profilo: dict[str, Any], mappatura: dict[str, Any]) -> int:
-    """La riga dove la mappatura confermata dice che stanno le intestazioni.
+    """The row the confirmed mapping declares as the header row.
 
-    Il valore mancante vale 1 per un CSV e 0 per un foglio di calcolo: sono i
-    ripieghi che usano gia' i due lettori di ``prepare_manifest_sources``, e
-    dedurne qui di diversi vorrebbe dire imparare un'impronta che descrive una
-    riga che il lettore non guardera' mai.
+    A missing value defaults to 1 for a CSV and 0 for a spreadsheet — the
+    same fallbacks the two readers in ``prepare_manifest_sources`` already
+    use. Deducing a different default here would learn a fingerprint that
+    describes a row the reader will never actually look at.
     """
 
     grezzo = mappatura.get("header_row")
@@ -158,11 +156,11 @@ def riga_dichiarata(profilo: dict[str, Any], mappatura: dict[str, Any]) -> int:
 
 
 def intestazioni_osservate(foglio: dict[str, Any], riga: int) -> list[Any]:
-    """I valori della riga di intestazione, come stanno nel profilo del manifest.
+    """The header row's values, as stored in the manifest's profile.
 
-    Il file non si riapre: il manifest e' il documento auditabile, ed e' quello
-    che l'utente ha avuto davanti quando ha confermato.  Rileggere il file
-    vorrebbe dire imparare da un contenuto che nessuno ha approvato.
+    The file itself is never reopened: the manifest is the auditable
+    document, the one the user actually saw when confirming. Re-reading the
+    file would mean learning from content nobody approved.
     """
 
     if riga < 1:
@@ -182,13 +180,13 @@ def intestazioni_osservate(foglio: dict[str, Any], riga: int) -> list[Any]:
 
 def obbligatorie_della_mappatura(mappatura: dict[str, Any], osservate: list[str],
                                  riga: int) -> list[str]:
-    """Le intestazioni senza le quali il lettore non puo' lavorare.
+    """The headers the reader can't work without.
 
-    Sono le colonne che la mappatura confermata nomina davvero: se una di
-    queste sparisce il documento non e' piu' leggibile con questo adattatore,
-    ed e' esattamente la variazione che deve tornare all'AI invece di entrare
-    in silenzio.  Le colonne dichiarate per numero restano fuori: non hanno un
-    nome da cercare fra le intestazioni.
+    These are the columns the confirmed mapping actually names: if one of
+    them disappears, the document stops being readable with this adapter,
+    which is exactly the kind of change that must go back through guided
+    mapping rather than pass silently. Columns declared by number are excluded:
+    they have no name to look up among the headers.
     """
 
     colonne = mappatura.get("columns") or mappatura.get("field_mapping") or {}
@@ -210,7 +208,7 @@ def obbligatorie_della_mappatura(mappatura: dict[str, Any], osservate: list[str]
 
 
 def verifica_intestazione_ordine(mappatura: dict[str, Any], valori: list[Any], riga: int) -> None:
-    """La conferma della colonna vuota o nominata deve descrivere il profilo."""
+    """The confirmed order-column state (named header or blank) must match the profile."""
 
     dichiarata = str(mappatura.get("order_column") or "").strip().upper()
     if not dichiarata:
@@ -236,12 +234,12 @@ def verifica_intestazione_ordine(mappatura: dict[str, Any], valori: list[Any], r
 
 
 def identificativo_dell_adattatore(decisione: dict[str, Any]) -> str:
-    """Con quale identificativo l'adattatore entra nel registro.
+    """The id the adapter is written into the registry under.
 
-    Una variazione porta l'identificativo dell'adattatore che sta cambiando, e
-    quello e' anche il modo in cui la versione di prima non si perde.  Un
-    fornitore nuovo non ne ha uno: si costruisce dal suo `supplier_id`, che e'
-    la chiave con cui il resto del programma lo chiama gia'.
+    A schema change carries the id of the adapter it's changing, which is
+    also how the previous version isn't lost. A new supplier has no id yet:
+    one is built from its `supplier_id`, the key the rest of the program
+    already uses to refer to it.
     """
 
     dichiarato = str(decisione.get("adapter_id") or "").strip()
@@ -249,10 +247,10 @@ def identificativo_dell_adattatore(decisione: dict[str, Any]) -> str:
         return dichiarato
     fornitore = str(decisione.get("supplier_id") or "").strip()
     if fornitore:
-        # Non `registro.normalizza`: quella incolla le parole per confrontare
-        # intestazioni («nuovo_fornitore» diventerebbe «nuovofornitore»), e qui
-        # il risultato e' un nome che una persona legge nel registro accanto a
-        # `noce_csv_v1`.
+        # Not `registro.normalizza`: that collapses words together for
+        # header comparison. Here the result is a name a person reads in the
+        # registry next to other adapter ids, so words stay separated by
+        # underscores.
         pulito = re.sub(r"[^a-z0-9]+", "_", fornitore.casefold()).strip("_")
         return f"{pulito or fornitore}_v1"
     raise Rifiuto(
@@ -261,29 +259,28 @@ def identificativo_dell_adattatore(decisione: dict[str, Any]) -> str:
     )
 
 
-# ⚠ `identificativo_da_scrivere` stava qui e adesso sta in `registro`: la
-# mappatura guidata non e' l'unica strada che scrive nel registro — ci scrive
-# anche chi sposta la colonna d'ordine dalla pagina — e finche' la regola e'
-# vissuta in questo file quell'altra strada non l'ha applicata, portandosi a
-# casa una fotocopia completa della voce spedita a ogni spostamento.
+# `identificativo_da_scrivere` lives in `registro`, not here: guided mapping
+# isn't the only path that writes to the registry — moving the order column
+# from the page writes to it too — so the id-assignment rule has to be
+# shared rather than duplicated per caller.
 identificativo_da_scrivere = registro.identificativo_da_scrivere
 
 
 def _colonne_per_lettera(mappatura: dict[str, Any],
                          posizioni: dict[str, int] | None) -> dict[str, str]:
-    """Dove sta ogni campo della mappatura confermata, espresso in lettere.
+    """Where each field of the confirmed mapping sits, expressed as a letter.
 
-    `column_map` parla di posizioni, non di nomi: e' l'unica forma che serve a
-    chi legge un listino senza riga di intestazione. La mappatura confermata
-    dichiara le colonne a volte per numero e a volte per nome, e il nome si
-    risolve con le intestazioni misurate su questo documento.
+    `column_map` talks in positions, not names: it's the only form that
+    works for reading a price list with no header row. The confirmed mapping
+    declares columns sometimes by number, sometimes by name, and a name is
+    resolved against the headers measured on this document.
     """
 
     colonne = mappatura.get("columns")
     if not isinstance(colonne, dict):
         return {}
-    # Tardivo: questo script si lancia anche da solo, e la lettera di colonna
-    # serve solo a chi arriva fin qui.
+    # Deferred import: this script also runs standalone, and the column
+    # letter is only needed by callers that reach this point.
     from openpyxl.utils import get_column_letter  # noqa: PLC0415
 
     posizioni = posizioni or {}
@@ -312,13 +309,13 @@ def voce_da_scrivere(voce: dict[str, Any], decisione: dict[str, Any], mappatura:
                      precedente: dict[str, Any], identificativo: str, foglio: dict[str, Any],
                      riga: int, richieste: list[str], osservate: list[str],
                      quando: str, posizioni: dict[str, int] | None = None) -> dict[str, Any]:
-    """L'adattatore come verra' scritto, partendo da quello che c'e' gia'.
+    """The adapter as it will be written, starting from the existing entry.
 
-    Si parte dalla voce esistente di proposito: un adattatore porta anche
-    regole che non stanno nella mappatura — i codici di riga di Larice dicono
-    che `SM` non e' merce acquistabile — e riscriverlo da zero le farebbe
-    sparire senza che nessuno lo veda.  La variazione confermata cambia lo
-    schema, non le convenzioni commerciali del fornitore.
+    Starting from the existing entry is deliberate: an adapter also carries
+    rules that don't live in the mapping — row codes that flag a line as
+    non-purchasable, for one supplier — and rewriting from scratch would
+    silently drop them. A confirmed schema change updates the schema, not
+    the supplier's commercial conventions.
     """
 
     ruolo = str(decisione.get("role") or "")
@@ -330,8 +327,9 @@ def voce_da_scrivere(voce: dict[str, Any], decisione: dict[str, Any], mappatura:
     if suffisso and suffisso not in tipi:
         tipi.append(suffisso)
 
-    # Il foglio misurato sta in `learned_from` perche' la mappatura puo' dire
-    # «FIRST»: senza, non si potrebbe piu' ricostruire da dove viene l'impronta.
+    # The measured sheet is stored in `learned_from` because the mapping
+    # itself can just say "FIRST"; without it there'd be no way to trace
+    # back where the fingerprint actually came from.
     provenienza = {"file_name": etichetta(voce), "sha256": voce.get("sha256")}
     if foglio.get("name"):
         provenienza["sheet"] = foglio.get("name")
@@ -351,14 +349,13 @@ def voce_da_scrivere(voce: dict[str, Any], decisione: dict[str, Any], mappatura:
         "note": (f"Impronta imparata dal profilo di «{etichetta(voce)}» e confermata "
                  f"dall'utente. Le obbligatorie sono le colonne che la mappatura usa "
                  f"davvero: sono quelle senza cui il lettore non può lavorare."),
-        # ⚠ Le posizioni non sono un di piu': un adattatore imparato legge per
-        # posizione ogni volta che la mappatura dichiara una colonna per numero
-        # (obbligatorio dove un'intestazione compare due volte) e scrive
-        # l'ordine in una colonna indicata per lettera.  Una colonna in piu' in
-        # testa lascia identico l'insieme dei nomi e sposta tutto il resto: e'
-        # la trappola misurata su BETULLA — 12,00 euro al posto di 3,98 con
-        # SCHEMA_NOTO 0.99 — e senza questa riga gli adattatori imparati non ne
-        # avevano nessuna difesa.
+        # Recorded positions aren't optional extra data: a learned adapter
+        # reads by position whenever the mapping declares a column by
+        # number (needed when a header text repeats) and writes the order
+        # quantity into a column given by letter. An inserted column ahead
+        # of the data leaves the set of header names unchanged while
+        # shifting every position after it — without this check a learned
+        # adapter had no defense against that shift at all.
         "columns_note": ("Dove stava ogni intestazione nel documento da cui questo schema è "
                          "stato imparato. Una colonna che si sposta declassa a SCHEMA_VARIATO: "
                          "la mappatura indica colonne anche per numero e per lettera, e quelle "
@@ -367,12 +364,12 @@ def voce_da_scrivere(voce: dict[str, Any], decisione: dict[str, Any], mappatura:
         "required": richieste,
         "known": osservate,
     }
-    # ⚠ La regola dell'inizio dei dati va nell'impronta insieme al numero, e
-    # **davanti** a lui in ogni lettura: `data_start_row` da solo e' il numero
-    # di questa settimana, e il blocco promozionale che precede il listino
-    # cambia lunghezza.  Chi rilegge l'adattatore deve vedere che quel numero
-    # non e' la regola, e' cio' che la regola valeva il giorno in cui e' stata
-    # confermata.
+    # The data-start rule is stored in the fingerprint alongside the row
+    # number, and takes priority over it on every read: `data_start_row`
+    # alone is just this week's number, and a preceding promotional block
+    # can change length. Whoever reads the adapter back needs to see that
+    # the number isn't the rule — it's what the rule resolved to on the day
+    # it was confirmed.
     marcatore = mappatura.get("data_start_marker")
     if marcatore not in (None, "", {}):
         nuova["header_signature"]["data_start_marker"] = marcatore
@@ -382,34 +379,30 @@ def voce_da_scrivere(voce: dict[str, Any], decisione: dict[str, Any], mappatura:
             "ha confermato lo schema, e serve a chi scrive la copia dell'ordine."
         )
     nuova["field_mapping"] = mappatura
-    # ⚠ `column_map` dice DOVE stanno le colonne, e ci sono lettori che leggono
-    # solo quello: il lettore delle soglie con omaggio di Larice, per esempio,
-    # perche' quel listino non ha nessuna riga di intestazione e non c'e' un
-    # nome da risolvere.  Imparando una variazione confermata si riscriveva
-    # `field_mapping` e si lasciava `column_map` a quello della settimana
-    # prima: da li' in poi due parti dello stesso programma leggevano due
-    # colonne diverse dello stesso listino, e nessuna delle due lo diceva
-    # (segnalato dalla revisione del 14 agosto 2026).
+    # `column_map` says WHERE columns sit, and some readers rely on it
+    # exclusively — a free-goods-threshold reader, for one supplier whose
+    # price list has no header row to resolve a name against. Writing only
+    # `field_mapping` on a confirmed change and leaving `column_map` stale
+    # would make two parts of the program read two different columns of the
+    # same price list, with neither one reporting it.
     #
-    # Si aggiorna solo cio' che la mappatura confermata dichiara: le altre voci
-    # restano, perche' `column_map` ne porta anche di non mappate — su Larice
-    # l'etichetta del gruppo, il nome dell'articolo in omaggio — e cancellarle
-    # spegnerebbe chi le usa.
+    # Only what the confirmed mapping declares gets updated here; the rest
+    # is kept, since `column_map` also carries entries that aren't part of
+    # any mapped field — for one supplier, a group label and a free-item
+    # name — and dropping them would break whatever reads them.
     aggiornate = _colonne_per_lettera(mappatura, posizioni)
     if aggiornate:
         nuova["column_map"] = {**(base.get("column_map") or {}), **aggiornate}
-    # ⚠ Le condizioni commerciali entrano nel registro come le colonne, e per
-    # la stessa ragione: fino al 17 agosto 2026 `commercial_conditions` si
-    # scriveva a mano dentro `references/adapters.json` e ce l'aveva solo
-    # LARICE, quindi un fornitore imparato dalla pagina si leggeva e si
-    # compilava ma le sue offerte non le leggeva nessuno. La dichiarazione
-    # nomina chiavi di `column_map`, che la riga qui sopra ha appena
-    # aggiornato: le condizioni seguono i prezzi invece di restare indietro di
-    # una settimana.
+    # Commercial conditions enter the registry the same way columns do, and
+    # for the same reason: without this, a supplier learned from the page
+    # would read and compile fine while its promotions stayed unread by
+    # everyone, since the declaration names `column_map` keys, which the
+    # line above just updated — conditions track price columns instead of
+    # lagging behind them.
     #
-    # Se la mappatura confermata non la dichiara, quella di prima resta dov'e'
-    # (`setdefault` in coda): una variazione di schema cambia dove stanno le
-    # colonne, non il fatto che quel fornitore faccia offerte.
+    # If the confirmed mapping doesn't declare it, the previous declaration
+    # stays as-is (`setdefault` further below): a schema change moves where
+    # columns are, not whether that supplier runs promotions.
     condizioni = mappatura.get("commercial_conditions")
     if ruolo == "supplier" and isinstance(condizioni, dict) and condizioni:
         nuova["commercial_conditions"] = condizioni
@@ -422,12 +415,11 @@ def voce_da_scrivere(voce: dict[str, Any], decisione: dict[str, Any], mappatura:
             or mappatura.get("order_header_blank_confirmed") is True
         )
     ):
-        # La colonna ordine e' stata scelta nella stessa anteprima delle
-        # colonne di lettura. Per uno schema nuovo questa dichiarazione lo
-        # rende compilabile; per una variazione aggiorna anche l'intestazione
-        # che il fornitore ha cambiato. Le procedure speciali (il .xls di
-        # Noce) conservano comunque modalita' e guardie della versione
-        # precedente.
+        # The order column was chosen in the same preview as the reading
+        # columns. For a new schema this declaration makes it writable; for
+        # a schema change it also updates a header the supplier renamed.
+        # Any special write procedure a previous version had keeps its own
+        # mode and guards.
         scrittura = dict(base.get("order_write") or {})
         scrittura["from_field_mapping"] = True
         scrittura["order_column"] = str(mappatura["order_column"]).strip().upper()
@@ -449,32 +441,33 @@ def voce_da_scrivere(voce: dict[str, Any], decisione: dict[str, Any], mappatura:
     nuova["learned_at"] = quando
     nuova["learned_from"] = provenienza
     nuova["confirmed_by"] = CONFERMATO_DA
-    # Tutto il resto della voce precedente resta dov'era: `setdefault` non
-    # sovrascrive niente di quello che si e' appena deciso.
+    # Everything else from the previous entry is kept as-is: `setdefault`
+    # never overwrites anything just decided above.
     for chiave, valore in base.items():
         nuova.setdefault(chiave, valore)
     return nuova
 
 
 def registro_di_lavoro(percorso: Path, cartella: Path) -> Path:
-    """Una copia del registro su cui provare la scrittura prima di farla davvero.
+    """A registry copy to trial-write to before writing for real.
 
-    Serve a una cosa sola, ed e' la ragione per cui questo script esiste: un
-    adattatore che, una volta scritto, non basta a far riconoscere il documento
-    da cui e' stato imparato e' peggio di niente — la settimana prossima il
-    fornitore torna sconosciuto e nel registro c'e' una voce in piu' che nessuno
-    sa a che cosa serva.  Scrivere su una copia e rileggerla con lo stesso
-    motore che decidera' davvero e' l'unico modo per accorgersene prima.
+    Serves one purpose, and it's the reason this script exists at all: an
+    adapter that, once written, still can't recognize the document it was
+    learned from is worse than nothing — next week the supplier is unknown
+    again and the registry carries a dead entry nobody understands. Writing
+    to a copy and reading it back with the same engine that will decide for
+    real is the only way to catch that beforehand.
     """
 
     copia = cartella / "adapters.json"
     if percorso.exists():
-        # In binario: il registro sta sotto git a fine riga LF e una copia
-        # riscritta in CRLF non sarebbe piu' lo stesso documento.
+        # Binary copy: the registry is tracked in git with LF line endings,
+        # and a copy rewritten with CRLF would be a different document.
         copia.write_bytes(percorso.read_bytes())
-    # ⚠ Anche l'imparato, o la riprova girerebbe contro un registro che non e'
-    # quello vero: un adattatore imparato in negozio potrebbe vincere il
-    # riconoscimento al posto di quello appena scritto, e qui non si vedrebbe.
+    # The locally learned registry is copied too, or the trial run would
+    # test against a registry that isn't the real one: another learned
+    # adapter could win recognition instead of the one just written, and
+    # this check wouldn't catch it.
     imparato = registro.percorso_imparato(percorso)
     if imparato.exists():
         registro.percorso_imparato(copia).write_bytes(imparato.read_bytes())
@@ -483,7 +476,7 @@ def registro_di_lavoro(percorso: Path, cartella: Path) -> Path:
 
 def impara(voce: dict[str, Any], copia: Path, adapters: Path, presi: dict[str, str],
            prova: bool, quando: str) -> dict[str, Any]:
-    """Impara una voce del manifest, o dice perché non si è potuto."""
+    """Learns one manifest entry, or reports why it couldn't."""
 
     decisione = voce.get("ai_preflight") or {}
     ruolo = str(decisione.get("role") or "")
@@ -520,21 +513,21 @@ def impara(voce: dict[str, Any], copia: Path, adapters: Path, presi: dict[str, s
     richieste = obbligatorie_della_mappatura(mappatura, impronta["headers"], riga)
 
     posizioni = registro.posizioni_delle_intestazioni(valori)
-    # ⚠ La prima volta che si impara accanto a uno spedito, l'id nuovo nel
-    # registro non c'e' ancora: la base e' la voce SPEDITA, altrimenti la voce
-    # imparata nascerebbe nuda — senza condizioni commerciali, senza alias,
-    # senza le regole di riga che il fornitore ha e la mappatura non nomina. Da
-    # li' in poi la base e' la voce locale, che quelle cose se l'e' portate
-    # dietro.
+    # The first time an adapter is learned alongside a shipped one, its new
+    # id isn't in the registry yet: the base is the shipped entry, or the
+    # learned entry would start bare — no commercial conditions, no aliases,
+    # none of the supplier's row rules that the mapping itself doesn't name.
+    # After that first time, the base is the local entry, which already
+    # carries those over.
     precedente = registro.adattatore(identificativo, copia)
     if not precedente and identificativo != dichiarato:
         spedito = registro.adattatore(dichiarato, copia)
-        # ⚠ La guardia che teneva `scrivi_adattatore` — «questo adattatore e'
-        # del fornitore X, non lo si riscrive per Y» — scattava perche' l'id
-        # era lo stesso. Adesso l'id nuovo non collide piu' con niente, e senza
-        # questa riga un fornitore erediterebbe in silenzio le regole di un
-        # altro: la base di partenza e' la voce spedita, e quella porta le sue
-        # condizioni commerciali e i suoi codici di riga.
+        # `scrivi_adattatore`'s own guard against overwriting one supplier's
+        # adapter with another's only fires on a matching id. Since the new
+        # id here never collides with anything, without this check a
+        # supplier could silently inherit another one's rules; starting
+        # from the shipped entry keeps its commercial conditions and row
+        # codes intact.
         atteso = str(spedito.get("supplier_id") or "").strip()
         chiesto = str(decisione.get("supplier_id") or "").strip()
         if spedito and ruolo == "supplier" and atteso and atteso != chiesto:
@@ -547,8 +540,9 @@ def impara(voce: dict[str, Any], copia: Path, adapters: Path, presi: dict[str, s
     nuova = voce_da_scrivere(voce, decisione, mappatura, precedente, identificativo,
                              foglio, riga, richieste, impronta["headers"], quando, posizioni)
     if identificativo != dichiarato:
-        # Scritto nella voce, non solo nel nome: chi la rilegge deve poter dire
-        # da dove viene senza conoscere la convenzione del suffisso.
+        # Recorded in the entry itself, not just in the id's naming
+        # convention: whoever reads it back should be able to tell where it
+        # came from without knowing the suffix scheme.
         nuova["derivato_da"] = dichiarato
 
     try:
@@ -556,14 +550,14 @@ def impara(voce: dict[str, Any], copia: Path, adapters: Path, presi: dict[str, s
     except ValueError as errore:
         raise Rifiuto(f"il registro non ha accettato la voce: {errore}") from errore
 
-    # La riprova che conta: con il registro appena scritto, lo stesso motore che
-    # decidera' la settimana prossima deve riconoscere proprio questo documento
-    # e proprio con questo adattatore.  Se vince un altro adattatore o se una
-    # verifica non passa, quello che si e' scritto non serve a nessuno.
+    # The check that actually matters: with the registry just written, the
+    # same engine that will decide next week must recognize this exact
+    # document with this exact adapter. If another adapter wins, or any
+    # check fails, what was just written is useless.
     riletto = registro.riconosci(profilo, copia)
-    # ⚠ Il documento se lo puo' riprendere quello SPEDITO, se lo legge senza
-    # guasti: e' un esito buono, non un errore — vuol dire che non c'era niente
-    # da imparare. Si dice, e non si scrive niente.
+    # The shipped adapter is allowed to reclaim the document, if it reads
+    # it cleanly: that's a good outcome, not an error — it means there was
+    # nothing to learn. It's reported, and nothing is written.
     if riletto["state"] == "SCHEMA_NOTO" and riletto["adapter_id"] == dichiarato != identificativo:
         raise Rifiuto(
             f"con questo documento l'adattatore spedito «{dichiarato}» funziona: il programma lo "
@@ -597,7 +591,7 @@ def impara(voce: dict[str, Any], copia: Path, adapters: Path, presi: dict[str, s
 
 
 def scrivi_rapporto(percorso: Path, rapporto: dict[str, Any]) -> None:
-    """Salva il rapporto a fine riga LF, come tutto il resto del progetto."""
+    """Saves the report with LF line endings, like the rest of the project."""
 
     percorso.parent.mkdir(parents=True, exist_ok=True)
     with percorso.open("w", encoding="utf-8", newline="\n") as flusso:
@@ -609,8 +603,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True,
                         help="Il manifest prodotto da apply_preflight_decisions.py")
-    # Il registro si dichiara sempre: e' il file che questo script riscrive, e
-    # un valore predefinito lo farebbe modificare a chi non se lo aspetta.
+    # No default value on purpose: this is the file the script overwrites,
+    # and a default would let it be modified by someone who didn't expect it.
     parser.add_argument("--adapters", type=Path, required=True,
                         help="Il registro degli adattatori da aggiornare")
     parser.add_argument("--output", type=Path, help="Dove salvare il rapporto JSON")
@@ -631,9 +625,9 @@ def main() -> int:
     try:
         voci = voci_del_manifest(json.loads(args.manifest.read_text(encoding="utf-8")))
     except (OSError, ValueError) as errore:
-        # Un manifest illeggibile e' un fallimento come gli altri: esce con il
-        # suo motivo e con uscita 2, invece di una traccia di errore che chi
-        # legge il rapporto non troverebbe mai.
+        # An unreadable manifest is a failure like any other: it exits with
+        # its own reason and status 2, instead of a traceback the report's
+        # reader would never see.
         voci = []
         saltati.append({"file": args.manifest.name,
                         "motivo": f"Rifiutato: il manifest non si legge: {errore}"})
@@ -650,10 +644,9 @@ def main() -> int:
             try:
                 imparati.append(impara(voce, copia, args.adapters, presi, args.prova, quando))
             except Rifiuto as rifiuto:
-                # «Rifiutato» in testa al motivo perche' e' la differenza che
-                # decide l'uscita: una voce saltata e' un caso normale, una
-                # rifiutata e' un fornitore che la settimana prossima torna
-                # sconosciuto.
+                # The "Rifiutato" prefix marks the distinction that decides
+                # the exit status: a skipped entry is a normal case, a
+                # rejected one means that supplier stays unknown next week.
                 saltati.append({"file": nome, "motivo": f"Rifiutato: {rifiuto}"})
                 rifiutate += 1
 

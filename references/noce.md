@@ -1,43 +1,24 @@
-# Noce: si legge il loro file, si rimanda il loro file
+# Noce: read their file, send back their file
 
-Noce è un fornitore come gli altri: manda un documento, lo si carica, lo si
-confronta, e alla fine gli si rimanda il suo stesso documento con l'ordine
-dentro. Del sito non si passa più: lo scraper, le credenziali e la
-preparazione dell'ordine sul sito sono stati smontati.
+Noce is a supplier like any other: it sends a document, the document is uploaded, compared, and in the end it gets its own document back with the order filled in. Its B2B site plays no part in this: the scraper, the credentials, and preparing the order on the site have all been removed.
 
-## Lettura
+## Reading
 
-Il listino arriva come un `.xls` (Excel 97-2003, non `.xlsx`) e si carica dal
-passo 1 della pagina come ogni altro listino. Lo legge `app/xls_reader.py` con
-l'adattatore `noce_xls_v1` del registro (`references/adapters.json`), che
-dichiara foglio, riga delle intestazioni, riga dei dati, colonna dell'EAN — per
-**nome**, non per lettera — e colonna d'ordine.
+The price list arrives as an `.xls` (Excel 97-2003, not `.xlsx`) and is uploaded from step 1 of the page like any other price list. It's read by `app/xls_reader.py` with the `noce_xls_v1` adapter from the registry (`references/adapters.json`), which declares the sheet, the header row, the data row, the EAN column — by name, not by letter — and the order column.
 
-Le righe FOOD si scartano in lettura: l'ordine riguarda solo il NoFood.
+FOOD rows are discarded on read: the order only covers non-food items.
 
-## Consegna
+## Delivery
 
-A Noce torna il **loro** `.xls`, con la sola colonna d'ordine compilata e
-tutto il resto identico byte per byte. Non passa dal writer Node — che importa
-ed esporta `.xlsx` e riscriverebbe il file da capo — ma da `app/xls_writer.py`,
-che cambia quattro byte per cella dentro una copia.
+Noce gets back its own `.xls`, with only the order column filled in and everything else identical byte for byte. It doesn't go through the Node writer, which imports and exports `.xlsx` and would rebuild the file from scratch; instead `app/xls_writer.py` changes four bytes per cell inside a copy.
 
-Due guardie prima di scrivere, e costano zero perché il file va letto comunque:
+Two checks run before writing, at no extra cost since the file has to be read anyway:
 
-1. **l'EAN della riga dev'essere quello del piano**, altrimenti si sta
-   scrivendo la quantità sulla riga di un altro articolo;
-2. **la colonna d'ordine dev'essere ancora tutta a lunghezza fissa (RK)**. Basta
-   che una settimana ci sia una formula o una cella di tipo diverso perché la
-   patch in posizione non sia più applicabile: il controllo va rifatto su ogni
-   file.
+1. the row's EAN must match the one in the plan — otherwise the quantity would be written onto another item's row;
+2. the order column must still be entirely fixed-length (RK) cells — a single formula or a differently typed cell anywhere in the column is enough to make the in-place patch inapplicable, so the check is repeated on every file.
 
-Si azzera `RECALCID`: cambiare il valore di una cella non sporca le formule che
-la usano, e senza questo le quantità sarebbero giuste mentre importi e totale
-resterebbero a zero. Misurato.
+`RECALCID` is reset to zero: changing a cell's value doesn't mark the formulas that reference it as dirty, and without this reset the quantities would be correct while the totals stayed at their old values until Excel was told to recalculate.
 
-Se la patch non si può fare, **la compilazione Noce fallisce e lo dice**:
-non ripiega su un formato che il fornitore non accetta e non lascia sul disco
-una copia a metà.
+If the patch can't be applied, the Noce order fails and says so: it doesn't fall back to a format the supplier doesn't accept, and it doesn't leave a half-written copy on disk.
 
-La prova di accettazione è il totale che il file calcola da solo, che deve
-venire uguale a quello del piano. Se non torna, non si consegna.
+Acceptance is checked against the total the file computes on its own, which must equal the plan's total. If it doesn't match, nothing is delivered.

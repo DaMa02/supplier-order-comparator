@@ -1,3 +1,3 @@
-# Nessuna dipendenza esterna: lo scheletro usa la sola libreria standard di
-# Python, come il resto del progetto. Aggiungerne una qui e' una scelta di
-# architettura, non un dettaglio: si discute prima.
+# No external dependencies: the skeleton is stdlib-only Python, like the
+# rest of the project. Adding one here is an architecture decision to
+# discuss first, not a detail.

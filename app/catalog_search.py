@@ -16,10 +16,11 @@ from typing import Any
 
 from detect_displays import analyse_workbook
 from inspect_sources import container_format
-# I lettori dedicati non si nominano piu' qui: chi legge che cosa lo dice
-# `prepare_manifest_sources.lettore_dedicato`, che e' la stessa funzione su cui
-# decide la catena del ricalcolo. Resta l'integrazione degli espositori Larice,
-# che anche nella catena sta accanto al lettore e non dentro.
+# No dedicated reader is named here: which reader handles which supplier is
+# decided by `prepare_manifest_sources.lettore_dedicato`, the same function
+# the recompute pipeline uses. Display integration for Larice
+# stays separate, next to the reader rather than inside it, matching the
+# pipeline's own structure.
 from prepare_sources import integrate_larice_displays
 from prepare_manifest_sources import (
     colonne_corrette,
@@ -28,9 +29,9 @@ from prepare_manifest_sources import (
     read_mapped_csv_supplier,
     read_mapped_xlsx_supplier,
 )
-# ⚠ Si importa la funzione e non il modulo: qui dentro `registro` e' gia' il
-# nome di una variabile locale (`_signature`), e un modulo che sparisce sotto
-# un'assegnazione e' un guasto che si scopre a runtime.
+# The function is imported, not the module: `registro` is already used here
+# as a local variable name (in `_signature`), and a module shadowed by an
+# assignment is a failure that only surfaces at runtime.
 from registro import (
     adattatore_base,
     adattatori_effettivi,
@@ -49,23 +50,18 @@ _NOMI_DEL_CATALOGO: dict[str, str] = {}
 
 
 def _supplier_name(supplier: str) -> str:
-    """Come si chiama questo fornitore, secondo il registro.
+    """This supplier's display name, according to the adapter registry.
 
-    ⚠ Il nome si tiene in memoria finche' il registro non cambia. `_offer` lo
-    chiede **per ogni riga di listino** — decine di migliaia per catalogo — e
-    `registro.nome_del_fornitore` a ogni chiamata fa una `stat` sul file e una
-    copia della mappa dei nomi: misurato, 40.000 chiamate costano qualche
-    secondo buono (revisione del 14 agosto 2026). La firma del file la si
-    guarda una volta per costruzione del catalogo, non una per riga.
+    Cached until the registry changes. `_offer` requests it for every price
+    list row — tens of thousands per catalogue — and
+    `registro.nome_del_fornitore` does a file `stat` and copies the name map
+    on every call: measured, tens of thousands of calls cost several full
+    seconds. The file's signature is checked once per catalogue build, not
+    once per row.
 
-    ⚠ Qui c'era una `SUPPLIER_NAMES` con i quattro fornitori scritti a mano,
-    la terza copia della stessa tabella.  Un fornitore imparato non ci stava
-    dentro e compariva nella ricerca prodotti come `NUOVO_FORNITORE_1`,
-    underscore compreso, mentre il registro il suo nome ce l'aveva gia'.
-
-    Il percorso si passa sempre: `nome_del_fornitore` senza percorso legge il
-    registro predefinito, e in questo modulo il registro e' quello dichiarato
-    da `ADAPTERS_PATH`.
+    The path is always passed explicitly: `nome_del_fornitore` without a
+    path reads the default registry, and in this module the registry is the
+    one declared by `ADAPTERS_PATH`.
     """
 
     memorizzato = _NOMI_DEL_CATALOGO.get(supplier)
@@ -77,21 +73,22 @@ def _supplier_name(supplier: str) -> str:
 
 
 def _adapter_mapping(adapter_id: str) -> dict[str, Any]:
-    """La mappatura dichiarata nel registro degli adattatori.
+    """The column mapping declared in the adapter registry.
 
-    Serve quando la review non porta con se' una field_mapping: il listino
-    Noce in Excel ha uno schema noto e registrato, e ripescarlo di li' e'
-    meglio che tenerne una seconda copia dentro questo modulo, che prima o poi
-    divergerebbe da quella vera.
+    Used when the review doesn't carry its own field_mapping: a known,
+    registered adapter's mapping is fetched from the registry rather than
+    kept as a second copy in this module, which would eventually drift from
+    the real one.
 
-    Le tre cose che possono andare storte — registro assente, registro
-    illeggibile, adattatore non censito — hanno tre messaggi diversi: sono
-    guasti dell'applicazione, non della review, e chi legge l'avviso deve
-    sapere dove andare a guardare.
+    The three ways this can fail — missing registry, unreadable registry,
+    unknown adapter — each get a distinct message: these are application
+    failures, not review data problems, and whoever reads the warning needs
+    to know where to look.
 
-    Il registro e' quello **fuso**: spedito piu' imparato. Leggendo il solo
-    `references/adapters.json` un adattatore reimparato con lo stesso `id`
-    restava invisibile a questo modulo e visibile alla catena.
+    The registry read here is the merged one: shipped plus learned. Reading
+    only the shipped `references/adapters.json` would make a re-learned
+    adapter with the same id invisible to this module while the recompute
+    pipeline still sees it.
     """
 
     if not adapter_id:
@@ -101,13 +98,15 @@ def _adapter_mapping(adapter_id: str) -> dict[str, Any]:
         )
     if not ADAPTERS_PATH.is_file():
         raise ValueError(f"manca il registro degli adattatori ({ADAPTERS_PATH.name})")
-    # ⚠ I registri sono due, e non si trattano allo stesso modo. Lo **spedito**
-    # sta sotto git e se non si legge e' un guasto dell'applicazione. L'
-    # **imparato** lo scrive il programma, e un PC spento a meta' scrittura lo
-    # tronca: `registro._leggi_registro` restituisce comunque le voci spedite
-    # insieme al motivo, e tutto il resto del codice continua con quelle.
-    # Trattare qualunque motivo come un rifiuto faceva sparire un fornitore dal
-    # visualizzatore per un file che non e' quello nominato dal messaggio.
+    # There are two registries, and they're treated differently. The shipped
+    # one is under version control, and a failure to read it is an
+    # application bug. The learned one is written by the program, and a
+    # machine powered off mid-write can truncate it:
+    # `registro._leggi_registro` still returns the shipped entries along
+    # with the failure reason, and the rest of the code keeps working with
+    # those. Treating every failure reason as an outright rejection would
+    # make a supplier disappear from the viewer over a file that isn't even
+    # the one the error message names.
     voci, motivo = adattatori_effettivi(ADAPTERS_PATH)
     voce = next((item for item in voci if str(item.get("id") or "") == adapter_id), {})
     if not voce:
@@ -121,11 +120,10 @@ def _adapter_mapping(adapter_id: str) -> dict[str, Any]:
 
 
 def _quale_registro(motivo: str) -> str:
-    """Il nome del file che non si e' letto, per non mandare a guardare l'altro.
+    """The name of the file that failed to read, so the error doesn't point elsewhere.
 
-    «il registro degli adattatori (adapters.json) non e' leggibile: Registro
-    degli adattatori imparati qui non interpretabile…» si contraddice da sola, e
-    manda a guardare un file che sta sotto git e sta benissimo.
+    Naming the wrong registry file in a two-registry error message sends the
+    user to check a file that's under version control and perfectly fine.
     """
 
     imparato = percorso_imparato(ADAPTERS_PATH)
@@ -138,38 +136,38 @@ def _quale_registro(motivo: str) -> str:
 
 
 def _mappatura_spedita(adapter_id: str) -> dict[str, Any]:
-    """La mappatura come sta nel registro **spedito**, o `{}` se non c'e'.
+    """The mapping as it stands in the shipped registry, or `{}` if absent.
 
-    ⚠ Spedito e non effettivo, ed e' la differenza che conta: l'imparato lo
-    scrive il programma, e la mappatura confermata dalla pagina si costruisce da
-    zero — non porta con se' `exclude_rows`. Confrontandosi con l'imparato, la
-    regola che tiene fuori le righe alimentari di Noce si spegneva da sola
-    la settimana dopo che qualcuno rifaceva la mappatura di quel fornitore:
-    entrambe le parti del confronto avevano perso la regola, quindi il
-    controllo non scattava piu' (misurato il 21 agosto 2026: 11 righe lette
-    invece di 9, due delle quali FOOD). Qui si guarda quello che il programma ha
-    **ricevuto**, che nessuno ha deciso di cambiare.
+    Deliberately the shipped mapping, not the effective one — that
+    difference matters: the learned mapping is written by the program, and a
+    mapping confirmed in the page's column mapping is built from scratch, without
+    carrying over `exclude_rows`. Comparing against the learned mapping
+    instead would let a food-row exclusion rule silently stop applying the
+    week after someone re-confirmed that supplier's mapping, since both
+    sides of the comparison would have lost the rule and the check would
+    never trigger (measured: 11 rows read instead of 9, two of them food
+    rows). The shipped registry changes only by deliberate decision, so it
+    is the reference.
 
-    ⚠ La lettura la fa `registro`, non un `json.load` di qui: il registro sono
-    due file, e chi ne apre uno per conto suo prima o poi ne apre quello
-    sbagliato (regola 4, ultima lettura rimasta fuori — 6 settembre 2026).
+    Read through `registro`, not a local `json.load`: the registry is two
+    files, and reading one of them directly risks reading the wrong one.
     """
 
     return mappatura_spedita(adapter_id, ADAPTERS_PATH)
 
 
 def _mappatura_attiva(adapter_id: str, mapping: dict[str, Any]) -> dict[str, Any]:
-    """Con quali colonne si legge, e la garanzia di non perdere le esclusioni.
+    """Which columns to read with, and the guarantee that exclusions aren't lost.
 
-    Una mappatura confermata nella review ha la precedenza su quella del
-    registro — e' la risposta piu' recente, e l'ha data qualcuno che aveva il
-    documento davanti — ma puo' arrivare senza le regole di esclusione che il
-    registro dichiara. Nel listino Noce quella regola scarta migliaia di
-    righe FOOD, che l'utente non tratta: qui ci si rifiuta di leggere, invece
-    di farle entrare in silenzio.
+    A mapping confirmed in the page's column mapping takes precedence over the
+    registry's — it's the more recent answer, given by someone who had the
+    actual document in front of them — but it can arrive without the
+    exclusion rules the registry declares. For at least one supplier that
+    rule discards thousands of food-category rows the user doesn't carry:
+    reading is refused here rather than silently letting those rows in.
 
-    La regola non e' scritta qui e non nomina Noce: e' quella del registro,
-    qualunque fornitore la dichiari.
+    The rule itself isn't hard-coded here or tied to a specific supplier —
+    it's whatever the registry declares, for whichever supplier declares it.
     """
 
     attiva = mapping or _adapter_mapping(adapter_id)
@@ -184,22 +182,24 @@ def _mappatura_attiva(adapter_id: str, mapping: dict[str, Any]) -> dict[str, Any
 
 
 def _motivo(exc: BaseException) -> str:
-    """Il motivo di un guasto, mai vuoto.
+    """The reason for a failure, never empty.
 
-    `str(MemoryError())` e' la stringa vuota, e un avviso che finisce con i due
-    punti e il nulla non aiuta nessuno: in quel caso si mostra almeno il tipo.
+    `str(MemoryError())` is the empty string, and a warning that trails off
+    with a colon and nothing after it helps no one: the exception type is
+    shown instead in that case.
     """
 
     return str(exc).strip() or type(exc).__name__
 
 
 def _esclude_gli_alimentari(mapping: dict[str, Any]) -> bool:
-    """Vero quando la mappatura scarta davvero le righe alimentari.
+    """True when the mapping actually discards food-category rows.
 
-    L'utente non tratta il FOOD, e nel listino Noce sono 8.292 righe su
-    17.143. La regola sta nella mappatura, quindi una mappatura confermata
-    nella review — che ha la precedenza su quella di serie — puo' arrivare
-    senza: il controllo e' qui perche' quelle righe non entrino comunque.
+    The user doesn't carry food items, and in one supplier's price list
+    those are 8,292 rows out of 17,143. The rule lives in the mapping, and a
+    mapping confirmed on the review page — which takes precedence over the
+    shipped one — can arrive without it: this check exists so those rows
+    still get excluded either way.
     """
 
     for rule in mapping.get("exclude_rows") or []:
@@ -251,14 +251,14 @@ def _offer(supplier: str, record: dict[str, Any]) -> dict[str, Any] | None:
     if factor is None or factor <= 0:
         factor = 1.0
         factor_label = "pezzo"
-    # ⚠ `> 0`, non `>= 0`. E' la stessa difesa che `build_review_data` ha dal 14
-    # agosto 2026, e qui mancava: un prezzo che si legge come 0,00 passa tutti i
-    # filtri e poi **vince** il confronto, perche' l'ordinamento mette il piu'
-    # basso davanti — il prodotto finisce assegnato al fornitore la cui cella non
-    # si e' lasciata leggere, a totale zero, e il minimo d'ordine non scatta
-    # perche' zero e' sotto qualunque soglia. Da qui passano l'aggiunta dal
-    # catalogo, il rinfresco dei prezzi e l'abbinamento a mano: tre strade per lo
-    # stesso guasto. Trovato da una prova del visualizzatore, il 17 agosto 2026.
+    # `> 0`, not `>= 0`. Same guard `build_review_data` applies, needed here
+    # too: a price that reads as 0.00 passes every other filter and then
+    # wins the comparison, since sorting puts the lowest price first — the
+    # product ends up assigned to the supplier whose cell failed to read, at
+    # zero total, and the minimum-order threshold never triggers because
+    # zero is below any threshold. Catalogue additions, price refreshes and
+    # manual matching all go through this function, so this one guard covers
+    # all three paths to the same failure.
     if unit_price is None or unit_price <= 0 or not record.get("usable", True):
         return None
     order_price = round(unit_price * factor, 6)
@@ -299,13 +299,13 @@ def _offer(supplier: str, record: dict[str, Any]) -> dict[str, Any] | None:
 
 @dataclass(frozen=True)
 class _Sorgente:
-    """Un listino della review, con quello che serve per sceglierne il lettore.
+    """A price list from the review, plus what's needed to pick its reader.
 
-    `adapter_id` e `state` sono gli stessi due campi su cui decide la catena
-    (`prepare_manifest_sources.lettore_dedicato`): la review li porta gia' —
-    li scrive `build_review_data.manifest_files` come `adapterId` e
-    `schemaState` — e finche' non arrivavano fin qui il catalogo doveva
-    indovinare dal nome del fornitore. Indovinava male.
+    `adapter_id` and `state` are the same two fields the recompute pipeline
+    decides on (`prepare_manifest_sources.lettore_dedicato`): the review
+    already carries them, written by `build_review_data.manifest_files` as
+    `adapterId` and `schemaState`. Without them reaching this far, the
+    catalogue had to guess the reader from the supplier's name — unreliably.
     """
 
     path: Path
@@ -323,40 +323,43 @@ class SupplierCatalog:
         self.entries: list[dict[str, Any]] = []
         self.by_id: dict[str, dict[str, Any]] = {}
         self.unique_offers: dict[str, dict[str, dict[str, Any]]] = {}
-        # Le righe di ogni listino nell'ordine in cui stanno nel documento, per
-        # il visualizzatore: la ricerca del catalogo tiene le sole ordinabili,
-        # qui servono tutte.
+        # Every price list's rows in document order, for the viewer: the
+        # catalogue search keeps only orderable rows, but the viewer needs
+        # all of them.
         self.righe_per_fornitore: dict[str, list[dict[str, Any]]] = {}
-        # I fornitori esclusi dall'ultima lettura, con il motivo in italiano:
-        # il server li trasforma in avvisi della review, perche' un catalogo
-        # che si assottiglia in silenzio e' peggio di uno che non si carica.
+        # Suppliers excluded from the last load, with a human-readable
+        # reason: the server turns these into review warnings, since a
+        # catalogue that silently shrinks is worse than one that fails to
+        # load.
         self.load_errors: list[dict[str, str]] = []
 
     @staticmethod
     def _source_paths(review: dict[str, Any]) -> tuple[dict[str, "_Sorgente"], list[dict[str, str]]]:
-        """I listini dichiarati dalla review, e quelli che non ci sono piu'.
+        """The price lists the review declares, and the ones that no longer exist.
 
-        Il modo piu' comune in cui un fornitore esce dal confronto non e' un
-        file rovinato: e' un file spostato o rinominato sul Desktop. Prima
-        veniva scartato qui in silenzio, e il fornitore spariva dalla ricerca
-        prodotti senza che niente lo dicesse.
+        The most common way a supplier drops out of the comparison isn't a
+        corrupted file: it's a file moved or renamed on the desktop. Left
+        unchecked, that supplier would silently disappear from product
+        search with nothing to explain why.
         """
 
         paths: dict[str, _Sorgente] = {}
         mancanti: list[dict[str, str]] = []
         for item in review.get("files") or []:
             stato = str(item.get("schemaState") or "")
-            # Gli stessi due stati che salta la catena
-            # (`prepare_manifest_sources.main`): quei documenti nel confronto
-            # non sono mai entrati, e la pagina Importa li mostra gia' con il
-            # loro motivo. Qui sarebbero lo stesso avviso una seconda volta.
+            # The same two states the recompute pipeline skips
+            # (`prepare_manifest_sources.main`): those documents never
+            # entered the comparison, and the Import page already shows them
+            # with their own reason. Surfacing them here too would just
+            # duplicate that warning.
             if stato in {"FILE_NON_PERTINENTE", "AMBIGUO"}:
                 continue
-            # Il gestionale non e' un listino da sfogliare. Finora restava
-            # fuori per un incidente — `supplierId` nullo, chiave vuota,
-            # mappatura vuota, scartato in silenzio da `_read_sources` — e
-            # quell'incidente era la stessa riga che faceva sparire i
-            # fornitori veri. Adesso e' una regola, e si legge.
+            # The management-software export isn't a price list to browse,
+            # and this is an explicit rule for it: relying on an accidental
+            # side effect instead — a null `supplierId`, an empty key, an
+            # empty mapping, silently dropped by `_read_sources` — is
+            # exactly the kind of bug that also makes real suppliers
+            # disappear.
             if str(item.get("role") or "") == "master":
                 continue
             supplier = str(item.get("supplierId") or "").casefold()
@@ -388,21 +391,22 @@ class SupplierCatalog:
         paths: dict[str, "_Sorgente"],
         mancanti: list[dict[str, str]] | None = None,
     ) -> tuple[Any, ...]:
-        """Che cosa fa ricaricare il catalogo.
+        """What causes the catalogue to reload.
 
-        Oltre ai listini c'e' il registro degli adattatori: da li' arriva la
-        mappatura del .xls Noce, quindi se il registro manca o viene
-        rimesso a posto il catalogo deve accorgersene, altrimenti resterebbe
-        attaccato all'errore fino al riavvio.  E ci sono i listini dichiarati
-        ma non trovati: senza di loro nella firma, un avviso resterebbe in
-        pagina anche dopo che quel fornitore e' uscito dalla run.
+        Besides the price lists themselves, this includes the adapter
+        registry: at least one supplier's mapping comes from there, so if
+        the registry disappears or gets fixed the catalogue must notice,
+        rather than staying stuck on a stale error until restart. It also
+        includes price lists that were declared but not found: without them
+        in the signature, a warning would stay on screen even after that
+        supplier left the run.
 
-        Il registro sono **due** file, spedito e imparato: senza l'imparato
-        nella firma, un adattatore reimparato non faceva ricostruire il
-        catalogo e il visualizzatore restava attaccato allo schema vecchio fino
-        al riavvio.  E ci sono `adapter_id` e `state`, che adesso decidono il
-        lettore: se cambiano e la firma non se ne accorge, il catalogo resta
-        con la lettura di prima.
+        The registry is two files, shipped and learned: without the learned
+        one in the signature, a re-learned adapter wouldn't trigger a
+        catalogue rebuild and the viewer would stay on the old schema until
+        restart. And there's `adapter_id` and `state`, which now decide the
+        reader: if they change without the signature noticing, the catalogue
+        keeps reading with the old choice.
         """
 
         registro = tuple(
@@ -424,39 +428,38 @@ class SupplierCatalog:
 
     @staticmethod
     def _read_supplier(supplier: str, sorgente: "_Sorgente") -> list[dict[str, Any]]:
-        """Legge un listino con lo STESSO criterio della catena del ricalcolo.
+        """Reads a price list with the SAME logic as the recompute pipeline.
 
-        Il lettore lo sceglie la **decisione** — stato dello schema e
-        adattatore — non il nome del fornitore, e a dirlo e'
-        `prepare_manifest_sources.lettore_dedicato`, che e' l'unica autorita'
-        su quale lettore apre quale documento.
+        The reader is chosen by the decision — schema state and adapter —
+        never by the supplier's name, and `prepare_manifest_sources.lettore_dedicato`
+        is the single authority on which reader opens which document.
 
-        Fino al 21 agosto 2026 qui c'era `if supplier == "betulla": return
-        read_betulla(path)`. Un listino promozionale dichiarato «BETULLA» nella
-        mappatura guidata la catena lo leggeva col lettore generico — 621
-        righe, stato `SCHEMA_VARIATO` — e il catalogo lo mandava a
-        `read_betulla`, che alzava «Schema BETULLA non riconosciuto». Risultato:
-        BETULLA restava nel confronto e spariva dal visualizzatore e dalla
-        ricerca prodotti.
+        Hard-coding a reader by supplier name here would risk exactly the
+        kind of drift this guards against: a price list the pipeline reads
+        with a different reader than the one this function assumes would
+        make that supplier stay in the comparison while disappearing from
+        the viewer and from product search.
         """
 
         lettore = lettore_dedicato(sorgente.state, sorgente.adapter_id)
         if lettore is not None:
-            # Le colonne corrette a mano entrano **dentro** il lettore
-            # dedicato, come nella catena: mandare il documento al generico per
-            # applicarle perderebbe gli espositori di Larice e le sue soglie
-            # con omaggio.
+            # Manually corrected columns are applied inside the dedicated
+            # reader, matching the pipeline: routing the document to the
+            # generic reader to apply them would lose Larice's displays and
+            # its free-goods thresholds.
             #
-            # ⚠ L'adattatore si passa, non si finge `{}`: una mappatura
-            # imparata indica le colonne per nome, e le posizioni per rileggerle
-            # stanno nella sua impronta. Senza, la catena leggeva il listino e
-            # il catalogo si fermava — cioe' il fornitore nel confronto e
-            # assente dal visualizzatore, il difetto del 21 agosto 2026 rifatto
-            # da un'altra parte (6 settembre 2026).
+            # The adapter is passed through, never faked as `{}`: a learned
+            # mapping names columns and the positions to re-read them live in
+            # its own fingerprint. Without it, the pipeline would read the
+            # price list fine while this function failed — the supplier
+            # present in the comparison but missing from the viewer, the
+            # same class of bug as the hard-coded-reader issue above,
+            # resurfacing in a different spot.
             voce = voce_in_uso(sorgente.adapter_id, adattatori_effettivi(ADAPTERS_PATH)[0])
             extra = colonne_corrette({"field_mapping": sorgente.mapping}, voce, sorgente.adapter_id)
-            # `adattatore_base`: un `larice_v1__locale` — la mappatura imparata
-            # qui sopra quella spedita — resta Larice, espositori compresi.
+            # `adattatore_base`: a variant like `larice_v1__locale` — the
+            # learned mapping layered on the shipped one — is still Larice,
+            # displays included.
             if adattatore_base(sorgente.adapter_id) == "larice_v1":
                 records, _warnings = lettore(sorgente.path, **extra)
                 records, _displays, _summary = integrate_larice_displays(
@@ -467,11 +470,12 @@ class SupplierCatalog:
             return risultato[0] if isinstance(risultato, tuple) else risultato
 
         attiva = _mappatura_attiva(sorgente.adapter_id, sorgente.mapping)
-        # Il formato lo dicono i primi byte, non l'estensione: dall'agosto 2026
-        # Noce manda un Excel 97-2003 al posto del CSV estratto dal sito, e
-        # un .xls mandato al lettore CSV e' un UnicodeDecodeError su un file
-        # valido. Il .xls lo legge `app/xls_reader.py`, dentro il lettore
-        # generico: passare di qui non perde nessun lettore scritto a mano.
+        # The format is decided by the file's first bytes, not its
+        # extension: at least one supplier sends a legacy Excel 97-2003 file
+        # under what looks like a CSV export, and routing an `.xls` to the
+        # CSV reader raises `UnicodeDecodeError` on a perfectly valid file.
+        # Legacy `.xls` is read by `app/xls_reader.py`, inside the generic
+        # reader path: going through here loses no hand-written reader.
         if container_format(sorgente.path) == "csv":
             records, _warnings = read_mapped_csv_supplier(sorgente.path, supplier, attiva)
         else:
@@ -484,30 +488,28 @@ class SupplierCatalog:
         cls,
         paths: dict[str, "_Sorgente"],
     ) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, str]]]:
-        """Legge i listini un fornitore alla volta, isolando chi fallisce.
+        """Reads price lists one supplier at a time, isolating whichever fails.
 
-        Un listino illeggibile toglie di mezzo il suo fornitore e nient'altro:
-        prima di questa guardia bastava un .xls mandato al lettore CSV per far
-        cadere l'intero catalogo, e all'utente arrivava un messaggio tecnico in
-        inglese al posto degli altri tre fornitori.
+        An unreadable price list removes only its own supplier and nothing
+        else. Without this per-supplier isolation, one misread `.xls` file
+        would take down the whole catalogue, replacing every other
+        supplier's results with a raw technical error message.
         """
 
         sources: dict[str, list[dict[str, Any]]] = {}
         errors: list[dict[str, str]] = []
-        # L'ordine e' quello di prima (betulla, larice, noce, poi gli altri):
-        # a parita' esatta di prezzo al pezzo decide quale offerta viene
-        # accodata per prima, e non e' una cosa da cambiare per distrazione.
+        # A fixed priority order for a small set of long-standing suppliers,
+        # the rest after: on an exact tie in per-piece price, this decides
+        # which offer is listed first, and isn't something to change lightly.
         ordine = {"betulla": 0, "larice": 1, "noce": 2}
-        # ⚠ Qui c'era `if supplier not in ordine and not mapping: continue`, e
-        # scartava un fornitore senza aggiungere niente a `errors`: una
-        # sparizione silenziosa esattamente nel punto in cui il modulo
-        # prometteva che «il motivo si sa dire». Adesso chi entra in `paths` o
-        # si legge o si spiega, e chi non deve entrarci resta fuori da
-        # `_source_paths`.
+        # Every supplier that reaches `paths` is either read successfully or
+        # explained in `errors`; nothing in this loop drops one silently.
+        # Whichever suppliers don't belong in the comparison are filtered
+        # out earlier, in `_source_paths`.
         for supplier, sorgente in sorted(paths.items(), key=lambda voce: (ordine.get(voce[0], 3), voce[0])):
             try:
                 sources[supplier] = cls._read_supplier(supplier, sorgente)
-            except Exception as exc:  # noqa: BLE001 - un fornitore rotto non ne ferma altri
+            except Exception as exc:  # noqa: BLE001 - one broken supplier must not stop the others
                 errors.append({
                     "supplier": supplier,
                     "supplierName": _supplier_name(supplier),
@@ -519,16 +521,17 @@ class SupplierCatalog:
         return sources, errors
 
     def _ensure_loaded(self, review: dict[str, Any]) -> None:
-        # I nomi dei fornitori si rileggono dal registro a ogni giro di questa
-        # funzione, non a ogni riga di listino: `_offer` ne chiede uno per riga,
-        # e sono decine di migliaia. Il registro entra comunque in `signature`,
-        # quindi se cambia il catalogo si ricostruisce e i nomi con lui.
+        # Supplier names are re-read from the registry once per call to this
+        # function, not once per price-list row: `_offer` requests one per
+        # row, and there are tens of thousands of rows. The registry is
+        # already part of `signature`, so the catalogue rebuilds — and the
+        # names with it — whenever it changes.
         _NOMI_DEL_CATALOGO.clear()
         paths, mancanti = self._source_paths(review)
         signature = self._signature(paths, mancanti)
-        # Anche una lettura finita male e' una lettura fatta: senza ricordarlo,
-        # un listino illeggibile verrebbe riaperto a ogni tasto digitato nella
-        # ricerca prodotti.
+        # A failed read still counts as a completed read: without
+        # remembering that, an unreadable price list would be reopened on
+        # every keystroke in product search.
         if signature == self.signature and (self.entries or self.load_errors):
             return
         sources, errors = self._read_sources(paths)
@@ -536,9 +539,10 @@ class SupplierCatalog:
             supplier: [record for record in records if record.get("usable", True) and _offer(supplier, record)]
             for supplier, records in sources.items()
         }
-        # Un listino che si apre ma non ha righe ordinabili toglie il fornitore
-        # dal confronto esattamente come uno che non si apre: se solo il
-        # secondo caso si segnala, il primo diventa una sparizione silenziosa.
+        # A price list that opens fine but has no orderable rows removes its
+        # supplier from the comparison exactly like one that fails to open:
+        # reporting only the second case would turn the first into a silent
+        # disappearance.
         for supplier, records in usable.items():
             if records:
                 continue
@@ -551,13 +555,13 @@ class SupplierCatalog:
                 ),
             })
         self.load_errors = mancanti + errors
-        # ⚠ Le righe **tutte**, ordinabili o no, tenute per fornitore: e' quello
-        # che il visualizzatore mostra. Il catalogo di ricerca lavora sulle sole
-        # ordinabili — giusto, perche' propone merce da comprare — ma chi apre
-        # un listino per capire perche' un prodotto non e' stato abbinato deve
-        # poter vedere **anche** la riga che il programma ha scartato, con il
-        # motivo. Non raddoppia la memoria: `usable` tiene riferimenti agli
-        # stessi dizionari, qui si aggiungono solo le righe scartate.
+        # Every row is kept per supplier, orderable or not: this is what the
+        # viewer shows. Catalogue search works from orderable rows only —
+        # correctly so, since it proposes goods to buy — but whoever opens a
+        # price list to understand why a product wasn't matched needs to see
+        # the discarded row too, with its reason. This doesn't duplicate
+        # memory: `usable` holds references to the same dicts, and this just
+        # adds the discarded ones alongside.
         self.righe_per_fornitore = {
             supplier: list(records) for supplier, records in sources.items()
         }
@@ -708,13 +712,13 @@ class SupplierCatalog:
 
     @staticmethod
     def _riga_di_listino(supplier: str, record: dict[str, Any]) -> dict[str, Any]:
-        """Una riga di listino con le colonne su cui poi si ordina.
+        """A price list row with the columns that ordering later depends on.
 
-        Sono le stesse che decidono un abbinamento — codice, descrizione, pezzi
-        per collo, prezzo — e non le colonne del foglio: qui si guarda **quello
-        che il programma ha letto**, che è l'informazione che serve quando un
-        prodotto non è stato abbinato e non si capisce perché. Se una colonna è
-        letta storta, qui si vede storta.
+        The same fields that decide a match — code, description, pieces per
+        carton, price — not the sheet's own columns: this shows what the
+        program actually read, which is exactly what's needed when a product
+        wasn't matched and it's unclear why. If a column was misread, it
+        shows up misread here too.
         """
 
         offerta = _offer(supplier, record)
@@ -726,15 +730,16 @@ class SupplierCatalog:
             "piecesPerCarton": _number(record.get("pieces_per_carton")),
             "orderMultiplier": _number(record.get("order_multiplier")),
             "unitPriceNet": _number(record.get("unit_price_net")),
-            # `ordinabile` è la stessa domanda che il confronto si fa: una riga
-            # che si vede ma non si può ordinare deve dirlo, e dire perché.
+            # `ordinabile` asks the same question the comparison itself
+            # asks: a row that's visible but can't be ordered has to say so,
+            # and say why.
             "ordinabile": offerta is not None,
             "motivo": str(record.get("unusable_reason") or record.get("row_type") or ""),
             "orderUnitPriceNet": (offerta or {}).get("orderUnitPriceNet"),
         }
 
     def fornitori_sfogliabili(self, review: dict[str, Any]) -> list[dict[str, Any]]:
-        """Quali listini si possono aprire, con quante righe ciascuno."""
+        """Which price lists can be browsed, and how many rows each has."""
 
         with self.lock:
             self._ensure_loaded(review)
@@ -758,17 +763,18 @@ class SupplierCatalog:
         quante: int = 50,
         riga: Any = None,
     ) -> dict[str, Any]:
-        """Una pagina del listino di un fornitore, come il programma l'ha letto.
+        """A page of one supplier's price list, exactly as the program read it.
 
-        `riga` è il numero di riga su cui mettere il fuoco — quella già abbinata
-        al prodotto da cui si è aperto il visualizzatore. Quando c'è, `da` viene
-        ignorato e la pagina è quella che la contiene: aprire il listino di
-        ottomila righe all'inizio, quando si sa già dove guardare, sarebbe far
-        cercare a mano una cosa che il programma sa.
+        `riga` is the row number to focus on — the one already matched to
+        the product the viewer was opened from. When given, `da` is ignored
+        and the page returned is the one containing it: opening an
+        eight-thousand-row price list at the start, when the target row is
+        already known, would just make the user search by hand for
+        something the program already knows.
 
-        Le righe scartate si contano sempre, anche quando la pagina non ne
-        mostra nessuna: un listino di 8.881 righe che ne mostra 8.849 senza
-        dirlo sarebbe un visualizzatore che nasconde.
+        Discarded rows are always counted, even when the current page shows
+        none of them: a price list with thousands of rows that silently
+        shows only most of them would be a viewer that hides data.
         """
 
         chiave = str(supplier or "").strip().casefold()
@@ -813,9 +819,10 @@ class SupplierCatalog:
                 "trovate": len(trovate),
                 "totale": len(tutte),
                 "scartate": sum(1 for record in tutte if not _offer(chiave, record)),
-                # Dove sta la riga su cui si voleva il fuoco: `None` quando non
-                # è stata chiesta, oppure quando la ricerca l'ha esclusa — e in
-                # quel caso la pagina deve dirlo invece di far cercare a vuoto.
+                # Where the requested row ended up: `None` when no row was
+                # requested, or when the current search filtered it out — in
+                # which case the page must say so instead of leaving the
+                # caller searching for nothing.
                 "rigaCercata": None if riga is None else (
                     str(riga) if posizione is not None else None
                 ),
@@ -824,13 +831,13 @@ class SupplierCatalog:
     def offerta_dalla_riga(
         self, review: dict[str, Any], supplier: str, source_row: Any
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        """La riga scelta a mano e l'offerta che ne nasce.
+        """The manually chosen row and the offer built from it.
 
-        Restituisce `(record, offerta)`. Solleva se la riga non c'è o se non è
-        ordinabile: abbinare un prodotto a una riga senza prezzo o senza pezzi
-        per collo vorrebbe dire mettere in ordine una quantità che non si sa
-        calcolare, ed è lo stesso rifiuto che il servizio oppone alle proposte
-        dell'analisi automatica.
+        Returns `(record, offerta)`. Raises if the row doesn't exist or
+        isn't orderable: matching a product to a row with no price or no
+        pieces-per-carton would mean ordering a quantity that can't be
+        computed — the same rejection the service applies to automatic
+        match proposals.
         """
 
         chiave = str(supplier or "").strip().casefold()

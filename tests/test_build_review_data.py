@@ -59,8 +59,8 @@ def supplier_match(
 
 
 class SuggestedQuantityHelperTests(unittest.TestCase):
-    """Colli suggeriti dalla colonna "Colli" del gestionale: nessun arrotondamento
-    concettuale qui, solo validazione di un intero >= 0 (o None)."""
+    """Suggested cartons from the management software's "Colli" column: no
+    conceptual rounding here, just validating an integer >= 0 (or None)."""
 
     def test_valid_values_are_rounded_to_the_nearest_integer(self) -> None:
         self.assertEqual(suggested_quantity("4"), 4)
@@ -74,9 +74,9 @@ class SuggestedQuantityHelperTests(unittest.TestCase):
 
 
 class SuggestedQuantityPropagationTests(unittest.TestCase):
-    """product.suggestedQuantity / product.quantitySource devono arrivare dalla
-    colonna "Colli" del gestionale (master.suggested_colli), non da un default
-    calcolato o da un arrotondamento pezzi->colli."""
+    """product.suggestedQuantity / product.quantitySource must come from the
+    management software's "Colli" column (master.suggested_colli), not from a
+    computed default or a pieces-to-cartons rounding."""
 
     def test_gestionale_colli_column_prefills_quantity_and_source(self) -> None:
         resolved = [
@@ -131,26 +131,19 @@ class SuggestedQuantityPropagationTests(unittest.TestCase):
 
 
 class UnProdottoSenzaOfferteTests(unittest.TestCase):
-    """Il gestionale lo chiede, nessun listino lo porta: si vede e si spiega.
+    """The management software requests an item that no price list covers: it
+    stays visible and the page explains why.
 
-    Il 14 agosto 2026 tre prodotti nuovi del gestionale sono nati con
-    `quantity: 1` e nessun fornitore.  Il passo 2 si apriva con un errore
-    bloccante e **l'autosalvataggio moriva a ogni battuta**: `validate_snapshot`
-    rifiutava una quantita' senza offerta utilizzabile, e il rifiuto valeva
-    anche per il semplice salvataggio.  Il programma produceva uno stato che il
-    programma stesso non accetta, e la toppa fu azzerare la quantita'.
+    A quantity requested by the management software but with no usable offer
+    is a valid state, not a validation error: `validate_snapshot` accepts
+    quantity > 0 with zero usable offers. The quantity keeps the value from
+    the "Colli" column instead of being zeroed out, because zeroing it would
+    erase the only known fact about that row — how many are needed — and the
+    item still matters downstream: it enters the "Prodotti da reperire" list
+    produced at delivery time with its requested quantity.
 
-    ⚠ Il 16 agosto 2026 Daniele ha deciso l'altra meta': la quantita' resta
-    quella normale del prodotto, quella dei «Colli» del gestionale, anche senza
-    fornitore.  Azzerarla cancellava l'unica cosa che si sapeva di quella riga —
-    quanti ne servono — e il prodotto non serve piu' a niente a valle: adesso
-    con la sua quantita' entra nell'elenco «Prodotti da reperire» prodotto alla
-    compilazione.  Il rifiuto di `validate_snapshot` e' stato ristretto nello
-    stesso lavoro: quantita' > 0 senza NESSUNA offerta utilizzabile e' uno stato
-    valido.
-
-    Il prodotto resta, la quantita' pure, e la scheda dice perche' non si puo'
-    ordinarlo.
+    The product stays, the quantity stays, and its card explains why it can't
+    be ordered.
     """
 
     def caso(
@@ -184,11 +177,11 @@ class UnProdottoSenzaOfferteTests(unittest.TestCase):
         )[0]
 
     def test_senza_offerta_i_colli_del_gestionale_si_applicano_lo_stesso(self) -> None:
-        """La difesa nuova: la quantita' non dipende piu' dal fornitore.
+        """Quantity doesn't depend on having a usable supplier offer.
 
-        Se questa prova torna a leggere 0, l'elenco «Prodotti da reperire» nasce
-        vuoto — ci entra solo chi ha una quantita' > 0 — e il prodotto che il
-        gestionale chiede sparisce da ogni foglio senza dirlo a nessuno.
+        At 0, the "Prodotti da reperire" list would end up empty — only items
+        with quantity > 0 enter it — and a product the management software
+        requested would silently disappear from every sheet.
         """
 
         prodotto = self.prodotto(colli="1", ordinabile=False)
@@ -198,11 +191,12 @@ class UnProdottoSenzaOfferteTests(unittest.TestCase):
         self.assertFalse(prodotto["confirmed"])
 
     def test_la_quantita_senza_fornitore_resta_marcata_gestionale(self) -> None:
-        """Chi l'ha scritta decide chi la puo' riscrivere.
+        """Whoever wrote the value decides who may overwrite it.
 
-        Marcarla «utente» la renderebbe intoccabile: `_ripulisci_stato` rilegge
-        dall'elenco solo cio' che e' marcato «gestionale», e al ricalcolo dopo
-        un gestionale con altri colli non riuscirebbe piu' ad aggiornarla.
+        Marking it "utente" would make it untouchable: `_ripulisci_stato`
+        re-reads from the price list only values marked "gestionale", so a
+        recompute after a management-software update with a different carton
+        count could no longer refresh it.
         """
 
         prodotto = self.prodotto(colli="4", ordinabile=False)
@@ -211,7 +205,7 @@ class UnProdottoSenzaOfferteTests(unittest.TestCase):
         self.assertEqual(prodotto["quantitySource"], "gestionale")
 
     def test_senza_colli_e_senza_fornitore_la_quantita_resta_zero(self) -> None:
-        """Non si inventa una quantità che il gestionale non ha chiesto."""
+        """Never invents a quantity the management software never requested."""
 
         prodotto = self.prodotto(colli=None, ordinabile=False)
 
@@ -220,11 +214,11 @@ class UnProdottoSenzaOfferteTests(unittest.TestCase):
         self.assertEqual(prodotto["quantitySource"], "utente")
 
     def test_un_abbinamento_da_confermare_non_e_un_prodotto_senza_offerta(self) -> None:
-        """⚠ Un match ancora da verificare NON e' un'indisponibilita'.
+        """A match pending user confirmation is not unavailability.
 
-        L'offerta c'e' e si puo' usare: manca solo che l'utente dica «si', e' lo
-        stesso prodotto».  Trattarlo come irreperibile lo manderebbe nell'elenco
-        dei prodotti da reperire mentre un fornitore ce l'ha in casa.
+        The offer exists and is usable; only the user's "yes, same product"
+        confirmation is missing. Treating it as unavailable would put it in
+        the "to be sourced" list while a supplier actually carries it.
         """
 
         prodotto = self.prodotto(colli="2", ordinabile=True, da_confermare=True)
@@ -256,7 +250,7 @@ class UnProdottoSenzaOfferteTests(unittest.TestCase):
         self.assertIn("listini caricati", avviso["message"])
 
     def test_i_colli_chiesti_restano_scritti_e_adesso_anche_applicati(self) -> None:
-        """Serve a chi cerca la riga: la richiesta non si perde più per strada."""
+        """The requested count must survive intact for whoever looks up the row."""
 
         prodotto = self.prodotto(colli="3", ordinabile=False)
 
@@ -273,8 +267,8 @@ class UnProdottoSenzaOfferteTests(unittest.TestCase):
         )
 
     def test_in_cima_alla_pagina_si_dice_quanti_sono_e_come_trovarli(self) -> None:
-        """Gli avvisi di prodotto la pagina li raccoglie solo dove c'e' una
-        quantita' da ordinare, e il filtro «Nessuno ce l’ha» fa lo stesso."""
+        """The page only surfaces product warnings where there's a quantity to
+        order, and the "Nessuno ce l'ha" filter follows the same rule."""
 
         prodotti = build_products(self.caso(colli="2", ordinabile=False), ["larice"])
 
@@ -284,22 +278,19 @@ class UnProdottoSenzaOfferteTests(unittest.TestCase):
         self.assertEqual(riassunto[0]["code"], "PRODOTTI_SENZA_OFFERTA")
         self.assertEqual(riassunto[0]["count"], 1)
         self.assertIn("«Nessuno ce l’ha»", riassunto[0]["message"])
-        # ⚠ Diceva «I 1 che il gestionale chiede»: l'articolo non regge
-        # davanti a un numero qualunque, e con un prodotto solo si leggeva
-        # cosi'. Adesso il numero sta dopo il verbo.
+        # The number sits after the verb; a phrase like "I 1 che il gestionale
+        # chiede" breaks grammatically for a singular count.
         self.assertIn("Di questi il gestionale ne chiede 1", riassunto[0]["message"])
         self.assertIn("lo trovi con il filtro", riassunto[0]["message"])
         self.assertNotIn("I 1 ", riassunto[0]["message"])
         self.assertIn("Prodotti da reperire", riassunto[0]["message"])
-        # ⚠ Il messaggio non deve piu' dire che la quantita' non e' stata
-        # applicata: adesso lo e', e prometterlo al contrario sarebbe un avviso
-        # che mente su cio' che l'utente ha davanti.
+        # The message must not claim the quantity wasn't applied: it is
+        # applied, and saying otherwise would misrepresent what the user sees.
         self.assertNotIn("non è stata", riassunto[0]["message"])
 
     def test_se_nessuno_li_chiede_il_riassunto_non_promette_il_filtro(self) -> None:
-        """Il filtro «Nessuno ce l’ha» nasconde chi sta a zero: promettere che li
-        trova tutti sarebbe una frase falsa nel caso in cui la quantita' non
-        c'e'."""
+        """The "Nessuno ce l'ha" filter hides items at zero quantity; claiming
+        it finds them all would be false when the quantity is missing."""
 
         prodotti = build_products(self.caso(colli=None, ordinabile=False), ["larice"])
 
@@ -315,12 +306,9 @@ class UnProdottoSenzaOfferteTests(unittest.TestCase):
 
 
 class LAvvisoDelleAnomalieDiceCheCosaEDoveTests(unittest.TestCase):
-    """«Anomalie di listino registrate — 3 anomalie in LARICE; i valori restano
-    visibili nell'audit.» Daniele, 20 agosto 2026: «quindi? Che vuol dire?».
-
-    La frase non diceva che cosa fosse successo, non diceva che cosa deve fare
-    lui, e soprattutto taceva l'unica cosa che conta davanti a un ordine: se
-    quel prezzo puo' essere sbagliato.
+    """A vague "anomalies recorded" message doesn't say what happened, what
+    the user should do, or the one thing that matters before placing an
+    order: whether the price on that row might be wrong.
     """
 
     SCONTO = [
@@ -336,11 +324,9 @@ class LAvvisoDelleAnomalieDiceCheCosaEDoveTests(unittest.TestCase):
         self.assertEqual(anomalie_listino_summary([]), [])
 
     def test_il_titolo_dice_se_il_prezzo_puo_essere_sbagliato(self) -> None:
-        """Il caso vero del 19 agosto 2026: tre righe LARICE con lo sconto «**».
-
-        Uno sconto che il programma non sa leggere vale zero — cioe' quelle
-        righe hanno il prezzo di listino pieno. Chi ordina deve saperlo dal
-        titolo, senza aprire niente.
+        """A discount the program can't parse is treated as zero, meaning
+        those rows carry the full list price. The title must say so on its
+        own, without the user opening anything.
         """
 
         avviso = anomalie_listino_summary(self.SCONTO)[0]
@@ -359,7 +345,7 @@ class LAvvisoDelleAnomalieDiceCheCosaEDoveTests(unittest.TestCase):
         self.assertIn("3 righe del listino LARICE", avviso["message"])
         self.assertIn("colonna dello sconto", avviso["message"])
         self.assertIn("senza sconto", avviso["message"])
-        # I numeri di riga: e' con quelli che si apre il listino e si controlla.
+        # Row numbers are what the user needs to open the price list and check.
         self.assertIn("2476, 2477 e 2478", avviso["message"])
 
     def test_una_riga_sola_si_dice_al_singolare(self) -> None:
@@ -370,8 +356,7 @@ class LAvvisoDelleAnomalieDiceCheCosaEDoveTests(unittest.TestCase):
         self.assertNotIn("hanno", avviso["message"])
 
     def test_le_righe_citate_sono_poche_e_il_resto_si_conta(self) -> None:
-        """Sessanta numeri di riga sono un muro, e il resto della frase non si
-        legge piu'."""
+        """Sixty row numbers would be a wall of text that drowns the rest of the message."""
 
         tante = [
             {"source": "larice", "source_row": numero, "warning": "Codice sconto testuale inatteso: **"}
@@ -410,8 +395,8 @@ class LAvvisoDelleAnomalieDiceCheCosaEDoveTests(unittest.TestCase):
         self.assertEqual(avviso["count"], 4)
 
     def test_un_motivo_mai_visto_si_riporta_come_e_scritto(self) -> None:
-        """⚠ Non gli si inventa una conseguenza: se non sappiamo se tocca il
-        prezzo, il titolo non promette niente e il testo dice il motivo vero."""
+        """No invented consequence: if it's unknown whether the price is
+        affected, the title makes no claim and the text states the real reason."""
 
         avviso = anomalie_listino_summary([
             {"source": "quercia", "source_row": 5, "warning": "Roba mai vista in questo listino"},
@@ -429,9 +414,9 @@ class LAvvisoDelleAnomalieDiceCheCosaEDoveTests(unittest.TestCase):
 
 class NoceQuantityFactorTests(unittest.TestCase):
     def test_factor_is_the_order_multiplier_not_pieces_per_carton(self) -> None:
-        # Per Noce offer.quantityFactor resta il moltiplicatore d'ordine
-        # ricavato dal campo "unit" del listino (es. "x 6"), mai il campo
-        # pieces_per_carton anche se presente in un record misto.
+        # For this supplier, offer.quantityFactor is the order multiplier
+        # parsed from the price list's "unit" field (e.g. "x 6"), never the
+        # pieces_per_carton field even if present in the same record.
         resolved = [
             {
                 "gestionale": {"source_row": 7, "ean": "8000000000007", "description": "PRODOTTO NOCE"},
@@ -457,19 +442,18 @@ class NoceQuantityFactorTests(unittest.TestCase):
 
 
 class SupplierRankingByPiecePriceTests(unittest.TestCase):
-    """Il caso piu' pericoloso della nuova regola: un fornitore puo' avere il
-    totale per collo piu' basso pur non essendo il piu' conveniente al pezzo,
-    quando i pezzi per collo differiscono tra fornitori. La scelta del
-    fornitore migliore deve restare sul prezzo al pezzo (unitPriceNet), mai
-    sul totale in colli (orderUnitPriceNet)."""
+    """The dangerous case: a supplier can have the lowest total per carton
+    while not being the cheapest per piece, when carton sizes differ between
+    suppliers. Supplier ranking must stay on the per-piece price
+    (unitPriceNet), never on the per-carton total (orderUnitPriceNet)."""
 
     def test_supplier_with_lower_total_per_carton_can_lose_the_selection(self) -> None:
         resolved = [
             {
                 "gestionale": {"source_row": 10, "ean": "8000000000010", "description": "PRODOTTO TRAPPOLA"},
                 "suppliers": {
-                    # Larice: collo da 6 pezzi a 2,00 EUR/pezzo -> 12,00 EUR/collo
-                    # (il totale per collo piu' basso dei due).
+                    # larice: 6-piece carton at 2.00 EUR/piece -> 12.00 EUR/carton
+                    # (the lower total of the two).
                     "larice": supplier_match(
                         unit_price_net=2.0,
                         pieces_per_carton=6,
@@ -477,8 +461,8 @@ class SupplierRankingByPiecePriceTests(unittest.TestCase):
                         description="PRODOTTO TRAPPOLA LARICE",
                         source_row=100,
                     ),
-                    # Betulla: collo da 24 pezzi a 1,00 EUR/pezzo -> 24,00 EUR/collo
-                    # (il totale per collo piu' alto, ma il pezzo costa meta').
+                    # betulla: 24-piece carton at 1.00 EUR/piece -> 24.00 EUR/carton
+                    # (higher carton total, but half the per-piece price).
                     "betulla": supplier_match(
                         unit_price_net=1.0,
                         pieces_per_carton=24,
@@ -494,12 +478,12 @@ class SupplierRankingByPiecePriceTests(unittest.TestCase):
         product = products[0]
         offers = {offer["supplierId"]: offer for offer in product["offers"]}
 
-        # Precondizione del trabocchetto: larice vince sul totale in colli...
+        # Precondition of the trap: larice wins on the carton total...
         self.assertLess(offers["larice"]["orderUnitPriceNet"], offers["betulla"]["orderUnitPriceNet"])
         self.assertEqual(offers["larice"]["orderUnitPriceNet"], 12.0)
         self.assertEqual(offers["betulla"]["orderUnitPriceNet"], 24.0)
 
-        # ...ma betulla vince sul prezzo al pezzo, il solo criterio valido.
+        # ...but betulla wins on the per-piece price, the only valid criterion.
         self.assertLess(offers["betulla"]["unitPriceNet"], offers["larice"]["unitPriceNet"])
         self.assertEqual(offers["betulla"]["unitPriceNet"], 1.0)
         self.assertEqual(offers["larice"]["unitPriceNet"], 2.0)
@@ -508,16 +492,15 @@ class SupplierRankingByPiecePriceTests(unittest.TestCase):
 
 
 class EspositoriPezziEPrezzoAlPezzoTests(unittest.TestCase):
-    """Un espositore si compra intero e si consegna a pezzi.
+    """A display is bought whole and delivered by the piece.
 
-    `quantityFactor` sono i pezzi contenuti e `unitPriceNet` il prezzo del
-    singolo pezzo, esattamente come per un collo: e' il contratto che
-    `offer_pricing` legge nel servizio, e da li' nascono i pezzi consegnati del
-    piano d'ordine, il prezzo al pezzo dello storico e la scelta della
-    «Migliore alternativa». Scrivendo `1` e il prezzo dell'espositore intero —
-    com'era fino al 14 agosto 2026 — la pagina e il piano scaricabile
-    descrivevano due merci diverse per lo stesso ordine, di un fattore pari ai
-    pezzi dell'espositore.
+    `quantityFactor` is the number of pieces it contains and `unitPriceNet`
+    is the single piece's price, exactly as for a carton: this is the
+    contract `offer_pricing` reads downstream, and it drives the delivered
+    piece count on the order plan, the per-piece price in the history, and
+    the "best alternative" choice. Writing `1` and the whole display's price
+    instead would make the page and the downloadable plan describe two
+    different quantities for the same order, off by the display's piece count.
     """
 
     @staticmethod
@@ -546,14 +529,14 @@ class EspositoriPezziEPrezzoAlPezzoTests(unittest.TestCase):
         self.assertEqual(offerta["unitPriceNet"], 0.4167)
         self.assertEqual(offerta["pricePerPiece"], 0.4167)
         self.assertEqual(offerta["pricePerPieceNet"], 0.4167)
-        # L'espositore intero resta il prezzo che si fattura: il totale di riga
-        # non cambia, ed e' il motivo per cui i test dei totali non vedevano
-        # niente.
+        # The whole display's price is still what gets invoiced: the row
+        # total is unchanged, which is why total-related tests didn't catch
+        # this on their own.
         self.assertEqual(offerta["orderUnitPriceNet"], 60.0)
         self.assertEqual(offerta["price"], 60.0)
 
     def test_senza_pezzi_dichiarati_l_espositore_vale_un_pezzo(self) -> None:
-        """Il ripiego prudente: fa sembrare l'offerta più cara, non più conveniente."""
+        """The conservative fallback makes the offer look pricier, never cheaper."""
 
         offerta = display_offer(self.espositore(supplier="betulla", net_price=60.0, declared_units=None))
 
@@ -568,12 +551,12 @@ class EspositoriPezziEPrezzoAlPezzoTests(unittest.TestCase):
         self.assertEqual(offerta["unitPriceNet"], 60.0)
 
     def test_un_espositore_gia_dichiarato_non_ordinabile_resta_fuori(self) -> None:
-        """La porta si chiude da tutti e due i lati.
+        """Both sides of this must be closed.
 
-        Il lettore dichiara `usable: False` su un espositore i cui pezzi del
-        collo padre non si leggono; qui si guardava solo il prezzo, quindi
-        quell'offerta rientrava con un prezzo ricavato da un fattore che nessuno
-        conosce — ed è il prezzo più basso di tutti, quindi vinceva.
+        The parser sets `usable: False` on a display whose parent carton
+        piece count can't be read. If ranking only looked at price, that
+        offer would still be considered, priced from an unknown factor — and
+        since that price ends up the lowest, it would win.
         """
 
         base = self.espositore(supplier="larice", net_price=60.0, declared_units=144)
@@ -585,10 +568,10 @@ class EspositoriPezziEPrezzoAlPezzoTests(unittest.TestCase):
         self.assertFalse(scartato["available"])
 
     def test_identico_lo_dice_solo_una_riconciliazione_fatta(self) -> None:
-        """«Espositore identico» è il risultato di una verifica, non l'assenza
-        di una smentita: `None` vuol dire che i dati per farla non c'erano, e
-        `None is not False` faceva scrivere «identico» sopra un controllo che
-        nessuno aveva eseguito."""
+        """"Espositore identico" is the result of a check that ran, not the
+        absence of a check that failed: `None` means the data to run it was
+        missing, and `None is not False` would print "identico" over a check
+        that never happened."""
 
         base = self.espositore(supplier="larice", net_price=60.0, declared_units=144)
 
@@ -604,12 +587,10 @@ class EspositoriPezziEPrezzoAlPezzoTests(unittest.TestCase):
             self.assertEqual(offerta["matchStatus"], "Composizione da verificare")
 
     def test_fra_due_espositori_vince_quello_col_pezzo_piu_economico(self) -> None:
-        """Stessa composizione, pezzi dichiarati diversi: e' un dato sporco.
-
-        Il programma non deve premiarlo. L'espositore BETULLA costa meno intero
-        (50 contro 60) e piu' al pezzo (1,0417 contro 0,4167): con il contratto
-        vecchio la selezione andava a BETULLA, cioe' al prezzo che non si puo'
-        confrontare.
+        """Same composition, different declared piece counts: this is dirty
+        data, and ranking must not reward it. The BETULLA display costs less
+        whole (50 vs 60) and more per piece (1.0417 vs 0.4167): ranking by
+        whole price would pick BETULLA — the price that isn't comparable.
         """
 
         componenti = [{"ean": "8000000000001", "quantity": 6}]
@@ -625,20 +606,21 @@ class EspositoriPezziEPrezzoAlPezzoTests(unittest.TestCase):
         prodotto = prodotti[0]
         offerte = {offerta["supplierId"]: offerta for offerta in prodotto["offers"]}
 
-        # Precondizione della trappola: betulla vince sull'espositore intero...
+        # Precondition of the trap: betulla wins on the whole-display price...
         self.assertLess(offerte["betulla"]["orderUnitPriceNet"], offerte["larice"]["orderUnitPriceNet"])
-        # ...e perde sul pezzo, che e' il solo criterio valido.
+        # ...and loses on the per-piece price, the only valid criterion.
         self.assertLess(offerte["larice"]["unitPriceNet"], offerte["betulla"]["unitPriceNet"])
         self.assertEqual(prodotto["selectedSupplierId"], "larice")
 
     def test_un_espositore_nasce_a_zero_anche_dopo_la_decisione_sui_colli(self) -> None:
-        """La decisione del 16 agosto 2026 non tocca gli espositori.
+        """The rule that carries over the management software's carton
+        quantity doesn't apply to displays.
 
-        Riguarda i colli del gestionale: un espositore nel gestionale non c'e' —
-        nasce dai listini dei fornitori — quindi non ha nessuna quantita' da
-        conservare, e quanti ordinarne lo scrive l'utente come prima. Se un
-        giorno gli espositori nascessero con una quantita' propria, sarebbe una
-        decisione da prendere, non un effetto collaterale di questa.
+        A display doesn't exist in the management software's data — it comes
+        from supplier price lists — so there's no such quantity to carry over,
+        and the user still enters how many to order as before. Giving
+        displays their own suggested quantity would be a separate decision,
+        not a side effect of this one.
         """
 
         prodotti = build_display_products(
@@ -650,14 +632,14 @@ class EspositoriPezziEPrezzoAlPezzoTests(unittest.TestCase):
 
 
 class UnPrezzoAZeroNonVinceIlConfrontoTests(unittest.TestCase):
-    """Zero non e' il prezzo piu' conveniente: e' una cella che non si e' letta.
+    """Zero is not the best price: it's a cell that failed to parse.
 
-    L'ordinamento mette davanti il prezzo piu' basso, quindi una riga a 0,00
-    vinceva **sempre**: il prodotto finiva assegnato a quel fornitore, con
-    totale zero, e il minimo d'ordine non scattava perche' zero sta sotto
-    qualunque soglia. La difesa che c'era (PREZZI_A_ZERO) guarda la mediana
-    dell'intero listino, quindi vede la colonna sbagliata su tutto un file e
-    non la riga singola dentro un listino sano.
+    Ranking by lowest price would always pick a 0.00 row: the product would
+    be assigned to that supplier with a zero total, and the minimum-order
+    threshold would never trigger since zero is below any threshold. The
+    existing defense (PREZZI_A_ZERO) looks at the whole price list's median,
+    so it catches a misread column across an entire file, not a single row
+    inside an otherwise healthy price list.
     """
 
     def caso(self) -> list[dict[str, object]]:
@@ -686,7 +668,7 @@ class UnPrezzoAZeroNonVinceIlConfrontoTests(unittest.TestCase):
         self.assertEqual(prodotto["selectedSupplierId"], "betulla")
 
     def test_un_fattore_a_zero_non_rende_l_offerta_ordinabile(self) -> None:
-        """Stessa famiglia: `pieces_per_carton` a zero diventava 1 in silenzio."""
+        """Same family as the zero-price case: `pieces_per_carton` at zero must not silently become 1."""
 
         caso = self.caso()
         caso[0]["suppliers"]["larice"] = supplier_match(
@@ -709,9 +691,9 @@ def rejected_match(*, supplier_name: str, score: float | None, method: str = "AI
 
 
 class SuspectRejectWarningTests(unittest.TestCase):
-    """Un rifiuto sbagliato dell'AI non lascia traccia da nessuna parte: il
-    prodotto sparisce dal confronto presso quel fornitore e niente lo dice.
-    Questo avviso e' l'unica difesa che non costa una chiamata in piu'."""
+    """A wrong AI rejection otherwise leaves no trace: the product silently
+    drops out of the comparison for that supplier. This warning is the only
+    defense against it that doesn't cost an extra model call."""
 
     def test_sopra_soglia_l_avviso_c_e(self) -> None:
         avvisi = suspect_reject_warnings(
@@ -722,8 +704,8 @@ class SuspectRejectWarningTests(unittest.TestCase):
         self.assertEqual(len(avvisi), 1)
         self.assertEqual(avvisi[0]["code"], "RIFIUTO_CON_CANDIDATO_FORTE")
         self.assertEqual(avvisi[0]["productId"], "product:12")
-        # Non blocca: un rifiuto giusto e' il caso normale, e circa la meta' di
-        # questi avvisi lo sara'. Bloccare renderebbe il programma inservibile.
+        # Non-blocking: a correct rejection is the normal case, and roughly
+        # half of these warnings will be one. Blocking would make the app unusable.
         self.assertIs(avvisi[0]["blocking"], False)
         self.assertIn("BETULLA", avvisi[0]["message"])
 
@@ -736,16 +718,16 @@ class SuspectRejectWarningTests(unittest.TestCase):
         )
 
     def test_senza_punteggio_nessun_avviso(self) -> None:
-        """`None` e' «non lo so», e non si trasforma in un allarme: un run
-        vecchio, senza il campo, non deve riempire la pagina di avvisi."""
+        """`None` means "unknown" and must not become an alert: an older run
+        that lacks the field shouldn't fill the page with warnings."""
         self.assertEqual(
             suspect_reject_warnings("product:12", "PRODOTTO", [rejected_match(supplier_name="BETULLA", score=None)]),
             [],
         )
 
     def test_un_rifiuto_che_non_e_dell_ai_non_produce_avvisi(self) -> None:
-        """Se il prodotto non c'e' e non l'ha deciso un modello, non c'e'
-        niente da rivedere: l'avviso parla di una decisione, non di un'assenza."""
+        """If a product is missing but a model didn't decide that, there's
+        nothing to review: this warning is about a decision, not an absence."""
         self.assertEqual(
             suspect_reject_warnings(
                 "product:12", "PRODOTTO", [rejected_match(supplier_name="BETULLA", score=0.99, method="REVISIONE")]
@@ -754,9 +736,9 @@ class SuspectRejectWarningTests(unittest.TestCase):
         )
 
     def test_l_avviso_arriva_sul_prodotto_costruito(self) -> None:
-        """La prova che conta: l'avviso deve trovarsi in `product["warnings"]`,
-        che e' il campo che la pagina raccoglie nel filtro «Da verificare».
-        Un avviso in un campo che nessuno legge non e' una difesa."""
+        """What actually matters: the warning must land in
+        `product["warnings"]`, the field the page reads for the "Da
+        verificare" filter. A warning in a field nobody reads is no defense."""
         resolved = [
             {
                 "gestionale": {"source_row": 12, "description": "PANTERA SHAMPOO 250ML RICCI NEW", "suggested_colli": 3},
@@ -784,14 +766,14 @@ class SuspectRejectWarningTests(unittest.TestCase):
             }
         ]
         product = build_products(resolved, ["betulla"])[0]
-        # ⚠ Il rifiuto lascia il prodotto senza nessuna offerta utilizzabile,
-        # quindi da qui in avanti gli avvisi sulla scheda sono due: si cerca
-        # quello che questo collaudo riguarda invece di contarli.
+        # The rejection leaves the product with no usable offer, so the card
+        # carries two warnings; look up the one this test is about instead
+        # of asserting an exact count.
         codici = [avviso["code"] for avviso in product["warnings"]]
         self.assertIn("RIFIUTO_CON_CANDIDATO_FORTE", codici)
         self.assertIn("SENZA_OFFERTA_UTILIZZABILE", codici)
-        # E il punteggio deve arrivare all'offerta, altrimenti l'avviso non si
-        # potrebbe nemmeno ricostruire guardando i dati.
+        # The score must reach the offer, or the warning couldn't be
+        # reconstructed just from the data.
         self.assertAlmostEqual(product["offers"][0]["rejectBestScore"], 0.976)
         candidate = product["offers"][0]["rejectedCandidate"]
         self.assertEqual(candidate["description"], "PANTERA SHAMPOO RICCI 250 ML")
@@ -809,9 +791,8 @@ class SuspectRejectWarningTests(unittest.TestCase):
 
 
 class SuspectRejectSummaryTests(unittest.TestCase):
-    """Il conteggio in cima alla pagina, che esiste per una ragione precisa:
-    la pagina raccoglie gli avvisi di prodotto solo per i prodotti con una
-    quantita' da ordinare."""
+    """The page-top count exists for a specific reason: the page only
+    surfaces product warnings for items with a quantity to order."""
 
     def _prodotto(self, identificativo: str, *, quantity: int, con_avviso: bool) -> dict[str, object]:
         return {
@@ -824,9 +805,9 @@ class SuspectRejectSummaryTests(unittest.TestCase):
         self.assertEqual(suspect_reject_summary([self._prodotto("a", quantity=3, con_avviso=False)]), [])
 
     def test_dichiara_sia_il_totale_sia_quanti_sono_raggiungibili(self) -> None:
-        """I due numeri sono diversi, e il messaggio non deve confonderli:
-        promettere che si trovano tutti con un filtro che ne mostra la meta'
-        e' un avviso che mente."""
+        """The two counts differ and the message must not conflate them:
+        promising a filter will show them all when it only shows half would
+        be a misleading warning."""
         avvisi = suspect_reject_summary([
             self._prodotto("a", quantity=3, con_avviso=True),
             self._prodotto("b", quantity=0, con_avviso=True),
@@ -838,18 +819,18 @@ class SuspectRejectSummaryTests(unittest.TestCase):
         self.assertIn("I 1 con una quantità", avvisi[0]["message"])
 
     def test_quando_nessuno_e_da_ordinare_lo_dice(self) -> None:
-        """Il caso in cui il filtro non ne mostrerebbe nemmeno uno: senza
-        questa frase l'utente cercherebbe in un elenco vuoto."""
+        """When the filter would show none at all, without this sentence the
+        user would search an empty list."""
         avvisi = suspect_reject_summary([self._prodotto("a", quantity=0, con_avviso=True)])
         self.assertIn("non compaiono in quel filtro", avvisi[0]["message"])
 
 
 class GliEspositoriChiestiNonSparisconoInSilenzioTests(unittest.TestCase):
-    """`--displays` era rimasto sul ripiego silenzioso.
+    """`--displays` must not fail silently.
 
-    Chi lancia la fase lo passa apposta — l'orchestratore lo dichiara
-    obbligatorio — ma se il file non c'era, `load(..., [])` faceva sparire
-    **tutti** gli espositori dal confronto senza una parola.
+    The orchestrator declares this argument mandatory, but if the file were
+    missing, falling back to `load(..., [])` would drop every display from
+    the comparison without a word.
     """
 
     def _risolti(self, cartella: Path) -> Path:
@@ -887,7 +868,7 @@ class GliEspositoriChiestiNonSparisconoInSilenzioTests(unittest.TestCase):
         self.assertIn("non esiste", esito.stderr)
 
     def test_non_chiederlo_affatto_resta_legittimo(self) -> None:
-        """Vuol dire «per questa run non ci sono espositori», ed è una scelta."""
+        """Means "no displays for this run" and is a legitimate choice."""
 
         with tempfile.TemporaryDirectory() as temporanea:
             cartella = Path(temporanea)
@@ -896,7 +877,7 @@ class GliEspositoriChiestiNonSparisconoInSilenzioTests(unittest.TestCase):
         self.assertEqual(esito.returncode, 0)
 
     def test_un_file_vuoto_resta_legittimo(self) -> None:
-        """Vuol dire «non ne sono stati trovati», ed è un'altra cosa ancora."""
+        """Means "none were found", which is a distinct, also legitimate case."""
 
         with tempfile.TemporaryDirectory() as temporanea:
             cartella = Path(temporanea)
@@ -907,10 +888,11 @@ class GliEspositoriChiestiNonSparisconoInSilenzioTests(unittest.TestCase):
 
 
 class IlFileDeiMatchRisoltiEObbligatorioTests(unittest.TestCase):
-    """Passava da `load(..., [])`: se il file non c'era, il confronto si
-    costruiva lo stesso — misurato, otto prodotti su 527 e due fornitori su
-    quattro — e usciva **0**. La pagina si apriva quasi vuota e niente diceva
-    perche'. E' il modo peggiore di fallire per un programma che gira da solo."""
+    """A missing resolved-matches file must never fall back to `load(..., [])`:
+    the comparison would still build — measured, eight products out of 527
+    with two of four suppliers — and exit 0. The page would open nearly
+    empty with no explanation, the worst way to fail for a program that runs
+    unattended."""
 
     def test_un_file_assente_non_e_una_lista_vuota(self) -> None:
         with tempfile.TemporaryDirectory() as temporanea:
@@ -929,9 +911,9 @@ class IlFileDeiMatchRisoltiEObbligatorioTests(unittest.TestCase):
         self.assertIn("non esiste", esito.stderr)
 
     def test_una_lista_vuota_fa_lo_stesso_danno_e_si_ferma_uguale(self) -> None:
-        """Misurato: un `[]` produce il sintomo identico al file mancante — otto
-        prodotti, i soli espositori, e la pagina marcata «pronta». La porta va
-        chiusa da tutti e due i lati."""
+        """Measured: an empty `[]` produces the same symptom as a missing file
+        — eight products, displays only, and the page marked "ready". Both
+        sides of this must be guarded."""
         with tempfile.TemporaryDirectory() as temporanea:
             cartella = Path(temporanea)
             (cartella / "resolved.json").write_text("[]", encoding="utf-8")
@@ -949,7 +931,7 @@ class IlFileDeiMatchRisoltiEObbligatorioTests(unittest.TestCase):
         self.assertIn("nessun prodotto", esito.stderr)
 
     def test_un_file_vero_e_pieno_passa(self) -> None:
-        """La controprova positiva: la guardia non deve fermare una run buona."""
+        """Positive control: the guard must not stop a good run."""
         with tempfile.TemporaryDirectory() as temporanea:
             cartella = Path(temporanea)
             (cartella / "resolved.json").write_text(json.dumps([{
@@ -975,9 +957,9 @@ class IlFileDeiMatchRisoltiEObbligatorioTests(unittest.TestCase):
 
 
 class DecisioniAiScartateInCimaAllaPaginaTests(unittest.TestCase):
-    """Il conteggio degli scarti esisteva solo su `stdout` di
-    `merge_match_decisions.py`, e nessuno lo legge. In elenco una coppia
-    degradata e' indistinguibile da una che l'AI non ha mai valutato."""
+    """The discard count must not live only in `merge_match_decisions.py`'s
+    `stdout`, which nobody reads: in the list, a downgraded match is
+    otherwise indistinguishable from one the AI never evaluated."""
 
     def _risolto(self, causa: str | None) -> dict[str, object]:
         match: dict[str, object] = {
@@ -1003,8 +985,8 @@ class DecisioniAiScartateInCimaAllaPaginaTests(unittest.TestCase):
         self.assertIn("2 perché il listino non era più quello", avvisi[0]["message"])
 
     def test_l_avviso_arriva_davvero_nella_pagina(self) -> None:
-        """La funzione da sola non basta: se nessuno la chiama, il conteggio
-        resta dove stava — su uno schermo che nessuno guarda."""
+        """The function alone isn't enough: if nothing calls it, the count
+        stays where it was — on a screen nobody watches."""
         with tempfile.TemporaryDirectory() as temporanea:
             cartella = Path(temporanea)
             (cartella / "resolved.json").write_text(json.dumps([{
@@ -1029,8 +1011,8 @@ class DecisioniAiScartateInCimaAllaPaginaTests(unittest.TestCase):
         self.assertIn("DECISIONI_AI_SCARTATE", codici)
 
     def test_una_causa_sconosciuta_si_conta_lo_stesso(self) -> None:
-        """Un codice nuovo introdotto a monte non deve sparire dal conteggio
-        solo perche' qui non c'e' ancora la sua frase in italiano."""
+        """A new code introduced upstream must still be counted even before
+        its Italian-language message exists here."""
         avvisi = decisioni_ai_scartate([self._risolto("QUALCOSA_DI_NUOVO")])
         self.assertEqual(avvisi[0]["count"], 1)
         self.assertIn("QUALCOSA_DI_NUOVO", avvisi[0]["message"])
@@ -1044,10 +1026,11 @@ class DecisioniAiScartateInCimaAllaPaginaTests(unittest.TestCase):
         self.assertIn("non dice su quali candidati", avvisi[0]["message"])
 
     def test_ogni_causa_scritta_dal_merge_ha_la_sua_frase(self) -> None:
-        """Il caso singolo non basta: togliere una riga da `CAUSE_DI_SCARTO`
-        restava verde, perche' `get(causa, causa)` ripiega sul codice grezzo e
-        la pagina direbbe «1 perche' DECISIONE_DI_UNA_ALTRA_RUN». Senza questa
-        prova la prossima causa nuova si dimentica allo stesso modo."""
+        """A single-case test isn't enough: removing an entry from
+        `CAUSE_DI_SCARTO` would stay green, since `get(causa, causa)` falls
+        back to the raw code and the page would print the code itself
+        instead of a sentence. This test guards against the same gap for
+        any future cause."""
         sorgente = (SCRIPTS / "merge_match_decisions.py").read_text(encoding="utf-8")
         cause = set(re.findall(r'"([A-Z_]{6,})",\s*\n\s*\)', sorgente))
         self.assertTrue(cause, "nessuna causa trovata: l'espressione non riconosce più il codice")
@@ -1055,10 +1038,10 @@ class DecisioniAiScartateInCimaAllaPaginaTests(unittest.TestCase):
 
 
 class IlFileDeiMatchRisoltiVaLettoDavveroTests(unittest.TestCase):
-    """`load_obbligatorio` controlla che il file esista e basta. Un file che
-    esiste ed e' troncato — scrittura interrotta, disco pieno — e' lo stesso
-    guasto di prima con un'altra faccia, e il confronto quasi vuoto uscirebbe
-    ancora 0 se qualcuno «addolcisse» la lettura."""
+    """`load_obbligatorio` checking only that the file exists isn't enough. A
+    file that exists but is truncated — interrupted write, full disk — is the
+    same failure in a different shape, and the near-empty comparison would
+    still exit 0 if the read were made more lenient."""
 
     def _esegui(self, contenuto: str) -> subprocess.CompletedProcess[str]:
         cartella = Path(self.enterContext(tempfile.TemporaryDirectory()))
@@ -1079,9 +1062,10 @@ class IlFileDeiMatchRisoltiVaLettoDavveroTests(unittest.TestCase):
         self.assertNotIn("Traceback", esito.stderr, "un traceback non è un messaggio")
 
     def test_un_file_troncato_si_ferma_con_l_esito_dichiarato(self) -> None:
-        """Scrittura interrotta, disco pieno: il file c'e' e non si legge. Non
-        basta che si schianti — uscendo 1 con un traceback l'orchestratore non
-        distingue questo da un guasto dell'interprete, e il contratto dice 2."""
+        """Interrupted write, full disk: the file exists but doesn't parse.
+        Crashing isn't enough — exiting 1 with a traceback would be
+        indistinguishable to the orchestrator from an interpreter fault, and
+        the contract requires exit code 2."""
         esito = self._esegui('[{"gestionale": {"source_row": 12}')
         self.assertFalse((self.cartella / "review_data.json").exists())
         self.assertEqual(esito.returncode, 2)
@@ -1096,10 +1080,10 @@ class IlFileDeiMatchRisoltiVaLettoDavveroTests(unittest.TestCase):
             )
             self.assertFalse((cartella / "review_data.json").exists())
         self.assertNotEqual(esito.returncode, 0)
-        # Non basta che si schianti: deve dirlo. Con `--resolved` facoltativo lo
-        # schianto arriva lo stesso, ma come traceback su `None.exists()`, e la
-        # riga di codice che compare nel traceback contiene la parola «resolved»
-        # — cioe' un controllo scritto male passerebbe.
+        # Crashing isn't enough: it must say why. With `--resolved` optional,
+        # the crash still happens, but as a traceback on `None.exists()`, and
+        # the traceback's source line happens to contain the word "resolved"
+        # — so a naive substring check on stderr would pass regardless.
         self.assertNotIn("Traceback", esito.stderr, "un traceback non è un messaggio")
         self.assertIn("--resolved", esito.stderr)
 

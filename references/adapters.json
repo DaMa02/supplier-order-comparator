@@ -21,8 +21,8 @@
         "sheet": "FIRST",
         "header_row": 1,
         "data_start_row": 2,
-        "note": "La riga dell'intestazione non e' fissa: nell'export vero e' la 2, sotto una riga di testata con numero e data del documento. Il numero qui e' un ripiego per capire se il foglio ha merce, non un confronto: la riga vera la trova chi riconosce.",
-        "columns_note": "Il lettore del gestionale legge per posizione (EAN da row[1], prezzo da row[7]) e non guarda le intestazioni. Le posizioni 2-11 sono le stesse nell'export vero e nel collaudo; la colonna 1 porta il marcatore di riga «C» e non ha intestazione.",
+        "note": "The header row isn't fixed: in the real export it's row 2, below a header line carrying the document number and date. The number here is a fallback to tell whether the sheet has any goods, not something to match against: the actual row is found by the recognizer.",
+        "columns_note": "The management-software reader reads by position (EAN from row[1], price from row[7]) and ignores headers. Positions 2-11 are the same in the real export and in the test fixture; column 1 carries the row marker «C» and has no header.",
         "columns": {
           "codice": 2,
           "descrizione": 4,
@@ -109,8 +109,8 @@
         "sheet": "FIRST",
         "header_row": 1,
         "data_start_row": 2,
-        "note": "«Totale» resta fuori da required: il listino vero scrive TOTALE e il collaudo TOTALI, ed e' lo stesso schema. Le obbligatorie sono le stesse che pretende il lettore dedicato.",
-        "columns_note": "Il lettore di BETULLA legge per posizione (prezzo da row[5]), quindi qui sta anche dove ogni intestazione deve trovarsi. Misurate sul listino vero dell'11 agosto 2026. Senza, una colonna in piu' in testa faceva leggere 12,00 euro al posto di 3,98 senza nessun avviso.",
+        "note": "«Totale» stays out of required: the real price list writes TOTALE and the test fixture writes TOTALI, and it's the same schema. The required columns are the same ones the dedicated reader needs.",
+        "columns_note": "BETULLA's reader reads by position (price from row[5]), so this also states where each header must sit. Measured on the real price list of 11 August 2026. Without it, one extra column at the front read 12.00 euros instead of 3.98 with no warning.",
         "columns": {
           "ean": 1,
           "codart": 2,
@@ -180,7 +180,7 @@
         "line_total": "order_quantity * pieces_per_carton * unit_price_net"
       },
       "order_write": {
-        "note": "Dove si scrive la quantita' ordinata dentro il listino BETULLA. Il lettore di BETULLA e' dedicato e non ha una field_mapping: senza questa dichiarazione la colonna C stava scritta nel codice del lanciatore, e nessun fornitore imparato avrebbe mai potuto diventare compilabile. «FIRST» qui vuol dire il primo foglio del documento: lo dichiara il registro, cioe' qualcuno che il listino l'ha guardato.",
+        "note": "Where the ordered quantity is written inside the BETULLA price list. BETULLA's reader is dedicated and has no field_mapping: without this declaration, column C was hardcoded in the launcher, and no learned supplier adapter could ever become writable. «FIRST» here means the document's first sheet: it's declared by the registry, i.e. by someone who actually looked at the price list.",
         "sheet": "FIRST",
         "header_row": 1,
         "data_start_row": 2,
@@ -201,8 +201,8 @@
         "sheet": "Listino",
         "header_row": 2,
         "data_start_row": 3,
-        "note": "Impronta imparata dal profilo di «Listino3_34.xlsx» e confermata dall'utente. Le obbligatorie sono le colonne che la mappatura usa davvero: sono quelle senza cui il lettore non puo' lavorare.",
-        "columns_note": "Dove stava ogni intestazione nel documento da cui questo schema e' stato imparato. Una colonna che si sposta declassa a SCHEMA_VARIATO: la mappatura indica colonne anche per numero e per lettera, e quelle seguono la posizione, non il nome.",
+        "note": "Fingerprint learned from the profile of «Listino3_34.xlsx» and confirmed by the user. The required columns are the ones the mapping actually uses: those the reader can't work without.",
+        "columns_note": "Where each header sat in the document this schema was learned from. A column that moves downgrades to SCHEMA_VARIATO: the mapping also gives columns by number and by letter, and those follow position, not name.",
         "columns": {
           "codart": 1,
           "desarticolo": 2,
@@ -258,7 +258,7 @@
         "unit": "C"
       },
       "order_write": {
-        "note": "Foglio e righe vengono dalla mappatura qui sopra, che e' quella confermata dall'utente; la colonna d'ordine la dichiara il registro e la mappatura deve dire la stessa cosa, altrimenti l'ordine finirebbe in una cella che nessuno ha verificato. La cella G dell'intestazione si va a leggere davvero nel documento prima di attivare la scrittura.",
+        "note": "Sheet and rows come from the mapping above, the one confirmed by the user; the order column is declared by the registry, and the mapping must agree, otherwise the order would land in a cell nobody has verified. Cell G of the header is actually read from the document before writing is enabled.",
         "from_field_mapping": true,
         "order_column": "G",
         "required_columns": [
@@ -330,7 +330,7 @@
             "sheet": "FIRST",
             "header_row": 1,
             "data_start_row": 2,
-            "note": "«ordine» e' obbligatoria: il secondo schema CIPRESSO (intestazione in riga 2, senza colonna d'ordine) non e' questo adattatore e deve restare da interpretare.",
+            "note": "«ordine» is required: the second CIPRESSO schema (header on row 2, no order column) is not this adapter and must be left for the reviewer to interpret.",
             "required": [
               "codart",
               "codean",
@@ -349,7 +349,7 @@
               "qt",
               "um"
             ],
-            "columns_note": "Misurate su 3listino_Cipresso.xlsx il 13 agosto 2026. La lettura risolve per nome, ma la colonna dove si scrive l'ordine (G) e' posizionale: una colonna in piu' in testa la sposterebbe senza cambiare nessun nome, e la compilazione scriverebbe le quantita' nella colonna sbagliata del listino da rimandare.",
+            "columns_note": "Measured on 3listino_Cipresso.xlsx on 13 August 2026. Reading resolves by name, but the column the order is written to (G) is positional: one extra column at the front would move it without changing any name, and the write step would put quantities in the wrong column of the price list sent back.",
             "columns": {
               "codart": 1,
               "desarticolo": 2,
@@ -416,7 +416,7 @@
             "display_detection_requires_review": true
           },
           "order_write": {
-            "note": "Foglio e righe vengono dalla mappatura qui sopra, che e' quella confermata dall'utente; la colonna d'ordine la dichiara il registro e la mappatura deve dire la stessa cosa, altrimenti l'ordine finirebbe in una cella che nessuno ha verificato. La cella G dell'intestazione si va a leggere davvero nel documento prima di attivare la scrittura.",
+            "note": "Sheet and rows come from the mapping above, the one confirmed by the user; the order column is declared by the registry, and the mapping must agree, otherwise the order would land in a cell nobody has verified. Cell G of the header is actually read from the document before writing is enabled.",
             "from_field_mapping": true,
             "order_column": "G",
             "expected_header": "ORDINE",
@@ -436,7 +436,7 @@
       "kind": "supplier",
       "supplier_id": "cipresso",
       "display_name": "CIPRESSO",
-      "note": "⚠ CIPRESSO manda DUE listini con schemi diversi, e questo e' il secondo. Non e' «lo stesso listino con il nome del foglio che cambia»: cambia anche la riga delle intestazioni, e c'e' una colonna in piu'. Qui: foglio unico intitolato «Listino al <data>», intestazioni alla riga 1, e la colonna ORDINE gia' pronta in G. In «cipresso_v1»: foglio «Listino», una riga di formule sopra, intestazioni alla riga 2, nessuna colonna ORDINE. I due si distinguono da soli perche' «ordine» qui e' fra le obbligatorie: un documento senza quella colonna non arriva mai a questa voce, e uno che ce l'ha non e' letto da quella. Chi sceglie e' «registro.riconosci», che verifica tutti i candidati e prende quello che il documento lo legge davvero.",
+      "note": "⚠ CIPRESSO sends TWO price lists with different schemas, and this is the second one. It isn't «the same price list with a changing sheet name»: the header row also changes, and there's one extra column. Here: a single sheet titled «Listino al <date>», headers on row 1, and the ORDINE column already in place at G. In «cipresso_v1»: sheet «Listino», one row of formulas above, headers on row 2, no ORDINE column. The two tell themselves apart because «ordine» is among the required columns here: a document without that column never reaches this entry, and one that has it isn't read by the other. The one that picks is «registro.riconosci», which checks every candidate and takes the one the document actually reads with.",
       "file_types": [
         ".xlsx"
       ],
@@ -445,8 +445,8 @@
         "sheet": "FIRST",
         "header_row": 1,
         "data_start_row": 2,
-        "note": "«FIRST» e non il nome del foglio: quel nome porta la data del listino e cambia ogni settimana, il documento ha un foglio solo, e chi legge davvero («prepare_manifest_sources.selected_sheet») su «FIRST» prende il foglio numero uno. Dichiarare «Listino al 10-08-2026» avrebbe fatto scadere l'adattatore il lunedi' dopo. ⚠ Non si usa «sheet_selector»: sta scritto in questo registro da sempre e non lo legge nessuna riga di codice.",
-        "columns_note": "Dove sta ogni intestazione. Misurate su «3listino_Cipresso.xlsx» il 22 agosto 2026. Una colonna che si sposta declassa a SCHEMA_VARIATO, ed e' voluto: la mappatura indica la colonna d'ordine per lettera, e quella segue la posizione, non il nome.",
+        "note": "«FIRST», not the sheet's name: that name carries the price list's date and changes every week; the document has a single sheet, and the actual reader («prepare_manifest_sources.selected_sheet») takes sheet number one on «FIRST». Declaring «Listino al 10-08-2026» would have made the adapter expire the following Monday. ⚠ «sheet_selector» isn't used: it has been written in this registry all along, and no line of code reads it.",
+        "columns_note": "Where each header sits. Measured on «3listino_Cipresso.xlsx» on 22 August 2026. A column that moves downgrades to SCHEMA_VARIATO, and that's intentional: the mapping gives the order column by letter, and that follows position, not name.",
         "columns": {
           "codart": 1,
           "desarticolo": 2,
@@ -496,7 +496,7 @@
         "order_column": "G"
       },
       "order_write": {
-        "note": "Foglio e righe vengono dalla mappatura qui sopra; la colonna d'ordine la dichiara il registro e la mappatura deve dire la stessa cosa. Qui l'intestazione ORDINE c'e' davvero, e si va a leggere nel documento prima di attivare la scrittura: e' la differenza con «cipresso_v1», dove sopra la G non c'e' niente.",
+        "note": "Sheet and rows come from the mapping above; the order column is declared by the registry and the mapping must agree. Here the ORDINE header genuinely exists, and it's read from the document before writing is enabled: that's the difference from «cipresso_v1», where there's nothing above column G.",
         "from_field_mapping": true,
         "order_column": "G",
         "expected_header": "ORDINE",
@@ -555,7 +555,7 @@
       },
       "column_shape_signature": {
         "kind": "shape",
-        "note": "Il listino Larice non ha nessuna riga di intestazione e i fogli si chiamano «Canvass 28 06-10lug»: non c'e' niente da leggere per nome. Le colonne si riconoscono da come sono popolate.",
+        "note": "The Larice price list has no header row at all, and its sheets are named «Canvass 28 06-10lug»: there's nothing to read by name. Columns are recognized from how they're populated.",
         "min_columns": 18,
         "required_columns": [
           2,
@@ -644,7 +644,7 @@
         "text_discount": "no discount"
       },
       "commercial_conditions": {
-        "note": "Dove LARICE scrive le sue condizioni commerciali e come sono disposte. «blocchi» vuol dire che una condizione occupa piu' righe: l'intestazione con la quantita' da acquistare, poi la merce ammessa, poi la riga con l'omaggio. I nomi sotto «fields» sono quelli delle colonne dichiarate in «column_map»: la posizione sta scritta in un posto solo, cosi' quando l'utente conferma una variazione di schema le condizioni seguono i prezzi invece di restare indietro di una settimana. Misurato sul listino 33-34 07-21 ago il 15 agosto 2026: 13 intestazioni di soglia e 13 righe premio, tutte in colonna G, tutte ricomposte complete.",
+        "note": "Where LARICE writes its commercial conditions and how they're laid out. «blocchi» means a condition spans several rows: the header with the quantity to buy, then the eligible goods, then the free-goods row. The names under «fields» are the columns declared in «column_map»: the position is written in a single place, so when the user confirms a schema change the conditions follow the prices instead of lagging a week behind. Measured on the 33-34 07-21 Aug price list on 15 August 2026: 13 threshold headers and 13 free-goods rows, all in column G, all reassembled in full.",
         "layout": "blocchi",
         "sheet": "FIRST",
         "data_start_row": 1,
@@ -658,7 +658,7 @@
       },
       "row_markers": {
         "field": "discount_raw",
-        "note": "I testi che compaiono nella colonna sconto. Sono questi i codici ammessi: un testo diverso diventa un avviso, perche' vuol dire che il fornitore ha introdotto una convenzione che nessuno ha ancora letto.",
+        "note": "The texts that appear in the discount column. These are the codes allowed: any other text raises a warning, because it means the supplier has introduced a convention nobody has read yet.",
         "codes": {
           "TP": {
             "means": "Prezzo di transito: nessuno sconto in colonna, la riga è merce normale.",
@@ -672,7 +672,7 @@
         }
       },
       "order_write": {
-        "note": "Il listino Larice non ha nessuna riga di intestazione: non c'e' niente da verificare sopra la colonna, e i dati cominciano alla riga 2. «FIRST» e' il primo foglio del documento.",
+        "note": "The Larice price list has no header row: there's nothing to check above the column, and data starts on row 2. «FIRST» is the document's first sheet.",
         "sheet": "FIRST",
         "data_start_row": 2,
         "order_column": "D"
@@ -684,7 +684,7 @@
       "kind": "supplier",
       "supplier_id": "larice",
       "display_name": "LARICE",
-      "note": "⚠ LARICE manda DUE canvass con schemi diversi, e questo e' il secondo: quello che arriva dal 4 settembre 2026 («New Larice N°37(v.0)»), intestato «Larice Ingrosso Srl». Non e' il listino di «larice_v1» con una colonna spostata: quello non ha nessuna riga di intestazione, tiene l'EAN in R e i prezzi in O; questo ha le intestazioni vere alla riga 11, l'EAN in B, il prezzo di listino in I e il netto — sconto gia' dentro — in K. I due non si confondono perche' le firme si escludono a vicenda: «larice_v1» pretende almeno 18 colonne e questo foglio ne ha 16, questo pretende le sue intestazioni e quello non ne ha nessuna. Si aggiunge invece di sostituire perche' il fornitore puo' tornare al formato di prima da una settimana all'altra.",
+      "note": "⚠ LARICE sends TWO canvasses with different schemas, and this is the second one: the one that has arrived since 4 September 2026 («New Larice N°37(v.0)»), headed «Larice Ingrosso Srl». It isn't the «larice_v1» price list with one column shifted: that one has no header row at all, keeps the EAN in R and prices in O; this one has real headers on row 11, the EAN in B, the list price in I, and the net price — discount already applied — in K. The two don't get confused because their signatures rule each other out: «larice_v1» requires at least 18 columns and this sheet has 16, this one requires its own headers and the other has none. It's added rather than replacing the other because the supplier can revert to the previous format from one week to the next.",
       "file_types": [
         ".xlsx"
       ],
@@ -693,8 +693,8 @@
         "sheet": "FIRST",
         "header_row": 11,
         "data_start_row": 12,
-        "note": "«FIRST» perche' il foglio si chiama «Canvass» ma il documento ne ha uno solo, e il nome e' gia' cambiato una volta («Canvass 28 06-10lug» sul formato vecchio). Sopra la riga 11 c'e' il blocco con i dati del fornitore, quelli del cliente e i quattro totali: sono dieci righe, e se un giorno diventano nove il documento declassa a SCHEMA_VARIATO e lo dice, invece di leggere le colonne di traverso in silenzio.",
-        "columns_note": "Misurate su «New Larice N°37(v.0)» il 4 settembre 2026: 6.548 righe, 16 colonne. La colonna F non ha intestazione — ci sta la parola PROMO sulle righe in promozione — e la A e' vuota: per questo non compaiono qui.",
+        "note": "«FIRST» because the sheet is called «Canvass» but the document has only one, and the name has already changed once («Canvass 28 06-10lug» on the old format). Above row 11 sits the block with the supplier's data, the customer's, and the four totals: that's ten rows, and if one day it becomes nine the document downgrades to SCHEMA_VARIATO and says so, instead of silently reading the columns off by one.",
+        "columns_note": "Measured on «New Larice N°37(v.0)» on 4 September 2026: 6,548 rows, 16 columns. Column F has no header — it carries the word PROMO on rows under promotion — and column A is empty: that's why neither appears here.",
         "columns": {
           "codiceean": 2,
           "codice": 3,
@@ -754,7 +754,7 @@
         "sheet": "FIRST",
         "header_row": 11,
         "data_start_row": 12,
-        "note": "Il prezzo su cui si confronta e' NETTO (K) e non LISTINO (I): la percentuale della colonna SCONTO e' gia' applicata dentro K dal fornitore. Dichiarare «unit_price_pre_discount» accenderebbe il ramo che ricalcola lo sconto e lo applicherebbe una seconda volta.",
+        "note": "The price the comparison uses is NETTO (K), not LISTINO (I): the SCONTO column's percentage is already applied inside K by the supplier. Declaring «unit_price_pre_discount» would trigger the branch that recomputes the discount and apply it a second time.",
         "columns": {
           "ean": "CODICE EAN",
           "supplier_code": "CODICE",
@@ -771,7 +771,7 @@
         "order_column": "D",
         "row_markers": {
           "field": "discount_raw",
-          "note": "Questo canvass la riga premio non la marca: la colonna F dice PROMO su tutta la merce in promozione, premio compreso. La riconosce il motore delle offerte dal testo — «IN OMAGGIO 1CT ...» — ed e' l'unico modo che c'e'. Misurato il 4 settembre 2026: sei righe premio su 6.537, zero falsi positivi, e cinque delle sei ripetono l'EAN di un articolo gia' a listino a prezzo pieno (8019580330416 sta a 0,68 come merce e a 0,65 come regalo). Senza questa riga il confronto sceglie il prezzo del regalo.",
+          "note": "This canvass doesn't flag the free-goods row: column F says PROMO on all goods under promotion, free goods included. The promotion engine recognizes it from the text — «IN OMAGGIO 1CT ...» — and that's the only way there is. Measured on 4 September 2026: six free-goods rows out of 6,537, zero false positives, and five of the six repeat the EAN of an item already in the price list at full price (8019580330416 sits at 0.68 as goods and 0.65 as the free item). Without this row, the comparison picks the free item's price.",
           "reward_rows": {
             "means": "Riga premio di una soglia con omaggio: ha codice, EAN e descrizione veri, e anche un prezzo, ma non e' merce acquistabile.",
             "orderable": false,
@@ -780,7 +780,7 @@
         }
       },
       "order_write": {
-        "note": "La colonna d'ordine e' la D, sotto l'intestazione QTA. «header_row» e «data_start_row» sono quello che valevano il 4 settembre 2026: la regola vera e' «expected_header_search», che va a cercare QTA nel documento di oggi. Nel file misurato quella parola compare una volta sola in colonna D. Se non c'e', o ce ne sono due, si tengono i numeri e la verifica rifiuta.",
+        "note": "The order column is D, under the QTA header. «header_row» and «data_start_row» are what held true on 4 September 2026: the actual rule is «expected_header_search», which searches for QTA in today's document. In the measured file, that word appears exactly once, in column D. If it's missing, or appears twice, the stored numbers are kept and validation rejects the document.",
         "sheet": "FIRST",
         "header_row": 11,
         "data_start_row": 12,
@@ -789,7 +789,7 @@
         "expected_header_search": true
       },
       "commercial_conditions": {
-        "note": "Le condizioni stanno disposte come sul canvass vecchio — l'intestazione con la quantita' da acquistare, poi la merce ammessa, poi la riga con l'omaggio — ma qui stanno tutte nella stessa colonna E, nome del premio compreso: per questo «text» e «reward» dichiarano lo stesso campo. Misurate il 4 settembre 2026 su «New Larice N°37(v.0)»: sei intestazioni di soglia e sei righe premio, tutte ricomposte complete.",
+        "note": "The conditions are laid out as on the old canvass — the header with the quantity to buy, then the eligible goods, then the free-goods row — but here they all sit in the same column E, free-item name included: that's why «text» and «reward» declare the same field. Measured on 4 September 2026 on «New Larice N°37(v.0)»: six threshold headers and six free-goods rows, all reassembled in full.",
         "layout": "blocchi",
         "sheet": "FIRST",
         "data_start_row": 1,
@@ -843,7 +843,7 @@
         ".xls",
         ".xlsx"
       ],
-      "note": "Il formato lo decidono i primi byte del file, non l'estensione: un .xls si legge con app/xls_reader.py, un .xlsx con openpyxl. La firma di questo listino sono le intestazioni, non il nome del file: Noce manda documenti chiamati per esempio formattato_104233.xls.",
+      "note": "The format is decided by the file's first bytes, not its extension: an .xls is read with app/xls_reader.py, an .xlsx with openpyxl. This price list's signature is its headers, not the file name: Noce sends documents named, for example, formattato_104233.xls.",
       "sheet_selector": {
         "preferred_name": "Foglio1"
       },
@@ -852,7 +852,7 @@
         "sheet": "Foglio1",
         "header_row": 5,
         "data_start_row": 6,
-        "note": "L'intestazione sta alla riga 5, e alla riga 4 c'e' una nota («i prezzi offerta sono in grassetto») che intestazione non e'. «descrizioneofferta» sta fra le obbligatorie perche' da quando la mappatura la legge il lettore la pretende: senza, la lettura si fermerebbe a meta' file invece di dire che il documento non ha la forma attesa.",
+        "note": "The header sits on row 5, and row 4 carries a note («offer prices are in bold») that isn't a header. «descrizioneofferta» is among the required columns because, ever since the mapping reads it, the reader needs it: without it, reading would stop halfway through the file instead of reporting that the document doesn't have the expected shape.",
         "required": [
           "cat",
           "codice",
@@ -884,7 +884,7 @@
           "stratixpal",
           "variato"
         ],
-        "columns_note": "Misurate su formattato_104233.xls il 13 agosto 2026 (la colonna A non ha intestazione). La lettura risolve per nome, ma la colonna d'ordine (I, «quantita») si compila in posizione dentro il loro .xls: una colonna in piu' in testa sposterebbe tutto senza cambiare nessun nome.",
+        "columns_note": "Measured on formattato_104233.xls on 13 August 2026 (column A has no header). Reading resolves by name, but the order column (I, «quantita») is written by position inside their .xls: one extra column at the front would shift everything without changing any name.",
         "columns": {
           "codiceabarre": 2,
           "codice": 3,
@@ -969,7 +969,7 @@
           "vat": "Iva",
           "availability": "descrizione_offerta"
         },
-        "availability_note": "La colonna «descrizione_offerta» (P) e' dove Noce scrive le condizioni dell'offerta. Senza questa mappatura il campo availability restava vuoto su tutti i record e i rilevatori di promozioni non vedevano mai una riga di questo listino. Nel file del 6 agosto 2026 la colonna e' vuota su tutte e 8851 le righe tenute, quindi la mappatura non cambia nulla oggi: apre il canale per quando il fornitore la compilera'.",
+        "availability_note": "The «descrizione_offerta» column (P) is where Noce writes its offer conditions. Without this mapping, the availability field stayed empty on every record, and the promotion detectors never saw a row from this price list. In the 6 August 2026 file, the column is empty on all 8,851 rows kept, so the mapping changes nothing today: it opens the channel for when the supplier starts filling it in.",
         "order_column": "I",
         "assume_available": true,
         "text_columns": [
@@ -987,7 +987,7 @@
             "field": "category",
             "equals": "FOOD",
             "label": "food",
-            "reason": "L'utente non tratta l'alimentare: le righe FOOD non entrano nel confronto."
+            "reason": "The user doesn't carry food items: FOOD rows are excluded from the comparison."
           }
         ],
         "expiry_from_description": {
@@ -1003,10 +1003,10 @@
         "price_basis": "net_unit_piece",
         "order_quantity": "cartons",
         "line_total": "order_quantity * pieces_per_carton * unit_price_net",
-        "line_total_source": "La colonna Importo del listino contiene la formula =I*H*E, cioe' cartoni ordinati per prezzo al pezzo per pezzi per cartone: e' il listino stesso a dire che il prezzo e' al pezzo e l'ordine in cartoni."
+        "line_total_source": "The price list's Importo column holds the formula =I*H*E, i.e. cartons ordered times price per piece times pieces per carton: the price list itself states that the price is per piece and the order is in cartons."
       },
       "order_write": {
-        "note": "A Noce si rimanda il **loro** file e non una conversione: la copia si scrive in posizione dentro il .xls, quattro byte per cella. Foglio, righe e nome della colonna dell'EAN sono quelli della field_mapping qui sopra.",
+        "note": "Noce gets back **their own** file, not a conversion: the copy is written in place inside the .xls, four bytes per cell. Sheet, rows and the EAN column name are the ones from the field_mapping above.",
         "from_field_mapping": true,
         "order_column": "I",
         "mode": "patch_xls_in_posizione",
@@ -1029,7 +1029,7 @@
         "sheet": null,
         "header_row": 1,
         "data_start_row": 2,
-        "note": "Un CSV non ha fogli: «sheet» resta nullo. «variation» non e' obbligatoria perche' compare solo quando il fornitore segnala una variazione.",
+        "note": "A CSV has no sheets: «sheet» stays null. «variation» isn't required because it only appears when the supplier flags a change.",
         "required": [
           "availability",
           "catalogpage",
@@ -1095,7 +1095,7 @@
       },
       "column_shape_signature": {
         "kind": "shape",
-        "note": "Il foglio delle offerte arriva senza nessuna riga di intestazione: sopra i prodotti ci sono righe vuote e la sola parola ORDINE in colonna H. Non c'e' niente da leggere per nome, quindi le colonne si riconoscono da come sono popolate. ⚠ «Ci sono prezzi, pezzi per collo e codici a barre» non identifica niente: lo dicono quasi tutti i listini. A identificare questo foglio sono tre cose insieme — le colonne A-F piene, la G VUOTA, e in H una cella sola con scritto ORDINE. Senza la G vuota, un listino qualunque con l'intestazione alla riga 3 entrava qui dentro e diventava «OFFERTE» (misurato il 21 agosto 2026 su due fogli costruiti apposta).",
+        "note": "The offers sheet arrives with no header row at all: above the products there are blank rows and just the word ORDINE in column H. There's nothing to read by name, so columns are recognized from how they're populated. ⚠ «There are prices, pieces per carton and barcodes» identifies nothing: almost every price list has those. What identifies this sheet is three things together — columns A-F filled, G EMPTY, and a single cell in H reading ORDINE. Without the empty G, any price list with its header on row 3 would land here and become «OFFERTE» (measured on 21 August 2026 on two sheets built specifically for the test).",
         "min_columns": 8,
         "required_columns": [
           1,
@@ -1203,7 +1203,7 @@
         "order_column": "H"
       },
       "order_write": {
-        "note": "La colonna d'ordine e' la H, e sopra ci sta la sola parola ORDINE: e' l'unica intestazione del foglio. Quante righe vuote ci siano sopra di lei cambia di mese in mese, quindi «header_row» e «data_start_row» qui sotto sono quello che valevano il giorno in cui l'adattatore e' stato scritto, non una regola: la regola e' «expected_header_search», che va a cercare la parola nel documento di oggi. Se non c'e', o ce ne sono due, si tengono i numeri e la verifica rifiuta.",
+        "note": "The order column is H, and above it sits just the word ORDINE: it's the sheet's only header. How many blank rows sit above it changes month to month, so «header_row» and «data_start_row» below are what held true on the day the adapter was written, not a rule: the rule is «expected_header_search», which searches for the word in today's document. If it's missing, or appears twice, the stored numbers are kept and validation rejects the document.",
         "sheet": "FIRST",
         "header_row": 3,
         "data_start_row": 4,

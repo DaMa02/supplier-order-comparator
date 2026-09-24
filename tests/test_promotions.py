@@ -86,12 +86,12 @@ def review_data(*, quantity_one=0, quantity_two=0, supplier="noce"):
 
 
 class LaFraseDellaSogliaTests(unittest.TestCase):
-    """Quello che la scheda del prodotto dice davvero, parola per parola.
+    """The exact wording of the threshold message shown on the product card.
 
-    ⚠ Il 15 agosto 2026, letto sulla scheda di NEVAL SALVIETTE STRUCCANTI:
-    «dici 10 cartoni = 1 cartone omaggio, ma non e' vero».  Non lo era: la
-    soglia contava su un gruppo di prodotti e l'omaggio era un cartone di sale
-    per lavastoviglie.  Nessun test guardava questa frase.
+    A message that names the wrong product or the wrong quantity source is
+    worse than no message: the threshold can count across a group of
+    products while the reward is a single unrelated item, and the wording
+    must make both facts clear rather than implying a 1-to-1 relationship.
     """
 
     def soglia(self):
@@ -112,7 +112,8 @@ class LaFraseDellaSogliaTests(unittest.TestCase):
         self.assertIn("1 cartone di RESALINA SALE LAVASTOVIGLIE KG1 in omaggio", stato["message"])
 
     def test_la_regola_dice_dove_si_contano_i_cartoni(self) -> None:
-        """Su una scheda sola, «ne hai 10» sembrava riferito a quel prodotto."""
+        """On a single product's card, the message must make clear the
+        quantity is a group total, not just that product's own count."""
 
         stato = calculate_promotion_state(self.soglia(), review_data(quantity_one=10))
 
@@ -190,12 +191,10 @@ class PromotionDetectionTests(unittest.TestCase):
         self.assertIn("ROBINET DEO SPRAY", robinet["reward"]["description"])
 
     def test_le_soglie_sono_ripetibili_anche_senza_la_parola_ogni(self):
-        """La ripetibilita' e' una condizione del rapporto commerciale.
-
-        Dedurla dalla parola «OGNI» significava leggerla in un listino solo:
-        nei quattro listini Larice «OGNI» non compare mai, quindi tutte le
-        soglie risultavano valide una volta sola e con quaranta cartoni su una
-        soglia da venti il programma dichiarava un omaggio invece di due.
+        """Repeatability is a property of the deal, not of a specific word in
+        the text: inferring it only from "OGNI" ("every") would miss it in
+        price lists that never use that word, capping a threshold that
+        should apply repeatedly at a single reward.
         """
 
         con_ogni = detect_threshold_gift(
@@ -223,10 +222,8 @@ class PromotionDetectionTests(unittest.TestCase):
             self.assertEqual(state["remaining_qty"], 5)
 
     def test_il_premio_in_un_collo_intero_non_perde_lettere(self):
-        """«1 COLLO» finiva letto come «COLL», e la descrizione partiva da «O».
-
-        Il testo e' quello vero del listino Noce del 5 agosto 2026.
-        """
+        """The unit word "COLLO" must be matched whole, not truncated to
+        "COLL" with the reward description then starting from a stray "O"."""
 
         promotion = detect_threshold_gift(
             supplier="noce",
@@ -244,13 +241,11 @@ class PromotionDetectionTests(unittest.TestCase):
         self.assertEqual(promotion["reward"]["description"], "NEVAL DOCCIA MEN BOOST ML.250")
 
     def test_il_premio_in_un_cartone_o_in_un_pezzo_non_perde_lettere(self):
-        """La stessa falla di «1 COLLO», rimasta aperta su CARTONE e PEZZO.
-
-        «IN OMAGGIO 1 CARTONE DI NEVAL DEO» usciva con unita' «carton» — che
-        non esiste nel programma e passava cosi' com'era — e descrizione «E DI
-        NEVAL DEO». La promozione non cambia il totale, ma e' la frase su cui
-        si decide se conviene arrivare alla soglia: leggere «1 carton di E DI
-        NEVAL DEO» vuol dire non sapere che merce si prende in omaggio.
+        """Same word-truncation risk as "COLLO", checked for "CARTONE" and
+        "PEZZO": a truncated unit (e.g. "carton", not a value the program
+        recognizes) also truncates the reward description that follows it,
+        and the description is what the user reads to judge whether the
+        deal is worth reaching.
         """
 
         for testo, unita in (
@@ -267,8 +262,8 @@ class PromotionDetectionTests(unittest.TestCase):
                 self.assertEqual(promotion["reward"]["description"], "NEVAL DEO")
 
     def test_un_premio_senza_unita_resta_senza_unita(self):
-        """Il `\\b` aggiunto dopo il gruppo dell'unita' non deve rendere
-        obbligatoria un'unita' che il testo non dichiara."""
+        """The `\\b` word-boundary after the unit group must not force a
+        unit to be present when the text doesn't declare one."""
 
         promotion = detect_threshold_gift(
             supplier="quercia", source_reference="xlsx:neval",
@@ -279,9 +274,9 @@ class PromotionDetectionTests(unittest.TestCase):
         self.assertEqual(promotion["reward"]["description"], "NEVAL DEO")
 
     def test_una_soglia_di_un_cartone_solo_e_una_soglia(self):
-        """«OGNI 1 CARTONE» sta nel listino QUERCIA del 6 agosto 2026 e non
-        produceva nessuna soglia: `CARTONI?` si fermava a «CARTON» e il
-        confine di parola subito dopo non trovava piu' niente."""
+        """A singular unit ("OGNI 1 CARTONE") must still match: the pattern
+        `CARTONI?` stops at "CARTON", and a word boundary applied right
+        after that would fail to match the singular form."""
 
         promotion = detect_threshold_gift(
             supplier="quercia", source_reference="xlsx:acqua",
@@ -292,11 +287,11 @@ class PromotionDetectionTests(unittest.TestCase):
         self.assertEqual(promotion["reward"]["description"], "ACQUA ALLE ROSE")
 
     def test_una_grafia_reale_del_verbo_e_riconosciuta_ovunque(self):
-        """«ACQUISTANO» (senza la D) sta nel listino Larice del 3-6 agosto.
-
-        Il rilevatore lo interpretava gia'; il marcatore che decide se un
-        testo e' promozionale no, e un testo senza altre parole chiave
-        spariva.
+        """"ACQUISTANO" (missing a D) must be recognized as promotional text
+        everywhere it's checked, not only by the threshold detector: the
+        general marker that decides whether a text is promotional at all
+        must also accept it, or a text with no other promotional keyword
+        would be dropped before the detector even runs.
         """
 
         promotion = detect_threshold_gift(
@@ -333,14 +328,13 @@ class PromotionDetectionTests(unittest.TestCase):
         self.assertEqual(result["effective_price"], 10)
 
     def test_una_coppia_governata_da_una_misura_non_diventa_pezzi(self):
-        """Undici testi veri, dai dieci listini storici: sette sono misure.
-
-        «500+100 Omaggio=600 Ml» sono millilitri e «MT.16+4 GRATIS» sono
-        metri: dichiararli «unita' aggiuntive» con certezza alta era un numero
-        inventato, e arrivava all'utente come un dato certo. La grandezza dei
-        numeri non separa i due gruppi — «8+2» e' giusto sui rasoi e sbagliato
-        sull'alluminio — quindi l'unico discriminante e' l'unita' di misura
-        attaccata alla coppia.
+        """An "N+M" pair attached to a unit of measure (e.g. "500+100
+        Omaggio=600 Ml", "MT.16+4 GRATIS") is a volume or length split, not
+        M extra pieces: reporting it as extra units with high certainty
+        would present a made-up number to the user as a fact. The magnitude
+        of N and M doesn't distinguish the two cases — "8+2" is correct as
+        pieces for razors but wrong for aluminum foil — so the unit of
+        measure attached to the pair is the only reliable signal.
         """
 
         misure = [
@@ -375,7 +369,9 @@ class PromotionDetectionTests(unittest.TestCase):
                 self.assertEqual(promotion["reward"]["qty"], extra)
 
     def test_una_misura_scartata_resta_visibile_come_offerta_ambigua(self):
-        """Scartarla dal rilevatore non vuol dire farla sparire dalla pagina."""
+        """Rejecting a measure-governed pair from the included-pack detector
+        must not make it disappear from the page: it still needs to surface
+        for manual review."""
 
         promotions = detect_promotions(
             supplier="betulla",
@@ -392,12 +388,10 @@ class PromotionDetectionTests(unittest.TestCase):
         self.assertNotIn("unità aggiuntive", promotions[0]["reward"]["description"] or "")
 
     def test_i_formati_di_confezione_non_diventano_pezzi(self):
-        """Banco di controllo indipendente: descrizioni con una coppia N+M che
-        il marcatore promozionale non guarda nemmeno.
-
-        Sono formati di confezione, non promozioni; se un giorno il fornitore
-        ci aggiunge «GRATIS» devono continuare a valere per quello che sono.
-        Vengono dai dieci listini storici.
+        """Independent control set: descriptions with an "N+M" pair that the
+        promotional-text marker doesn't even flag as promotional, because
+        they're packaging formats, not deals. They must keep reading as
+        packaging formats even if a supplier later appends "GRATIS" to one.
         """
 
         formati_di_contenuto = [
@@ -537,12 +531,11 @@ class PromotionStateAndDecorationTests(unittest.TestCase):
         self.assertEqual(earned["reward_count"], 1)
 
     def test_il_messaggio_dice_quanto_manca_al_prossimo_omaggio(self):
-        """«Omaggio ottenuto» e' l'informazione che non serve a nessuno.
+        """"Reward earned" alone tells the operator nothing actionable.
 
-        Con una soglia ripetibile chi ordina deve sapere se conviene
-        aggiungere qualche cartone: il messaggio ripete la regola, dice quanto
-        ha in mano e quanto manca al premio successivo. E' il caso vero del
-        listino del 3-6 agosto: soglia 10, quarantadue cartoni scelti.
+        For a repeatable threshold, the message must state the rule, the
+        quantity already selected, and how much more is needed for the next
+        reward, so the operator can decide whether to round the order up.
         """
 
         promotion = detect_threshold_gift(
@@ -566,9 +559,9 @@ class PromotionStateAndDecorationTests(unittest.TestCase):
         self.assertNotIn("Omaggio ottenuto", state["message"])
 
     def test_l_ottavo_omaggio_non_si_dice_il_ottavo(self):
-        """Sulla pagina vera, LARICE, 19 agosto 2026: «te ne mancano 10
-        cartoni per il ottavo». E' l'unico ordinale della tabella che comincia
-        per vocale, e nessuno se n'era accorto."""
+        """"Ottavo" ("eighth") is the one ordinal in the lookup table that
+        starts with a vowel, so the article before it must elide to "l'"
+        ("per l'ottavo"), not read "per il ottavo"."""
 
         promotion = detect_threshold_gift(
             supplier="noce",

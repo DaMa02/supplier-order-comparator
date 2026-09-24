@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Parse an AI-reviewed manifest through known or declarative adapters.
+"""Parse an input manifest through known or declarative adapters.
 
 Run ``validate_input_manifest.py`` first.  Known unchanged schemas reuse the
 tested readers in ``prepare_sources.py``; varied/new schemas require an explicit
@@ -23,8 +23,7 @@ from typing import Any, Callable
 from openpyxl import load_workbook
 from openpyxl.utils import column_index_from_string, get_column_letter
 
-# Il lettore dei .xls e' nella cartella dell'applicazione e usa soltanto la
-# libreria standard.
+# The .xls reader lives in the app folder and uses only the standard library.
 APP_DIR = Path(__file__).resolve().parents[1] / "app"
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
@@ -57,8 +56,8 @@ from prepare_sources import (
     write_json,
 )
 from detect_displays import analyse_workbook
-# La forma del marcatore la verifica il validatore del manifest, non una
-# seconda copia scritta qui: chi legge e chi valida devono dire la stessa cosa.
+# The marker shape is validated by the manifest validator, not a second copy
+# here: the reader and the validator must agree.
 from validate_input_manifest import errori_del_marcatore
 
 
@@ -73,18 +72,18 @@ def load_json(path: Path) -> Any:
 
 
 def column_number(value: Any, header: list[Any] | None = None) -> int:
-    """Traduce la colonna dichiarata nella mappatura in un numero di colonna.
+    """Resolve a mapping's declared column to a 1-based column number.
 
-    Quando il foglio ha una riga di intestazione, il nome dichiarato si cerca
-    li' dentro e basta: **niente ripiego sulle lettere**.  «cat» e «Iva» sono
-    nomi di colonna veri del listino Noce e insieme riferimenti di colonna
-    Excel validi (CAT = 2074, IVA = 6657): con il ripiego, un fornitore che
-    rinomina una colonna non produrrebbe un errore ma la lettura silenziosa di
-    una colonna vuota, e le 8.292 righe FOOD entrerebbero nel confronto senza
-    che nessuno se ne accorga.  Fermarsi dicendo che cosa manca costa un
-    messaggio; leggere la colonna sbagliata costa un ordine.
+    When the sheet has a header row, the declared name is looked up there
+    only, with no fallback to spreadsheet letters: names like "cat" or "Iva"
+    are real column headers in one supplier's list and also valid Excel
+    column references (CAT = 2074, IVA = 6657). With a letter fallback, a
+    renamed column wouldn't raise an error, it would silently read an empty
+    column and let thousands of unrelated rows into the comparison unnoticed.
+    Stopping with a clear message costs a click; reading the wrong column
+    costs a wrong order.
 
-    Le lettere restano ammesse solo dove non c'e' un'intestazione da leggere.
+    Letters are accepted only where there is no header row to look names up in.
     """
     if isinstance(value, int) and value >= 1:
         return value
@@ -117,23 +116,23 @@ def mapped_value(row: tuple[Any, ...] | list[Any], columns: dict[str, int], fiel
 
 
 def _testo_confrontabile(valore: Any) -> str:
-    """Il testo di una cella ridotto a cio' che si puo' confrontare.
+    """Normalize a cell's text for comparison (collapse whitespace, casefold).
 
-    Spazi multipli e maiuscole non fanno un'altra riga: un fornitore che scrive
-    «LISTINO » con uno spazio in coda manda lo stesso documento.
+    Extra spaces and case don't make a different marker: a trailing space in
+    the file shouldn't defeat the match.
     """
 
     return " ".join(str(valore if valore is not None else "").split()).casefold()
 
 
 def colonna_del_marcatore(spec: Any) -> int:
-    """La colonna in cui cercare il marcatore: un numero, oppure una lettera.
+    """Resolve a data-start marker's column: a number, or a letter.
 
-    Qui le lettere sono ammesse — al contrario di `column_number`, dove sono
-    vietate perche' «cat» e «Iva» sono nomi di colonna veri di un listino e
-    insieme riferimenti Excel validi.  Il marcatore non nomina un campo dei
-    dati: sta **fuori** dalla tabella, in una riga che non ha intestazione, e
-    l'unico modo di indicarlo e' la posizione.
+    Letters are allowed here, unlike in `column_number`, where they're
+    rejected because names like "cat" or "Iva" are both real column headers
+    and valid Excel column references. The marker doesn't name a data field:
+    it sits outside the table, on a row with no header, so position is the
+    only way to address it.
     """
 
     if isinstance(spec, bool):
@@ -152,15 +151,13 @@ def colonna_del_marcatore(spec: Any) -> int:
 
 
 def riga_dopo_il_marcatore(rows: list[tuple[Any, ...]], marker: dict[str, Any], nome_file: str) -> int:
-    """Dove cominciano i prodotti secondo il marcatore, ricalcolato su QUESTO file.
+    """Return where products start per the marker, recomputed on this file.
 
-    ⚠ **Non esiste un ripiego.**  Se il marcatore non si trova, o si trova piu'
-    di una volta, la lettura si ferma e dice che cosa cercava e dove.
-    Ripiegare sul numero di riga della settimana scorsa e' esattamente il
-    difetto che questa chiave chiude: su QUERCIA le righe 7-67 sono un blocco
-    promozionale con prezzi che sono valorizzazioni di omaggi, la settimana
-    prossima saranno di piu' o di meno, e un «69» congelato porterebbe dentro
-    l'ordine righe fantasma — o ne perderebbe di vere — senza una parola.
+    There is no fallback: if the marker isn't found, or is found more than
+    once, reading stops and reports what it searched for and where. Falling
+    back to last week's row number is exactly the defect this feature closes:
+    a promotional block can grow or shrink week to week, and a frozen row
+    number would silently pull in phantom rows or drop real ones.
     """
 
     problemi = errori_del_marcatore(marker)
@@ -216,13 +213,13 @@ def riga_dopo_il_marcatore(rows: list[tuple[Any, ...]], marker: dict[str, Any], 
 
 def prima_riga_dei_dati(rows: list[tuple[Any, ...]], mapping: dict[str, Any],
                         header_row: int, nome_file: str) -> int:
-    """Da quale riga cominciano i prodotti: la regola vince sul numero.
+    """Return the first product row: the marker rule wins over a fixed number.
 
-    Quando la mappatura dichiara un `data_start_marker` si cerca quello, ogni
-    volta, su questo documento.  `data_start_row` resta scritto perche' serve a
-    chi **scrive** la copia dell'ordine, ma qui non lo si guarda nemmeno: un
-    ripiego silenzioso sul numero di ieri e' il difetto da cui nasce questa
-    funzione.
+    When the mapping declares a `data_start_marker`, it is resolved fresh
+    against this document every time. `data_start_row` stays in the mapping
+    because the order writer needs it, but this function never reads it as a
+    fallback when a marker is present: a silent fallback to yesterday's row
+    number is the defect this function exists to avoid.
     """
 
     marker = mapping.get("data_start_marker")
@@ -245,7 +242,7 @@ def selected_sheet(workbook: Any, mapping: dict[str, Any]) -> Any:
 
 
 def selected_xls_sheet(path: Path, mapping: dict[str, Any]) -> list[list[tuple[Any, bool]]]:
-    """Sceglie il foglio dentro un .xls con le stesse regole di selected_sheet."""
+    """Select a sheet inside an .xls file, with the same rules as selected_sheet."""
     sheets = read_workbook(path)
     if not sheets:
         raise ValueError(f"Il file {path.name} non contiene fogli di dati")
@@ -263,24 +260,23 @@ def selected_xls_sheet(path: Path, mapping: dict[str, Any]) -> list[list[tuple[A
 
 
 def mapped_rows(path: Path, mapping: dict[str, Any]) -> tuple[int, dict[str, int], list[tuple[Any, ...]], list[tuple[bool, ...]]]:
-    """Legge la griglia della fonte scegliendo il lettore dai byte del file.
+    """Read the source grid, picking the reader from the file's bytes, not its extension.
 
-    L'estensione non decide niente: un .xls rinominato .xlsx resta un .xls.
-    Di ogni cella si tiene anche il grassetto, perche' su un listino Noce
-    il prezzo in offerta e' segnalato pure cosi' («i prezzi offerta sono in
-    grassetto»): si legge da entrambi i formati, altrimenti basterebbe
-    risalvare il listino in .xlsx per perdere il segnale senza un avviso.
-    Dal .xls arriva gratis insieme ai valori; da un .xlsx costa dal 5 al 45%
-    di tempo in piu', quindi li' si legge soltanto quando la mappatura dice
-    che quel segnale le serve (`offer_from_bold`).
+    The extension decides nothing: an .xls renamed to .xlsx is still an .xls.
+    Bold is also read per cell, because one supplier flags its offer prices
+    that way; both formats support it, otherwise re-saving the price list as
+    .xlsx would silently drop that signal. Bold comes for free from .xls
+    alongside the values; from .xlsx it costs 5-45% more read time, so it's
+    only read there when the mapping declares it needs that signal
+    (`offer_from_bold`).
     """
     if container_format(path) == "xls":
         griglia = selected_xls_sheet(path, mapping)
         rows: list[tuple[Any, ...]] = [tuple(valore for valore, _grassetto in riga) for riga in griglia]
         bold: list[tuple[bool, ...]] = [tuple(grassetto for _valore, grassetto in riga) for riga in griglia]
     else:
-        # Si passa il contenuto e non il nome: openpyxl rifiuta un percorso che
-        # finisce per .xls anche quando dentro c'e' davvero un .xlsx.
+        # Pass the content, not the path: openpyxl rejects a path ending in
+        # .xls even when the bytes are genuinely .xlsx.
         with path.open("rb") as stream:
             workbook = load_workbook(stream, read_only=True, data_only=True)
             try:
@@ -290,9 +286,9 @@ def mapped_rows(path: Path, mapping: dict[str, Any]) -> tuple[int, dict[str, int
                     bold = []
                     for riga in sheet.iter_rows():
                         rows.append(tuple(cella.value for cella in riga))
-                        # Le celle mai scritte non hanno nemmeno il carattere:
-                        # getattr le fa valere «non in grassetto» invece di far
-                        # cadere la lettura di un listino intero.
+                        # A cell that was never written has no font at all;
+                        # getattr defaults it to "not bold" instead of
+                        # crashing the whole read.
                         bold.append(tuple(
                             bool(getattr(getattr(cella, "font", None), "bold", False))
                             for cella in riga
@@ -309,8 +305,8 @@ def mapped_rows(path: Path, mapping: dict[str, Any]) -> tuple[int, dict[str, int
             "di riga a partire da 1, oppure 0 se il documento non ha intestazioni."
         )
     if header_row > len(rows):
-        # Senza questo controllo uscirebbe «list index out of range», che non
-        # dice a nessuno che cosa fare.
+        # Without this check, the failure would be a raw "list index out of
+        # range" that tells no one what to do.
         raise ValueError(
             f"Il foglio «{mapping.get('sheet') or 'primo foglio'}» di {path.name} non arriva alla riga "
             f"{header_row}, dove dovrebbero esserci le intestazioni: il file non ha la forma attesa."
@@ -323,13 +319,13 @@ def mapped_rows(path: Path, mapping: dict[str, Any]) -> tuple[int, dict[str, int
 
 
 def last_data_row(rows: list[tuple[Any, ...]], columns: dict[str, int], mapping: dict[str, Any], data_start: int) -> int:
-    """Dove finiscono davvero i dati: lo dichiara il file, non il codice.
+    """Return where the data actually ends, per the mapping's rule, not a guess.
 
-    Il listino Noce prosegue per centinaia di righe oltre l'ultimo
-    prodotto: sono righe che contengono soltanto la formula della colonna
-    Importo, lasciata li' da Excel.  Senza un confine diventerebbero prodotti
-    fantasma.  La regola dice quali campi identificano un prodotto vero;
-    l'ultima riga che ne ha almeno uno e' la fine dei dati.
+    One supplier's list continues for hundreds of rows past the last
+    product: rows that only carry a leftover Excel formula in the total
+    column. Without a boundary, those would become phantom products. The
+    rule names which fields identify a real product; the last row with at
+    least one of them is the end of the data.
     """
     fields = (mapping.get("data_end_rule") or {}).get("last_row_with_any")
     if not fields:
@@ -342,12 +338,12 @@ def last_data_row(rows: list[tuple[Any, ...]], columns: dict[str, int], mapping:
 
 
 def excluded_row_label(row: tuple[Any, ...], columns: dict[str, int], mapping: dict[str, Any]) -> str | None:
-    """Righe che il confronto non deve nemmeno vedere, con il motivo dichiarato.
+    """Return the declared reason a row is excluded from the comparison, or None.
 
-    Per Noce sono le righe alimentari: l'utente non tratta il FOOD, e
-    tenerle vorrebbe dire proporgli ottomila articoli che non compra.  Quante
-    ne vengono tolte finisce nell'audit: uno scarto silenzioso non e' una
-    scelta, e' una perdita di dati.
+    For example, one supplier's list mixes in a food category the store
+    doesn't stock; keeping those rows would mean proposing thousands of
+    irrelevant items. How many rows are dropped is recorded in the audit
+    report: a silent drop isn't a choice, it's data loss.
     """
     for rule in mapping.get("exclude_rows") or []:
         actual = str(mapped_value(row, columns, rule.get("field")) or "").strip()
@@ -363,32 +359,30 @@ def excluded_row_label(row: tuple[Any, ...], columns: dict[str, int], mapping: d
 
 
 def non_e_una_riga_prodotto(row: tuple[Any, ...], columns: dict[str, int], mapping: dict[str, Any]) -> bool:
-    """Vero quando sulla riga non c'e' niente che sia merce.
+    """Return True when a row carries no product data at all.
 
-    Niente nome, niente codice a barre e nessun prezzo: non e' un prodotto
-    letto male, e' un'altra cosa scritta dentro la tabella — il titolo di una
-    sezione, la riga che separa un blocco promozionale dal listino, una nota
-    del fornitore.  Il lettore del gestionale scarta queste righe da sempre
-    (`read_mapped_master`, stessa etichetta `NON_E_RIGA_PRODOTTO`); quello dei
-    fornitori no, e le faceva entrare come prodotti non ordinabili.
+    No description, no EAN, and no price: this isn't a badly read product,
+    it's something else written into the table — a section title, a divider
+    between a promotional block and the price list, a supplier's note. The
+    master (management-software) reader has always dropped these rows
+    (`read_mapped_master`, same `NON_E_RIGA_PRODOTTO` label); the supplier
+    reader didn't, and let them through as unorderable products.
 
-    ⚠ **Misurato sul listino QUERCIA vero il 17 agosto 2026**: le sei righe
-    separatore (10, 12, 14, 16, 18, 68) hanno descrizione vuota, EAN vuoto e
-    prezzo assente, ma il loro testo sta nella colonna «Articolo», cioe' nel
-    `supplier_code` — e la vecchia guardia di `supplier_record`, che pretende
-    vuoti tutti e tre *compreso* il codice, non scattava.  Entravano fra i
-    prodotti letti: 4185 invece di 4179.  Sopra il taglio del listino fa poco
-    danno; un separatore **dentro** i prodotti diventa una voce del catalogo
-    con la scritta promozionale al posto del codice articolo.
+    Measured on a real price list: divider rows had empty description, EAN
+    and price, but their text sat in the `supplier_code` column, so the older
+    check (which required all three fields including the code to be empty)
+    missed them and let them into the read products. A divider above the
+    actual list does little harm; one that ends up mixed in among products
+    becomes a catalog entry with the divider text in place of a product code.
 
-    Il codice del fornitore di proposito **non** conta come merce: da solo non
-    permette di ordinare (senza nome la riga e' gia' scartata), non permette di
-    abbinare e non ha un prezzo.  E' precisamente la cella in cui i separatori
-    scrivono.
+    The supplier code is deliberately excluded from counting as product data:
+    on its own it can't be ordered (a row with no description is already
+    dropped), can't be matched, and has no price. It is exactly the field
+    dividers write their text into.
 
-    Un prezzo si considera presente se la cella e' valorizzata, anche se il
-    valore poi non si legge: un prezzo scritto male e' una riga da segnalare
-    (`senza_prezzo`), non una riga che non esiste.
+    A price counts as present if the cell holds any value, even one that
+    later fails to parse: a badly written price is a row to flag
+    (`senza_prezzo`), not a row that doesn't exist.
     """
 
     if str(mapped_value(row, columns, "description") or "").strip():
@@ -403,14 +397,14 @@ def non_e_una_riga_prodotto(row: tuple[Any, ...], columns: dict[str, int], mappi
 
 
 def expiry_from_description(description: str, mapping: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
-    """Stacca dalla descrizione la scadenza scritta come frammento HTML.
+    """Split an expiry date written as an HTML fragment out of the description.
 
-    Noce scrive «PRODOTTO ML.500<br> Scadenza 30/08/2026»: quel pezzo non
-    fa parte del nome dell'articolo e sporcherebbe il confronto fra
-    descrizioni, quindi si legge a parte e la descrizione resta pulita.
-    La data pero' non si crede sulla parola: nel listino vero ce n'e' una al
-    2057.  Una data assurda, o impossibile nel calendario, diventa un avviso e
-    non un errore che ferma la lettura di diciassettemila righe.
+    One supplier writes something like "PRODUCT ML.500<br> Scadenza
+    30/08/2026": that fragment isn't part of the item name and would pollute
+    description matching, so it's parsed out separately and the description
+    stays clean. The date itself isn't trusted blindly (real lists have
+    contained implausible years); an absurd or calendar-impossible date
+    becomes a warning, not an error that stops reading the whole file.
     """
     rule = mapping.get("expiry_from_description")
     if not rule:
@@ -434,8 +428,8 @@ def expiry_from_description(description: str, mapping: dict[str, Any]) -> tuple[
             "expiry_warning": f"Scadenza scritta male nella descrizione: «{raw}». Il campo va verificato a mano.",
         }
 
-    # Credibile vuol dire vicina a oggi: si confrontano gli anni, cosi' la
-    # regola non dipende dal giorno in cui gira il programma piu' del dovuto.
+    # Plausible means close to today: comparing by year keeps the rule from
+    # depending on the exact day the program happens to run.
     window = rule.get("plausible_window_years") or {}
     back = int(window.get("back", 2))
     ahead = int(window.get("ahead", 10))
@@ -475,10 +469,10 @@ def reading_report(
     excluded: Counter[str],
     records: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Racconta com'e' andata la lettura: quanto si e' letto e quanto si e' tolto.
+    """Summarize a read: how much was read and how much was dropped.
 
-    Serve a chi controlla il risultato: se le righe scartate non compaiono da
-    nessuna parte, nessuno si accorge che il listino e' entrato a meta'.
+    For whoever reviews the result: if excluded rows aren't reported
+    anywhere, no one notices a price list came in only half-read.
     """
     return {
         "sheet_rows": len(rows),
@@ -546,10 +540,10 @@ def supplier_record(
     ean = normalize_ean(mapped_value(row, columns, "ean"))
     supplier_code = mapped_value(row, columns, "supplier_code")
     if "supplier_code" in (mapping.get("text_columns") or ()):
-        # Il codice articolo Noce ha gli zeri iniziali: se diventasse un
-        # numero, «0000000449070» si ridurrebbe a 449070 e non tornerebbe piu'
-        # indietro.  normalize_ean toglie solo gli artefatti del foglio di
-        # calcolo e lascia il resto com'e' scritto.
+        # One supplier's item code has leading zeros: if it were coerced to a
+        # number, "0000000449070" would shrink to 449070 and never recover
+        # them. normalize_ean only strips spreadsheet artifacts and leaves
+        # the rest of the text as written.
         supplier_code = normalize_ean(supplier_code)
     if not description and not ean and supplier_code in (None, ""):
         return None, None
@@ -576,16 +570,16 @@ def supplier_record(
 
     pieces = decimal_value(mapped_value(row, columns, "pieces_per_carton"), italian=italian)
     multiplier = decimal_value(mapped_value(row, columns, "order_multiplier"), italian=italian)
-    # Il valore fisso dichiarato nel profilo del fornitore vale solo se e' un
-    # numero maggiore di zero: uno zero, o una parola al posto di un numero,
-    # non e' un fattore d'ordine e non deve prenderne il posto.
+    # A fixed default from the supplier profile only counts if it's a number
+    # greater than zero: a zero, or text where a number was expected, isn't
+    # an order factor and must not stand in for one.
     if pieces is None:
         pieces = fattore_d_ordine(mapping.get("pieces_per_carton_default"))
     if multiplier is None:
         multiplier = fattore_d_ordine(mapping.get("order_multiplier_default"))
-    # Chi decide resta il moltiplicatore quando c'e', esattamente come prima:
-    # un moltiplicatore scritto male non si rimpiazza con i pezzi per collo,
-    # perche' vorrebbe dire ordinare su un numero che nessuno ha dichiarato.
+    # The multiplier still wins when present: a badly written multiplier is
+    # not silently replaced by pieces-per-carton, since that would mean
+    # ordering against a number nobody declared.
     factor = fattore_d_ordine(multiplier if multiplier is not None else pieces)
     available_field = mapped_value(row, columns, "availability")
     availability = str(available_field or "").strip()
@@ -593,8 +587,8 @@ def supplier_record(
     if mapping.get("available_values"):
         available = availability.casefold() in {str(value).casefold() for value in mapping["available_values"]}
 
-    # Lo stesso `and` di prima, scritto in modo che sappia dire che cosa
-    # mancava: e' l'unico dato che rende contabile una riga scartata.
+    # Same condition as the earlier drop check, but able to say what was
+    # missing: this is what makes a dropped row auditable.
     if not description:
         motivo: str | None = SENZA_DESCRIZIONE
     elif direct_price is None:
@@ -630,17 +624,16 @@ def supplier_record(
     if motivo is not None:
         record["unusable_reason"] = motivo
     if "category" in columns:
-        # Il campo su cui si scarta va mostrato anche sulle righe rimaste:
-        # e' cosi' che l'utente controlla che il filtro abbia fatto la cosa giusta.
+        # The field the filter checks is also shown on rows that pass it:
+        # that's how the user verifies the filter did the right thing.
         record["category"] = str(mapped_value(row, columns, "category") or "").strip()
     if expiry is not None:
         record.update({field: value for field, value in expiry.items() if field != "expiry_warning"})
 
     bold_field = mapping.get("offer_from_bold")
     if bold_field or "offer_flag" in columns:
-        # Su questo listino l'offerta ha due segnali: la colonna «offerta» e il
-        # prezzo scritto in grassetto («i prezzi offerta sono in grassetto»).
-        # Basta uno dei due, e nessuno dei due si butta via.
+        # This list flags an offer two ways: an explicit column and bold
+        # price text. Either one is enough, and both are kept in the record.
         bold_index = columns.get(str(bold_field)) if bold_field else None
         bold_price = bool(bold_index and bold and bold_index <= len(bold) and bold[bold_index - 1])
         declared = str(mapped_value(row, columns, "offer_flag") or "").strip()
@@ -663,11 +656,11 @@ def read_mapped_xlsx_supplier(
     mapping: dict[str, Any],
     report: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Legge un listino fornitore da foglio elettronico: .xlsx oppure .xls.
+    """Read a supplier price list from a spreadsheet: .xlsx or .xls.
 
-    Restituisce ancora due valori perche' questa funzione la chiama anche
-    ``app/catalog_search.py``; i conteggi della lettura (confine dei dati,
-    righe scartate) finiscono in ``report``, quando chi chiama lo passa.
+    Still returns two values because ``app/catalog_search.py`` also calls
+    this function; read stats (data boundary, dropped rows) go into
+    ``report`` when the caller passes one.
     """
     data_start, columns, rows, bold = mapped_rows(path, mapping)
     required = {"description", "unit_price_net"} if "unit_price_net" in columns else {"description", "unit_price_pre_discount"}
@@ -679,9 +672,9 @@ def read_mapped_xlsx_supplier(
         if not dichiarati:
             raise ValueError("Manca il fattore d'ordine o un default esplicito")
         if not any(fattore_d_ordine(mapping.get(chiave)) is not None for chiave in dichiarati):
-            # Un valore fisso che non e' un numero maggiore di zero lascerebbe
-            # fuori dall'ordine tutte le righe del listino, una per una: meglio
-            # dirlo subito e in un punto solo.
+            # A fixed default that isn't a number greater than zero would
+            # leave every row of the list unorderable, one by one; better to
+            # say so once, up front.
             raise ValueError(
                 f"Per {path.name} non è indicata nessuna colonna con i pezzi per collo, e il valore "
                 "fisso messo al suo posto non è un numero maggiore di zero: così nessun prodotto di "
@@ -777,10 +770,10 @@ def mapped_standalone_displays(
             rejected += 1
             standard.append(record)
             continue
-        # Il fattore d'ordine e' quello della riga da cui viene l'espositore: il
-        # moltiplicatore quando c'e', altrimenti i pezzi per collo — la stessa
-        # precedenza di `supplier_record`, perche' e' la stessa riga. Passa
-        # dalla guardia come tutti gli altri: zero non e' un fattore.
+        # The display's order factor is the source row's: the multiplier
+        # when present, otherwise pieces-per-carton — same precedence as
+        # `supplier_record`, since it's the same row. It goes through the
+        # same guard as everything else: zero isn't a factor.
         grezzo = record.get("order_multiplier")
         if grezzo is None:
             grezzo = record.get("pieces_per_carton")
@@ -805,11 +798,11 @@ def mapped_standalone_displays(
         ]
         if declared_units is not None:
             evidence.append(f"Quantità dichiarata nel nome: {json_decimal(declared_units)} pezzi.")
-        # Un espositore non e' piu' sano della riga da cui viene: se quella non
-        # si puo' ordinare — il prezzo non si legge, il fattore manca, e' un
-        # premio — non si puo' ordinare nemmeno l'espositore, e il motivo e' lo
-        # stesso. Senza questa dichiarazione l'espositore arrivava al confronto
-        # senza che nessuno avesse detto se si poteva comprare.
+        # A display is never more usable than its source row: if that row
+        # can't be ordered (unreadable price, missing factor, a free-goods
+        # line), neither can the display, for the same reason. Without this
+        # check the display reached the comparison with no statement on
+        # whether it could actually be bought.
         if record.get("usable") is False:
             motivo = str(record.get("row_type") or record.get("unusable_reason") or MOTIVO_NON_DICHIARATO)
         elif factor is None:
@@ -840,8 +833,8 @@ def mapped_standalone_displays(
         "standard_rows": len(standard),
         "rejected_candidates": rejected,
         "component_rows_available": False,
-        # Come per gli espositori di Larice: quello che resta fuori dall'ordine
-        # si conta, col motivo dichiarato.
+        # Same as the other supplier's displays: whatever stays out of the
+        # order is counted, with its reason recorded.
         "display_offers_not_orderable": conta_non_ordinabili(displays),
     }
     return standard, displays, audit
@@ -853,21 +846,20 @@ def read_mapped_csv_supplier(
     mapping: dict[str, Any],
     report: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Legge un listino fornitore da CSV, con le stesse regole dichiarate del foglio.
+    """Read a supplier price list from CSV, using the same declared rules as the spreadsheet reader.
 
-    Confine dei dati, righe da scartare e scadenza nella descrizione valgono
-    anche qui: una regola che funziona solo su un formato e' una trappola per
-    chi verra' dopo.
+    The data boundary, excluded rows and expiry-in-description parsing all
+    apply here too: a rule that only works for one format is a trap for
+    whoever maintains this later.
 
-    `header_row = 0` dichiara che il file non ha intestazioni: le colonne si
-    indicano allora per numero o per lettera, come nel ramo dei fogli di
-    calcolo.  Senza questa via d'uscita un CSV senza intestazione non sarebbe
-    piu' mappabile, perche' la prima riga di dati verrebbe presa per la riga
-    dei nomi.
+    `header_row = 0` declares the file has no header row: columns are then
+    addressed by number or letter, as in the spreadsheet branch. Without this
+    escape hatch, a headerless CSV couldn't be mapped at all, since its first
+    data row would be mistaken for the header.
 
-    Se dalla lettura non esce nessuna riga ordinabile ci si ferma e lo si dice:
-    un listino aperto con il separatore sbagliato, a guardare il risultato, non
-    si distingue da un fornitore che non tratta nessuno dei prodotti cercati.
+    If reading produces no orderable row at all, it stops and says so: a
+    price list opened with the wrong delimiter looks, from the result alone,
+    exactly like a supplier that carries none of the products being compared.
     """
     encoding = mapping.get("encoding", "utf-8-sig")
     delimiter = mapping.get("delimiter")
@@ -877,12 +869,12 @@ def read_mapped_csv_supplier(
         dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|") if not delimiter else None
         reader = csv.reader(stream, dialect) if dialect else csv.reader(stream, delimiter=delimiter)
         rows = []
-        # Il numero di riga e' quello vero del file, non il posto occupato
-        # nell'elenco: un testo fra virgolette puo' contenere un a-capo, e da
-        # li' in poi i due numeri non coincidono piu'. Chi va a controllare
-        # l'ordine sul listino del fornitore troverebbe un altro prodotto.
-        # `line_num` dopo un prodotto indica la sua ultima riga: la prima e'
-        # quella subito dopo la fine del prodotto precedente.
+        # The row number recorded is the file's real line number, not the
+        # record's position in the list: a quoted field can contain an
+        # embedded newline, so the two counts diverge, and whoever checks
+        # the order against the supplier's file needs the real line. `line_num`
+        # after a record gives its last line; the first line is right after
+        # the previous record ended.
         righe_fisiche: list[int] = []
         prima_riga_del_prodotto = 1
         for grezza in reader:
@@ -899,9 +891,9 @@ def read_mapped_csv_supplier(
     header = rows[header_row - 1] if header_row else None
     raw_columns = mapping.get("columns") or mapping.get("field_mapping") or {}
     if header is not None and len(header) <= 1 and len(raw_columns) > 1:
-        # Il separatore, quando non e' dichiarato, viene indovinato guardando
-        # il testo: se l'ipotesi e' sbagliata il file resta tutto in una colonna
-        # e il fornitore risulterebbe senza nessuno dei prodotti cercati.
+        # When not declared, the delimiter is guessed by sniffing the text;
+        # a wrong guess leaves the whole file in one column, and the
+        # supplier would appear to carry none of the products compared.
         raise ValueError(
             f"Il documento {path.name} non si è aperto in colonne: nella riga delle intestazioni "
             f"c'è un campo solo, mentre per questo fornitore ne sono indicate {len(raw_columns)}. "
@@ -933,9 +925,9 @@ def read_mapped_csv_supplier(
             records.append(record)
         if warning:
             warnings.append(warning)
-    # Il controllo sta qui, prima delle regole del registro: quelle tolgono
-    # dall'ordine righe lette benissimo (un premio, un omaggio), e non dicono
-    # niente su come e' andata la lettura.
+    # This check runs before the registry rules: those drop rows that were
+    # read perfectly well (a bonus item, a free-goods line) and say nothing
+    # about whether the read itself succeeded.
     if not any(record.get("usable") for record in records):
         letto = (
             "non è stata letta nessuna riga di prodotto" if not records
@@ -960,27 +952,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--adapters", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    # I gruppi di codici a barre che l'utente ha dichiarato essere lo stesso
-    # articolo. Il file lo scrive il servizio dal magazzino delle conferme: la
-    # catena e' fatta di passi che leggono artefatti dichiarati, non di processi
-    # che aprono database, ed e' il motivo per cui questa fase si puo' provare.
+    # Groups of barcodes the user has declared to be the same item. The
+    # server writes this file from the confirmations store: the pipeline is
+    # a chain of steps reading declared artifacts, not processes opening a
+    # database directly, which is why this phase is independently testable.
     parser.add_argument("--equivalenze", type=Path)
     return parser.parse_args()
 
 
 def leggi_uguaglianze(percorso: Path | None) -> list[list[str]]:
-    """I gruppi di codici uguali dichiarati dall'utente, o niente.
+    """Return the user-declared groups of equal codes, or none.
 
-    Non chiederlo e' legittimo: vuol dire che per questa run non ce ne sono.
-    Chiederlo e non trovare il file **non** lo e' — sono dichiarazioni umane, e
-    farle sparire in silenzio riporterebbe i prodotti abbinati a mano allo stato
-    di prima senza che niente lo dica, cioe' esattamente il modo peggiore di
-    perdere una decisione. Stessa regola di `--displays` in
-    `build_review_data.py`, e per la stessa ragione.
+    Not asking for the argument is legitimate: it means this run has none.
+    Asking and not finding the file is not: these are human decisions, and
+    silently losing them would revert manually matched products to their
+    unmatched state with nothing to say so — the worst way to lose a
+    decision. Same rule, and same reason, as `--displays` in
+    `build_review_data.py`.
 
-    Il documento e' `{"classi": [[codice, codice, …], …]}` oppure direttamente la
-    lista dei gruppi: un file scritto a mano per una prova non deve sbagliare per
-    una chiave.
+    The document is `{"classi": [[code, code, …], …]}`, or directly the list
+    of groups, so a hand-written test fixture doesn't fail over one key.
     """
 
     if percorso is None:
@@ -1005,22 +996,20 @@ def leggi_uguaglianze(percorso: Path | None) -> list[list[str]]:
 def colonne_corrette(
     decision: dict[str, Any], adapter: dict[str, Any], adapter_id: str
 ) -> dict[str, Any]:
-    """Le colonne che l'utente ha corretto a mano per un documento riconosciuto.
+    """Return the columns the user manually corrected for a recognized document.
 
-    Solo quelle **della decisione**: la `field_mapping` di un adattatore del
-    registro descrive un altro modo di leggere lo stesso fornitore, non una
-    correzione, e passarla ai lettori cablati vorrebbe dire scambiare le due
-    strade a insaputa di tutti.
+    Only the decision's own corrections: a registry adapter's `field_mapping`
+    describes a different way to read the same supplier, not a correction,
+    and feeding it to the dedicated readers would silently conflate the two.
 
-    `read_noce` legge un CSV e indica le colonne per nome: non ha niente da
-    correggere per posizione e resta fuori.
+    `read_noce` reads a CSV and addresses columns by name, so it has nothing
+    to correct by position and is excluded.
     """
 
-    # ⚠ Per `adattatore_base`, non per l'id cosi' com'e': un `betulla_v1__locale`
-    # — la mappatura confermata qui sopra quella spedita — e' lo stesso lettore
-    # e le stesse correzioni. Guardare l'id intero vorrebbe dire che imparare
-    # una variazione spegne in silenzio le correzioni che quella variazione
-    # serviva proprio a portare.
+    # By `adattatore_base`, not the raw id: `betulla_v1__locale` (a confirmed
+    # mapping layered on the shipped one) uses the same reader and the same
+    # corrections. Matching on the full id would mean that learning a
+    # variant silently drops the corrections that variant exists to carry.
     base = registro.adattatore_base(adapter_id)
     if base == "noce_csv_v1":
         return {}
@@ -1041,26 +1030,24 @@ def colonne_corrette(
 def colonne_per_posizione(
     colonne: dict[str, Any], adapter: dict[str, Any], adapter_id: str
 ) -> dict[str, Any]:
-    """Le colonne della decisione, con i nomi risolti nelle loro posizioni.
+    """Return the decision's columns with names resolved to positions.
 
-    ⚠ La mappatura confermata in pagina indica una colonna **per nome** ogni
-    volta che l'intestazione e' univoca (`schema_mapping.specifica_colonna`), e
-    i lettori dedicati leggono per posizione. Finche' i nomi arrivavano loro
-    cosi' com'erano, imparare una variante di BETULLA o di LARICE voleva dire un
-    ricalcolo che la settimana dopo si fermava con «La colonna indicata per
-    description ("Descr.Commerciale") non è una colonna valida» — cioe' il
-    fornitore fuori dal confronto proprio per la mappatura che serviva a
-    tenercelo dentro (6 settembre 2026).
+    The mapping confirmed on the page addresses a column by name whenever the
+    header is unambiguous (`schema_mapping.specifica_colonna`), but the
+    dedicated readers read by position. Passing names straight through to
+    them would fail the following week with "column X is not valid" — the
+    supplier dropped from the comparison by exactly the mapping meant to keep
+    it in.
 
-    Le posizioni non si indovinano dal documento: sono quelle che l'adattatore
-    ha misurato il giorno in cui la variante e' stata confermata
-    (`header_signature.columns`, per nome normalizzato). Il nome si guarda
-    **prima** della lettera, perche' «EAN» e' un'intestazione vera di BETULLA e
-    come lettera varrebbe la colonna 3.420.
+    Positions aren't guessed from the document: they're what the adapter
+    measured the day the variant was confirmed (`header_signature.columns`,
+    by normalized name). Name is checked before letter, because a header like
+    "EAN" is also a valid (and very different) Excel column letter.
 
-    Numeri e lettere restano com'erano. Un nome che l'impronta non conosce si
-    ferma qui: lasciarlo passare significherebbe leggere la colonna
-    predefinita, cioe' dei prezzi che sembrano giusti.
+    Numbers and letters pass through unchanged. A name the adapter's
+    fingerprint doesn't recognize stops here: letting it through would mean
+    silently reading the default column instead — prices that merely look
+    plausible.
     """
 
     posizioni = ((adapter or {}).get("header_signature") or {}).get("columns")
@@ -1090,39 +1077,40 @@ LETTORI_A_SCHEMA_NOTO: dict[str, Callable[..., Any]] = {
 
 
 def lettore_dedicato(state: Any, adapter_id: Any) -> Callable[..., Any] | None:
-    """Il lettore dedicato per questa decisione, o `None` se si legge generico.
+    """Return the dedicated reader for this decision, or `None` for the generic reader.
 
-    E' l'**unico** posto in cui si sceglie con quale lettore si apre un
-    documento. Il catalogo della ricerca prodotti chiama questa, non un
-    `if supplier == "..."` suo: le due strade hanno detto cose diverse fino al
-    21 agosto 2026, e il conto l'ha pagato BETULLA — letto dal generico qui,
-    mandato a `read_betulla` dal catalogo, sparito dal visualizzatore.
+    This is the one place that picks which reader opens a document. The
+    product-search catalog calls this rather than keeping its own
+    `if supplier == "..."` logic: if the two answered differently, a document
+    read generically here but sent to a dedicated reader by the catalog would
+    silently vanish from the catalog viewer.
 
-    Il criterio e' la **decisione**, non il fornitore: lo stesso fornitore, in
-    due run diverse, puo' arrivare con uno schema riconosciuto o con uno
-    variato e confermato a mano, e sono due letture diverse dello stesso nome.
+    The criterion is the decision, not the supplier: the same supplier, in
+    two different runs, can arrive with a recognized schema or a varied one
+    confirmed by hand, and those are two different reads of the same name.
     """
 
     if str(state or "") != "SCHEMA_NOTO":
         return None
-    # `adattatore_base`: un `larice_v1__locale` e' Larice, e deve passare da
-    # `read_larice`. Senza questa riga, imparare una variazione su uno dei
-    # quattro fornitori con lettore dedicato lo manderebbe al lettore generico
-    # — che legge le stesse colonne ma non fa il resto: niente espositori,
-    # niente soglie con omaggio, niente marcatore di riga del gestionale.
+    # By `adattatore_base`: `larice_v1__locale` is still that supplier and
+    # must go through its dedicated reader. Without this, learning a variant
+    # on one of the suppliers with a dedicated reader would route it to the
+    # generic reader instead, which reads the same columns but skips
+    # everything else — no display detection, no free-goods thresholds, no
+    # master row marker.
     return LETTORI_A_SCHEMA_NOTO.get(registro.adattatore_base(adapter_id))
 
 
 def main() -> int:
     args = parse_args()
     manifest = load_json(args.manifest)
-    # ⚠ Il registro EFFETTIVO, non il solo file spedito che la catena passa
-    # qui: un adattatore imparato (`betulla_v1__locale`) nello spedito non c'e',
-    # e `adapters.get(...)` rispondeva `{}` — cioe' nessun `supplier_id` di
-    # ripiego, e nessuna posizione delle colonne per rileggere una variante
-    # confermata la settimana prima. E' la stessa trappola chiusa il 22 agosto
-    # 2026 in `validate_input_manifest.py`, e la regola 4: chi legge il
-    # registro lo legge da `registro` (6 settembre 2026).
+    # The merged registry, not just the shipped file the pipeline passes
+    # here: a locally learned adapter (`betulla_v1__locale`) isn't in the
+    # shipped file, and looking it up there returns nothing, i.e. no
+    # fallback `supplier_id` and no column positions to reread a variant
+    # confirmed the week before. Same invariant as in
+    # `validate_input_manifest.py`: reading the registry always goes through
+    # `registro`.
     adapters = {str(item.get("id") or ""): item for item in registro.adattatori(args.adapters)}
     files = manifest.get("files") or manifest.get("profiles") or []
     master = None
@@ -1151,16 +1139,16 @@ def main() -> int:
 
         lettore = lettore_dedicato(state, adapter_id)
         if lettore is not None:
-            # Anche i lettori a schema noto raccontano com'e' andata la lettura:
-            # senza `report` il riquadro degli scarti restava muto proprio sui
-            # quattro listini piu' grossi (BETULLA, Larice, Noce, gestionale).
+            # Dedicated readers report read stats too: without `report`, the
+            # excluded-rows panel stayed empty for exactly the largest price
+            # lists (the ones with a dedicated reader).
             #
-            # ⚠ Le colonne corrette a mano arrivano **qui dentro**, non
-            # mandando il documento al lettore generico. Il lettore generico
-            # legge le stesse colonne ma non fa il resto: per Larice vuol dire
-            # niente espositori e niente soglie con omaggio, per il gestionale
-            # niente marcatore di riga. Una correzione delle colonne non deve
-            # cambiare che cosa il programma sa fare di quel documento.
+            # Manually corrected columns are fed into the dedicated reader
+            # itself, never by routing the document to the generic reader
+            # instead. The generic reader reads the same columns but skips
+            # everything else — no display detection, no free-goods
+            # thresholds, no master row marker. A column correction must not
+            # change what the program knows how to do with that document.
             extra = colonne_corrette(decision, adapter, adapter_id)
             result = lettore(path, report=reading, **extra)
             if registro.adattatore_base(adapter_id) == "larice_v1":
@@ -1172,9 +1160,9 @@ def main() -> int:
                 records = result
         elif role == "master":
             records = read_mapped_master(path, mapping, report=reading)
-        # Il formato lo dicono i primi byte del file: un foglio di calcolo
-        # rinominato .csv resterebbe un foglio di calcolo, e leggerlo riga per
-        # riga come testo darebbe un listino vuoto senza dirlo a nessuno.
+        # File format is decided by the file's bytes: a spreadsheet renamed
+        # to .csv is still a spreadsheet, and reading it line by line as text
+        # would silently produce an empty price list.
         elif container_format(path) == "csv":
             records, local_warnings = read_mapped_csv_supplier(path, supplier_id, mapping, report=reading)
         else:
@@ -1202,10 +1190,10 @@ def main() -> int:
                 record["source"] = supplier_id
             sources[supplier_id] = records
         warnings.extend(local_warnings)
-        # Le righe si declassano anche DOPO la lettura — i componenti di un
-        # espositore Larice, gli espositori isolati di un fornitore mappato —
-        # quindi il conteggio si rifa' qui, a mutazioni finite, ed e' lo stesso
-        # numero nei due punti dell'audit.
+        # Rows can also become unorderable after the read itself (a
+        # display's component rows, a supplier's standalone displays), so
+        # this count is recomputed here, once all mutations are done, and is
+        # the same number reported in both places in the audit.
         non_ordinabili = conta_non_ordinabili(records if isinstance(records, list) else [])
         if reading:
             reading["rows_not_orderable"] = non_ordinabili
@@ -1216,10 +1204,10 @@ def main() -> int:
             "supplier_id": supplier_id,
             "adapter_id": adapter_id,
             "records": len(records),
-            # Quante righe il programma ha deciso di non far ordinare, e per
-            # quale motivo dichiarato: i premi delle soglie, i componenti di un
-            # espositore, ma anche il prezzo che non si e' letto e i pezzi per
-            # collo che mancano. Uno scarto che non si conta non e' una scelta.
+            # How many rows the program decided not to make orderable, and
+            # with what declared reason: free-goods threshold rows, a
+            # display's components, but also an unreadable price or a
+            # missing order factor. A drop that isn't counted isn't a choice.
             "rows_not_orderable": non_ordinabili,
             "content_format": container_format(path),
             "reading": reading,

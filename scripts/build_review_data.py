@@ -14,17 +14,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-# La soglia sta in un posto solo, ed e' quello che scrive il punteggio. Qui si
-# applica: un rifiuto dell'AI con un candidato molto simile diventa un avviso
-# sul prodotto, e finisce da solo nel filtro "Da confermare" della pagina.
+# The threshold is owned by the module that scores the match. An AI rejection
+# with a close candidate becomes a product warning, surfaced in the "To confirm" filter.
 try:
     from merge_match_decisions import SOGLIA_RIFIUTO_SOSPETTO
-except ImportError:  # importato da fuori dalla cartella scripts/
+except ImportError:  # imported from outside the scripts/ folder
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from merge_match_decisions import SOGLIA_RIFIUTO_SOSPETTO
 
-# Il nome leggibile di un fornitore lo dichiara il registro, non un elenco
-# scritto qui: e' la stessa fonte da cui il fornitore nasce.
+# The readable supplier name comes from the adapter registry, not a separate
+# list here: it's the same source that defines the supplier in the first place.
 import registro  # noqa: E402
 
 
@@ -38,23 +37,18 @@ USCITA_INGRESSO_NON_UTILIZZABILE = 2
 
 
 def load_obbligatorio(path: Path) -> Any:
-    """Un ingresso che manca — o che c'e' e non contiene niente — e' un guasto.
+    """Load a required input; a missing or empty file is a hard failure, not a silent default.
 
-    `--resolved` passava da `load(..., [])`: se il file non c'era, il confronto
-    si costruiva lo stesso — misurato, otto prodotti su 527 e due fornitori su
-    quattro — usciva **0** e la pagina si apriva quasi vuota senza che niente
-    dicesse perche'. Su un programma che gira da solo e i cui log nessuno legge,
-    e' il modo peggiore di fallire.
+    An earlier version fell back to `load(..., [])` when `--resolved` was missing,
+    so the comparison still built with an empty result and the page opened nearly
+    blank with no indication why. An empty list produces the identical symptom, so
+    both cases are rejected the same way: `merge_match_decisions.py` never writes
+    an empty list unless the management-software export itself is empty, and
+    `prepare_sources.py` already guards against that, so an empty `[]` here means
+    an earlier step failed to do its job.
 
-    **Anche una lista vuota** produce quel sintomo identico, quindi la porta si
-    chiude da tutti e due i lati. `merge_match_decisions.py` non scrive mai una
-    lista vuota se non quando il gestionale e' vuoto, e `prepare_sources.py`
-    quel caso lo impedisce gia': un `[]` qui vuol dire che qualcosa a monte non
-    ha fatto il suo lavoro.
-
-    L'uscita e' **2**, lo stesso numero che il resto della fase usa per
-    «ingresso non utilizzabile»: un guasto dichiarato, non un `SystemExit` con
-    una stringa che uscirebbe 1."""
+    Exits with the same status code the rest of this phase uses for "unusable
+    input" (2), rather than a generic `SystemExit`."""
 
     def fermati(motivo: str) -> None:
         print(f"[ERRORE] {motivo}", file=sys.stderr)
@@ -78,14 +72,13 @@ def load_obbligatorio(path: Path) -> Any:
 
 
 def load_dichiarato(path: Path | None, che_cosa: str) -> Any:
-    """Un ingresso facoltativo: se non lo si chiede va bene, se manca no.
+    """Load an optional input: fine if not requested, a hard failure if requested but missing.
 
-    `--displays` era rimasto sul ripiego silenzioso: chi lancia la fase lo passa
-    apposta — l'orchestratore lo dichiara obbligatorio — ma se il file non
-    c'era, `load(..., [])` faceva sparire **tutti** gli espositori dal confronto
-    senza una parola. Non chiederlo affatto resta legittimo: vuol dire che per
-    questa run non ci sono espositori. Un file **vuoto** resta legittimo allo
-    stesso modo: vuol dire che non ne sono stati trovati.
+    Not passing a path is legitimate (this run has no displays to report). A path
+    that's passed but doesn't exist is not: the caller declared the input
+    required, so a silent `load(..., [])` fallback would drop every display from
+    the comparison with no warning. An empty file, on the other hand, is still
+    legitimate: it means none were found.
     """
 
     if path is None:
@@ -121,7 +114,7 @@ def money(value: Any) -> float | None:
 
 
 def suggested_quantity(value: Any) -> int | None:
-    """Colli suggeriti dalla colonna "Colli" del gestionale: intero >= 0 oppure None."""
+    """Suggested cartons from the "Colli" column of the management-software export: int >= 0 or None."""
     parsed = number(value)
     if parsed is None or parsed < 0:
         return None
@@ -129,11 +122,10 @@ def suggested_quantity(value: Any) -> int | None:
 
 
 def supplier_name(supplier_id: str) -> str:
-    """Il nome leggibile del fornitore, dal registro degli adattatori.
+    """Return the supplier's readable name, from the adapter registry.
 
-    Stessa fonte del servizio e del writer: erano tre elenchi diversi, tutti
-    fermi ai quattro fornitori del 2026, e un fornitore imparato compariva col
-    suo identificativo tecnico.
+    Same source the server and the writer use, so a learned adapter's supplier
+    shows its display name rather than its technical id.
     """
 
     return registro.nome_del_fornitore(supplier_id)
@@ -146,18 +138,17 @@ def normalized_name(value: Any) -> str:
 
 
 def impronta_articolo(offerta: Any) -> str:
-    """Che cosa identifica l'ARTICOLO di un'offerta, non le sue condizioni.
+    """Fingerprint the ARTICLE identity of an offer, not its commercial terms.
 
-    Serve a far scadere la conferma («confermo che è lo stesso articolo») quando
-    il ricalcolo della settimana dopo abbina quel prodotto a una riga diversa
-    del listino: la casella restava spuntata su un articolo che l'utente non
-    aveva mai visto, e la compilazione passava (revisione del 14 agosto 2026).
+    Expires a "confirmed, same article" checkbox when a later run matches the
+    product to a different price-list row: without this, the checkbox would
+    stay checked on an article the user never actually reviewed.
 
-    Dentro ci va soltanto l'identità: fornitore, EAN, codice articolo, nome
-    normalizzato. Il prezzo e la confezione NO — cambiano ogni settimana sullo
-    stesso articolo, e rifare la domanda a ogni ritocco di listino insegnerebbe
-    a spuntare senza leggere. Chi vuole l'impronta commerciale completa usa
-    `rejected_candidate_key`, che risponde a un'altra domanda.
+    Only identity goes in: supplier, EAN, article code, normalized name. Price
+    and packaging are deliberately excluded — they change every week on the same
+    article, and re-asking on every price-list tweak would train users to check
+    the box without reading. `rejected_candidate_key` covers the full commercial
+    fingerprint, for a different question.
     """
 
     if not isinstance(offerta, dict):
@@ -172,11 +163,11 @@ def impronta_articolo(offerta: Any) -> str:
 
 
 def rejected_candidate_key(supplier_id: str, candidate: dict[str, Any]) -> str:
-    """Impronta della riga proposta all'utente dopo un rifiuto sospetto.
+    """Fingerprint the row proposed to the user after a suspect AI rejection.
 
-    La decisione umana deve smettere di valere appena cambia una qualunque
-    caratteristica commerciale della riga: posizione, nome, EAN, codice,
-    prezzo o confezione. La run viene verificata separatamente dal servizio.
+    A human decision on this candidate must expire the moment any commercial
+    trait of the row changes: position, name, EAN, code, price or packaging.
+    The run itself is validated separately by the server.
     """
 
     payload = {
@@ -223,14 +214,14 @@ def offer_from_match(supplier_id: str, result: dict[str, Any], last_price: float
             "unitsPerOrderUnit": 1,
             "pricePerPiece": 0,
             "matchStatus": result.get("status") or "NON_TROVATO",
-            # Quanto somigliava il candidato migliore che l'AI ha scartato.
-            # `None` quando il rifiuto non e' dell'AI o la shortlist non aveva
-            # punteggi: la pagina distingue «non lo so» da «somigliava poco».
+            # Similarity score of the best candidate the AI rejected. `None` when
+            # the rejection isn't AI-driven or the shortlist had no scores: the
+            # page distinguishes "unknown" from "scored low".
             "rejectBestScore": number(result.get("ai_reject_best_score")),
         }
-        # Un rifiuto sospetto non deve terminare in un avviso senza uscita. La
-        # prima riga della shortlist è la proposta che l'utente può accettare o
-        # rifiutare; diventa un'offerta vera soltanto dopo la sua decisione.
+        # A suspect rejection needs an actionable warning, not a dead end. The
+        # shortlist's top row becomes the proposal the user can accept or
+        # reject; it only turns into a real offer after that decision.
         best = alternatives[0] if alternatives and isinstance(alternatives[0], dict) else None
         score = offer["rejectBestScore"]
         if result.get("method") == "AI_RIFIUTATO" and best and score is not None and score >= SOGLIA_RIFIUTO_SOSPETTO:
@@ -268,14 +259,14 @@ def offer_from_match(supplier_id: str, result: dict[str, Any], last_price: float
     return {
         "supplierId": supplier_id,
         "supplierName": supplier_name(supplier_id),
-        # ⚠ `> 0`, non `is not None`.  Un prezzo che si legge come 0,00 passava
-        # tutti i filtri e poi **vinceva** il confronto, perche' l'ordinamento
-        # mette il piu' basso davanti: il prodotto finiva assegnato al fornitore
-        # la cui cella non si era lasciata leggere, a totale zero, e la soglia
-        # minima d'ordine non scattava perche' zero e' sotto qualunque soglia.
-        # La difesa che c'era (PREZZI_A_ZERO) ragiona sulla mediana dell'intero
-        # listino: prende la colonna sbagliata su tutto un file, non la riga
-        # singola dentro un listino sano (revisione del 14 agosto 2026).
+        # `> 0`, not `is not None`. A price that reads as 0.00 would pass every
+        # filter and then win the comparison, since sorting puts the lowest
+        # price first: the product would land on the supplier whose cell failed
+        # to parse, at zero total, and the minimum-order threshold wouldn't
+        # trigger because zero is below any threshold. The existing safeguard
+        # (PREZZI_A_ZERO) checks the median of the whole price list, which
+        # catches a misread column across a file, not a single bad row inside
+        # an otherwise healthy list.
         "available": (
             unit_price is not None and unit_price > 0
             and factor is not None and factor > 0
@@ -307,13 +298,13 @@ def offer_from_match(supplier_id: str, result: dict[str, Any], last_price: float
 
 
 def suspect_reject_warnings(product_id: str, name: str, offers: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Gli avvisi per i rifiuti dell'AI che avevano un candidato molto simile.
+    """Build warnings for AI rejections that had a close-scoring candidate.
 
-    E' la sola difesa contro il rifiuto sbagliato, che altrimenti non lascia
-    traccia: la verifica avversariale della Fase 5b protegge dagli `ACCEPT`
-    sbagliati, non dai `REJECT`. Non blocca niente — un rifiuto giusto e' il
-    caso normale, e la meta' di questi avvisi lo sara' — ma il prodotto entra
-    nel filtro "Da confermare" invece di sparire in silenzio."""
+    This is the only safeguard against a wrong rejection, which otherwise
+    leaves no trace: the adversarial check protects against wrong `ACCEPT`s,
+    not `REJECT`s. It's non-blocking — a correct rejection is the normal case,
+    and about half of these warnings will be that — but the product lands in
+    the "To confirm" filter instead of disappearing silently."""
     avvisi = []
     for offer in offers:
         punteggio = offer.get("rejectBestScore")
@@ -353,14 +344,14 @@ def senza_offerta_warnings(
     colli_chiesti: int | None,
     offers: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Un prodotto che nessun listino sa servire lo dice sulla sua scheda.
+    """Flag, on the product's own row, that no price list can supply it.
 
-    Dal 16 agosto 2026 la quantita' del gestionale resta applicata anche qui:
-    la riga mostra i colli che servono e nessun fornitore accanto: senza questa
-    frase sembrerebbe una scelta ancora da fare, mentre non c'e' niente da
-    scegliere. E' l'unico posto che dice, sulla riga, perche' quella quantita'
-    non trovera' un ordine: alla compilazione finisce nell'elenco «Prodotti da
-    reperire».
+    The management-software quantity still applies here: the row shows the
+    cartons needed with no supplier next to it, and without this warning that
+    would look like an unmade choice rather than a genuine dead end. This is
+    the only place that explains, on the row itself, why that quantity won't
+    turn into an order — at order-compilation time it lands in the "to be
+    sourced" list.
     """
 
     if ordinabile:
@@ -378,36 +369,35 @@ def senza_offerta_warnings(
         if colli_chiesti
         else ""
     )
-    # Le stringhe nuove usano gli accenti; quelle vecchie del progetto restano
-    # con l'apostrofo, ed e' una convenzione, non un difetto.
+    # New strings use accented characters; older ones in the project keep the
+    # apostrophe form, by convention.
     return [{
         "id": f"{product_id}-senza-offerta",
         "code": "SENZA_OFFERTA_UTILIZZABILE",
         "severity": "warning",
         "blocking": False,
         "productId": product_id,
-        # ⚠ Diceva «Nessuna offerta utilizzabile». In questo programma
-        # «offerta» vuol dire *proposta di un fornitore*, ma per chi lavora in
-        # un negozio «offerta» vuol dire **sconto**: chi legge capisce
-        # «nessuno me lo fa in offerta» invece di «nessun fornitore ce l'ha».
-        # Daniele l'ha letto cosi' il 20 agosto 2026 usando il programma. Qui
-        # e nelle frasi che lo riassumono la parola non si usa piu' per
-        # dire «proposta»: resta agli sconti veri, dove l'utente la aspetta.
+        # In this app "offerta" means a supplier's proposal, but in retail
+        # usage it means a discount ("in offerta" = "on sale"). A store
+        # operator reading "nessuna offerta" would understand "nothing's on
+        # sale" rather than "no supplier carries it". This label and the
+        # messages that summarize it avoid the word for "proposal" and keep
+        # it only for actual discounts, where the user expects it.
         "title": "Nessun fornitore ce l’ha",
         "message": dove + chiesti,
     }]
 
 
 def senza_offerta_summary(products: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Quanti sono, in cima alla pagina, e come si trovano.
+    """Summarize the count at the top of the page, and how to find them.
 
-    Gli avvisi di prodotto la pagina li raccoglie solo per i prodotti con una
-    quantita' da ordinare, e lo stesso vale per il filtro «Nessuno ce l’ha», che
-    nasconde chi sta a zero. Dal 16 agosto 2026 i prodotti che il gestionale
-    chiede la quantita' ce l'hanno, quindi in quel filtro si trovano davvero;
-    gli altri — quelli che nessuno chiede — restano fuori da tutto, e questa
-    riga e' il solo posto che li conta. I due numeri si dichiarano entrambi:
-    promettere un filtro che non li mostra tutti sarebbe un avviso che mente.
+    The page collects per-product warnings only for products with a quantity
+    to order, and the "no supplier has it" filter hides anything at zero.
+    Products the management export requests a quantity for are findable in
+    that filter; the rest — nothing requested — are invisible everywhere
+    else, and this summary line is the only place that counts them. Both
+    counts are stated explicitly: a summary that claims a filter shows
+    everything when it doesn't would be a warning that lies.
     """
 
     senza = [
@@ -419,17 +409,17 @@ def senza_offerta_summary(products: list[dict[str, Any]]) -> list[dict[str, Any]
     ]
     if not senza:
         return []
-    # Si guarda `quantity`, non `suggestedQuantity`: e' `quantity` che decide
-    # se il filtro «Nessuno ce l’ha» mostra la riga (nasconde chi sta a zero), e
-    # questa frase promette proprio quel filtro. Oggi i due numeri coincidono;
-    # se un domani divergessero, la promessa resterebbe vera lo stesso.
+    # Checks `quantity`, not `suggestedQuantity`: `quantity` is what decides
+    # whether the "no supplier has it" filter shows the row (it hides
+    # anything at zero), and this message promises exactly that filter. The
+    # two fields happen to agree today; if they ever diverged, the promise
+    # would still hold.
     chiesti = [
         product for product in senza
         if (product.get("quantity") or 0) > 0
     ]
-    # ⚠ Diceva «I 80 che il gestionale chiede», e con un prodotto solo «I 1»:
-    # l'articolo non regge davanti a un numero qualunque. Qui il numero sta
-    # dopo il verbo, e la frase resta giusta da uno a mille.
+    # The count goes after the verb so the sentence reads correctly whether
+    # it's one item or a thousand (an earlier phrasing broke on a count of 1).
     uno = len(chiesti) == 1
     coda = (
         f" Di questi il gestionale ne chiede {len(chiesti)}: "
@@ -454,17 +444,15 @@ def senza_offerta_summary(products: list[dict[str, Any]]) -> list[dict[str, Any]
     }]
 
 
-# ⚠ L'avviso diceva «3 anomalie in LARICE; i valori restano visibili
-# nell'audit», e Daniele leggendolo il 20 agosto 2026 ha scritto: «quindi? Che
-# vuol dire?». Aveva ragione due volte. «Anomalia» non e' una parola del suo
-# mestiere, e «restano visibili nell'audit» non dice dove andare a guardare —
-# ma soprattutto la frase taceva l'unica cosa che conta davanti a un ordine:
-# **se quel prezzo puo' essere sbagliato**.
+# A generic "N anomalies, values stay visible in the audit" warning tells the
+# store operator nothing actionable: it names neither the problem in their own
+# terms nor where to look, and it omits the one thing that matters before
+# placing an order — whether the price can be wrong.
 #
-# Queste tre voci portano la conseguenza, non il nome del difetto. La chiave e'
-# l'inizio del testo che scrive chi legge il listino: un testo nuovo non rompe
-# niente, finisce nel ramo generico qui sotto e si aggiunge qui il giorno in
-# cui vale la pena spiegarlo.
+# These entries state the consequence, not the internal name of the defect.
+# They're keyed by the prefix of the text the price-list reader writes: an
+# unrecognized warning text falls through to the generic branch below and can
+# be added here once it's worth explaining.
 SPIEGAZIONI_ANOMALIE: tuple[tuple[str, str, str, bool], ...] = (
     (
         "Codice sconto testuale inatteso",
@@ -488,10 +476,11 @@ SPIEGAZIONI_ANOMALIE: tuple[tuple[str, str, str, bool], ...] = (
 
 
 def _righe_citate(righe: list[Any]) -> str:
-    """Le righe del file del fornitore, poche e per esteso, poi il conto.
+    """List the supplier file's row numbers in full up to a cap, then just the count.
 
-    Chi controlla apre il listino e cerca la riga: sei numeri si copiano a
-    mano, sessanta sono un muro e il resto della frase non si legge piu'.
+    Someone checking this opens the price list and looks the row up: six
+    numbers are easy to copy by hand, sixty are a wall of text that drowns
+    out the rest of the sentence.
     """
 
     numeri = [str(riga) for riga in righe if riga not in (None, "")]
@@ -505,21 +494,21 @@ def _righe_citate(righe: list[Any]) -> str:
 
 
 def anomalie_listino_summary(source_warnings: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Che cosa e' successo, su quale listino, e se tocca un prezzo.
+    """Summarize what happened, on which price list, and whether a price is affected.
 
-    Un avviso che dice «3 anomalie» chiede a chi legge di indovinare il resto.
-    Questo dice il fornitore, quante righe, che cosa avevano di strano e la
-    conseguenza — e il titolo risponde alla domanda che ci si fa davanti a un
-    ordine: quel prezzo lo posso guardare o lo devo controllare?
+    A bare "3 anomalies" warning leaves the reader to guess the rest. This
+    states the supplier, the row count, what was unusual and the consequence
+    — and its title answers the question that matters before placing an
+    order: can this price be trusted, or does it need checking?
     """
 
     if not source_warnings:
         return []
 
-    # Si raggruppa per (fornitore, tipo di anomalia): e' la coppia che decide
-    # sia la frase sia le righe da citare. `dict` normale, che conserva
-    # l'ordine di inserimento: l'avviso esce nell'ordine in cui i listini sono
-    # stati letti, non in uno alfabetico che nessuno riconosce.
+    # Grouped by (supplier, anomaly type): that pair decides both the sentence
+    # and the rows to cite. A plain `dict` preserves insertion order, so
+    # warnings come out in the order the price lists were read, not an
+    # unfamiliar alphabetical one.
     gruppi: dict[tuple[str, int], list[dict[str, Any]]] = {}
     for voce in source_warnings:
         if not isinstance(voce, dict):
@@ -548,8 +537,8 @@ def anomalie_listino_summary(source_warnings: list[dict[str, Any]]) -> list[dict
             if sul_prezzo:
                 righe_sul_prezzo += len(voci)
         else:
-            # Un motivo che questo elenco non conosce: si riporta com'e'
-            # scritto, senza inventargli una conseguenza che non sappiamo.
+            # A reason this table doesn't recognize: reported verbatim,
+            # without inventing a consequence we don't actually know.
             motivi = sorted({str(voce.get("warning") or "").strip() for voce in voci if voce.get("warning")})
             dettaglio = f" Il motivo scritto in lettura: {'; '.join(motivi)}." if motivi else ""
             frasi.append(
@@ -558,8 +547,8 @@ def anomalie_listino_summary(source_warnings: list[dict[str, Any]]) -> list[dict
             )
             righe_senza_spiegazione += len(voci)
 
-    # Il titolo risponde alla domanda che costa: se anche un solo gruppo tocca
-    # il prezzo, il titolo lo dice, e il dettaglio resta nel messaggio.
+    # The title answers the question that has a cost: if even one group
+    # affects a price, the title says so, and the detail stays in the message.
     fornitori = sorted({fornitore for fornitore, _ in gruppi})
     chi = f"{fornitori[0]}: " if len(fornitori) == 1 else ""
     coda_listino = "" if len(fornitori) == 1 else " di listino"
@@ -574,8 +563,8 @@ def anomalie_listino_summary(source_warnings: list[dict[str, Any]]) -> list[dict
         titolo = f"{chi}{quante_tutte}{coda_listino} {letta} con una riserva"
     else:
         titolo = f"{chi}{quante_tutte}{coda_listino} con un dato incerto, che non tocca il prezzo"
-    # Senza il nome del fornitore davanti, il titolo comincia con la frase: la
-    # maiuscola la mette qui, in un posto solo.
+    # Without a supplier name in front, the title starts with the sentence
+    # itself, so the capitalization is applied here, in one place.
     if not chi:
         titolo = titolo[:1].upper() + titolo[1:]
 
@@ -590,13 +579,12 @@ def anomalie_listino_summary(source_warnings: list[dict[str, Any]]) -> list[dict
 
 
 def suspect_reject_summary(products: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Lo stesso conteggio, ma in cima alla pagina.
+    """Summarize the same count at the top of the page.
 
-    Serve perche' la pagina raccoglie gli avvisi di prodotto **solo** per i
-    prodotti con una quantita' da ordinare: senza questa riga, un prodotto
-    scartato a torto e lasciato a zero non comparirebbe da nessuna parte. I due
-    numeri si dichiarano entrambi — promettere che si trovano tutti con un
-    filtro che non li mostra tutti sarebbe un avviso che mente."""
+    The page collects per-product warnings only for products with a quantity
+    to order, so without this summary a wrongly rejected product left at zero
+    wouldn't show up anywhere. Both counts are stated explicitly — claiming a
+    filter shows everything when it doesn't would be a warning that lies."""
     con_avviso = [
         product
         for product in products
@@ -636,15 +624,15 @@ CAUSE_DI_SCARTO = {
 
 
 def decisioni_ai_scartate(resolved: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """L'avviso in cima alla pagina per le decisioni AI che sono state buttate.
+    """Build the top-of-page warning for AI decisions that were discarded.
 
-    Il conteggio esisteva solo su `stdout` di `merge_match_decisions.py`, e il
-    programma finito gira da solo: nessuno legge quello schermo. In elenco una
-    coppia degradata e' indistinguibile da una che l'AI non ha mai valutato —
-    l'unica differenza e' il testo della motivazione, che si vede solo aprendo
-    quel prodotto presso quel fornitore. Senza questo avviso il vincolo «cio'
-    che viene scartato va contato in un riepilogo visibile» sarebbe soddisfatto
-    a parole."""
+    Otherwise this count only shows up in `merge_match_decisions.py`'s stdout,
+    and the finished app runs unattended, so nobody reads that stream. In the
+    product list a discarded match is indistinguishable from one the AI never
+    evaluated — the only difference is the rationale text, visible only by
+    opening that product at that supplier. Without this summary, "discarded
+    decisions must be counted in a visible summary" would be true only on
+    paper."""
 
     per_causa: dict[str, int] = {}
     for item in resolved:
@@ -686,29 +674,27 @@ def build_products(resolved: list[dict[str, Any]], suppliers: list[str]) -> list
         selected_supplier = selectable[0]["supplierId"] if selectable else None
         selected_offer = next((offer for offer in offers if offer.get("supplierId") == selected_supplier), None)
         requires_confirmation = bool(selected_offer and selected_offer.get("requiresConfirmation"))
-        # `source_colli_ignored` è il nome usato prima del passaggio all'ordine in colli:
-        # accettarlo permette di rigenerare il confronto da artefatti di run precedenti.
+        # `source_colli_ignored` is the field's name from before the switch to
+        # ordering by cartons; accepting it lets the comparison rebuild from
+        # artifacts of older runs.
         default_quantity = suggested_quantity(
             master.get("suggested_colli", master.get("source_colli_ignored"))
         )
-        # I colli del gestionale si applicano SEMPRE, anche quando nessun
-        # listino porta il prodotto: è la quantità normale del prodotto, non una
-        # scelta, e azzerarla perdeva l'unica cosa che il gestionale aveva detto
-        # su quella riga (decisione di Daniele del 16 agosto 2026).
+        # The management-software carton count always applies, even when no
+        # price list carries the product: it's the product's normal quantity,
+        # not a choice, and zeroing it out would discard the only thing the
+        # export said about that row.
         #
-        # ⚠ Fino al 16 agosto 2026 qui si azzerava, e la ragione era vera: il 14
-        # agosto tre prodotti nuovi del gestionale, che nessun listino porta,
-        # erano nati con `quantity: 1` e nessun fornitore, il passo 2 si apriva
-        # con un errore bloccante e l'autosalvataggio moriva a ogni battuta
-        # perché `validate_snapshot` rifiutava una quantità senza offerta
-        # utilizzabile. Quel rifiuto è stato allentato nello stesso lavoro:
-        # quantità > 0 senza NESSUNA offerta utilizzabile da nessun fornitore è
-        # oggi uno stato valido, e quei prodotti non restano orfani — alla
-        # compilazione finiscono nell'elenco «Prodotti da reperire», che è chi
-        # adesso li raccoglie e li porta fuori dal programma.
+        # This must stay a valid state: a quantity greater than zero with no
+        # usable offer from any supplier. Zeroing it here would sidestep a
+        # blocking validation error for products the management export
+        # introduces that no price list carries, but the validation rule
+        # itself is relaxed instead, so such products don't need to be
+        # zeroed to pass it. At order-compilation time they land in the
+        # "to be sourced" list, which is what surfaces them.
         #
-        # Il prodotto **resta nel confronto** e dice che offerte non ne ha:
-        # nasconderlo vorrebbe dire perdere una riga che il gestionale chiede.
+        # The product stays in the comparison and reports that it has no
+        # offers: hiding it would drop a row the management software asked for.
         ordinabile = selected_supplier is not None
         quantita = default_quantity if default_quantity is not None else 0
         product_id = f"product:{master.get('source_row')}"
@@ -723,21 +709,16 @@ def build_products(resolved: list[dict[str, Any]], suppliers: list[str]) -> list
             "lastUnitPrice": last_price,
             "quantity": quantita,
             "suggestedQuantity": default_quantity,
-            # La sorgente segue i colli del gestionale, non piu' la presenza di
-            # un fornitore: adesso che la quantita' si applica comunque, dire
-            # «utente» su un numero che l'utente non ha scritto lo renderebbe
-            # intoccabile al ricalcolo successivo (`_ripulisci_stato` rilegge
-            # dall'elenco solo cio' che e' marcato «gestionale»).
+            # The source follows the management export's carton count, not
+            # whether a supplier was found: since the quantity now always
+            # applies, labeling a number the user never typed as "utente"
+            # would make it immune to the next recalculation, which only
+            # rereads values still marked "gestionale".
             #
-            # ⚠ `is not None`, non la verita' del numero: fino al 6 settembre
-            # 2026 uno zero del gestionale nasceva «utente», con la spiegazione
-            # «non c'e' niente da rileggere» — vera la settimana dello zero e
-            # falsa quella dopo.  L'elenco chiedeva 0 colli, la pagina salvava
-            # da sola, la settimana dopo ne chiedeva 4 e in pagina restava 0:
-            # l'articolo fuori dall'ordine, senza un avviso.  Zero e' un numero
-            # che il gestionale ha detto, e si rilegge da li' come gli altri;
-            # «utente» resta solo la colonna vuota, dove non c'e' davvero
-            # niente da rileggere.
+            # Checks `is not None`, not the number's truthiness: a management
+            # export value of zero is still a value the export declared, and
+            # is reread from there like any other; "utente" is reserved for
+            # the genuinely empty column, where there's nothing to reread.
             "quantitySource": "gestionale" if default_quantity is not None else "utente",
             "quantityLabel": "colli",
             "orderUnitLabel": "colli",
@@ -813,26 +794,24 @@ def display_offer(offer: dict[str, Any]) -> dict[str, Any]:
             "unitPricePreDiscount": money(item.get("unit_price_pre_discount") or item.get("component_unit_price")),
             "sourceRow": item.get("source_row"),
         })
-    # Un espositore e' un'unita' d'ordine come il collo: `quantityFactor` sono i
-    # pezzi che contiene e `unitPriceNet` il prezzo del singolo pezzo, esattamente
-    # come per un prodotto normale (`offer_record`, piu' su). Qui c'era `1` con
-    # dentro `unitPriceNet` il prezzo dell'espositore INTERO, e la conseguenza non
-    # era estetica: il piano d'ordine e lo storico scrivevano `delivered_pieces` =
-    # numero di espositori e `unit_price_net` = prezzo dell'espositore, cioe' una
-    # merce diversa da quella che la pagina mostrava (fuori di un fattore
-    # `declaredUnits`), e «Sposta tutto su un altro fornitore» sceglieva la
-    # migliore alternativa sul prezzo dell'espositore intero invece che sul prezzo
-    # al pezzo — contro la regola dichiarata a server.py:1677-1682, e contro quello
-    # che la pagina consiglia sullo stesso schermo (revisione del 14 agosto 2026).
-    # Se i pezzi dichiarati non ci sono l'espositore vale un pezzo: e' il ripiego
-    # prudente, perche' fa sembrare l'offerta piu' cara e non piu' conveniente.
+    # A display is an order unit like a carton: `quantityFactor` is the pieces
+    # it contains and `unitPriceNet` the price of a single piece, exactly like
+    # a regular product (`offer_from_match`, above). `unitPriceNet` must not
+    # hold the price of the whole display with a factor of 1 — the order plan
+    # and history would then write `delivered_pieces` = number of displays and
+    # `unit_price_net` = display price, a different quantity than the page
+    # shows (off by a factor of `declaredUnits`), and "move everything to
+    # another supplier" would pick the best alternative by whole-display price
+    # instead of per-piece price, against the per-piece contract the rest of
+    # the app relies on. If the declared piece count is missing, the display
+    # counts as one piece — a conservative fallback, since it makes the offer
+    # look more expensive rather than cheaper than it is.
     pieces = declared if declared and declared > 0 else 1
     price_per_piece = money(net_price / pieces) if net_price is not None else None
-    # ⚠ «Identico» è il risultato di una verifica fatta, non l'assenza di una
-    # smentita. `quantity_reconciled` e `price_reconciled` valgono `None` quando
-    # i dati per riconciliare non c'erano, e `None is not False` è vero: la
-    # pagina scriveva «Espositore identico» sopra un controllo che nessuno
-    # aveva eseguito (revisione del 14 agosto 2026).
+    # "identical" must be the result of an actual check, not the absence of a
+    # contradiction. `quantity_reconciled` and `price_reconciled` are `None`
+    # when there wasn't data to reconcile against, and `None is not False` is
+    # true — so this must check for `True` explicitly, not just falsiness.
     composition_status = (
         "identical"
         if offer.get("quantity_reconciled") is True and offer.get("price_reconciled") is True
@@ -849,11 +828,10 @@ def display_offer(offer: dict[str, Any]) -> dict[str, Any]:
     return {
         "supplierId": supplier,
         "supplierName": supplier_name(supplier),
-        # ⚠ `usable` vale anche per un espositore. Qui si guardava soltanto il
-        # prezzo, quindi un espositore che il lettore aveva gia' dichiarato non
-        # ordinabile — per esempio perche' i pezzi del collo padre non si
-        # leggono — sarebbe rientrato dalla porta di servizio con un prezzo
-        # ricavato da un fattore che nessuno conosce.
+        # `usable` applies to a display too. Checking price alone would let a
+        # display the reader already flagged as not orderable — e.g. because
+        # its parent carton's piece count didn't parse — back in through the
+        # side door, with a price derived from an unknown factor.
         "available": (
             net_price is not None and net_price > 0
             and bool(offer.get("usable", True))
@@ -909,11 +887,10 @@ def build_display_products(raw_offers: list[dict[str, Any]], suppliers: list[str
             "description": description,
             "name": description,
             "lastUnitPrice": None,
-            # ⚠ Zero, e la decisione del 16 agosto 2026 sulla quantita' non lo
-            # tocca: un espositore non esiste nel gestionale — nasce dai listini
-            # dei fornitori — quindi non ha colli da cui prendere una quantita'
-            # e non c'e' niente da conservare. Quanti espositori ordinare lo
-            # scrive l'utente, come prima.
+            # Always zero: a display has no management-software row of its
+            # own — it comes from the suppliers' price lists — so it has no
+            # carton count to carry over. How many displays to order is
+            # written by the user, as before.
             "quantity": 0,
             "quantityLabel": "espositori",
             "orderUnitLabel": "espositori",
@@ -983,9 +960,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
-    # Stessa ragione di `merge_match_decisions.py`: su Windows un processo che
-    # scrive su una pipe usa cp1252, e i messaggi portano le accentate. Chi
-    # legge questa uscita deve trovare sempre UTF-8.
+    # Same reason as `merge_match_decisions.py`: on Windows, a process writing
+    # to a pipe defaults to cp1252, and these messages contain accented
+    # characters. Whatever reads this output must always find UTF-8.
     for flusso in (sys.stdout, sys.stderr):
         try:
             flusso.reconfigure(encoding="utf-8")

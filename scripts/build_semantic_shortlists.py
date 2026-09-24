@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
 """Build deterministic semantic candidate shortlists without deciding matches.
 
-**Le righe con l'EAN del prodotto entrano sempre.** Il punteggio guarda solo i
-token della descrizione, e i due testi li scrivono due persone diverse: misurato
-sulle 1160 coppie `EAN_ESATTO` della run vera — dove la riga giusta e' certa
-perche' l'EAN la identifica — la shortlist per sola descrizione l'avrebbe
-mostrata **1014 volte su 1160**. Il 12,6% delle volte no, e non per poco:
-`CHANTE BRILL ANTICALCARE ACETO 625ML` contro `CHANTEBR. A/CALCARE 625
-EXTRARAPIDO` non entra nemmeno nel gruppo dei candidati.
+Rows sharing the product's EAN always enter the shortlist. Description
+scoring alone is not reliable enough: measured on 1160 cases where the right
+row is known for certain because the EAN identifies it, a description-only
+shortlist would have surfaced it only 1014 times out of 1160. The 12.6%
+misses aren't marginal cases either — two descriptions of the same product
+can differ enough in wording and abbreviation to share no useful tokens at
+all (e.g. `CHANTE BRILL ANTICALCARE ACETO 625ML` vs `CHANTEBR. A/CALCARE 625
+EXTRARAPIDO`).
 
-Per un `EAN_ASSENTE` non c'e' rimedio, ed e' il caso normale. Ma quando lo stato
-e' `EAN_AMBIGUO` — il fornitore ha piu' righe utilizzabili con quell'EAN e
-bisogna scegliere fra loro — la riga giusta e' **una di quelle**, e mostrarne
-altre al posto loro e' un errore che si puo' evitare: le si forza in shortlist.
+For a missing EAN there's no remedy, and that's the normal case. But when a
+supplier has several usable rows sharing the same EAN and the right one has
+to be chosen among them, the correct row is guaranteed to be one of those —
+so forcing them all into the shortlist is an avoidable source of error.
 
-Serve anche a valle: `merge_match_decisions.py` pretende che su un
-`EAN_AMBIGUO` la riga accettata abbia l'EAN del prodotto. Senza questa forzatura
-quella regola sarebbe insoddisfabile, e ogni ambiguo si fermerebbe."""
+This also matters downstream: `merge_match_decisions.py` requires that, for
+that ambiguous case, the accepted row carries the product's EAN. Without this
+forcing, that rule would be unsatisfiable and every such case would stall."""
 
 from __future__ import annotations
 
@@ -52,14 +53,14 @@ ALIASES = {
 
 
 def _confrontabile(valore: Any) -> Any:
-    """Un numero come numero, tutto il resto come testo. Non solleva mai.
+    """A number as a number, everything else as text. Never raises.
 
-    Serve solo dentro l'impronta, e le due parti che la calcolano leggono dati
-    di provenienza diversa: `valuta_shortlist.py` passa quello che ha davvero
-    mandato al modello (interi e float), `merge_match_decisions.py` passa quello
-    che trova nel file. `441` e `"441"` sono lo stesso numero di riga e non
-    devono produrre due impronte diverse — e un valore storto non deve far
-    schiantare un confronto che serve proprio a dire «questo file non va bene».
+    Used only inside the fingerprint, whose two callers read data from
+    different sources: `valuta_shortlist.py` passes what it actually sent to
+    the model (ints and floats), `merge_match_decisions.py` passes whatever
+    it finds in the file. `441` and `"441"` are the same row number and must
+    not produce two different fingerprints — and a malformed value must not
+    crash a comparison whose whole job is to say "this file is no good".
     """
 
     if isinstance(valore, bool) or valore is None:
@@ -67,13 +68,13 @@ def _confrontabile(valore: Any) -> Any:
     try:
         return round(float(valore if isinstance(valore, (int, float)) else str(valore).strip()), 6)
     except (TypeError, ValueError, OverflowError):
-        # `OverflowError` non e' teorico: un intero JSON da 401 cifre — un file
-        # corrotto, o scritto da un altro programma — faceva sollevare questa
-        # funzione, e con lei `merge_match_decisions.py`, **prima** che
-        # scrivesse `resolved_matches.json`. Restava sul disco quello della run
-        # precedente, da farsi leggere come fresco: cioe' proprio il guasto che
-        # il modulo dice di voler evitare. Chi serve a dire «questo file non va
-        # bene» non puo' schiantarsi mentre lo dice.
+        # `OverflowError` isn't theoretical: a corrupted or foreign-written
+        # JSON integer hundreds of digits long can raise it here, and would
+        # take down `merge_match_decisions.py` before it wrote
+        # `resolved_matches.json` — leaving the previous run's file on disk
+        # to be read as fresh, exactly the failure this module exists to
+        # avoid. A function whose job is to say "this file is no good" must
+        # not crash while saying it.
         return str(valore)
 
 
@@ -83,28 +84,28 @@ def impronta_caso(
     description: Any,
     candidati: Iterable[tuple[Any, Any, Any]],
 ) -> str:
-    """Sedici cifre che dicono **che cosa il modello ha visto** per una coppia.
+    """Sixteen hex digits describing exactly what the model saw for one case.
 
-    Le guardie della Fase 6a confrontano la riga accettata con la shortlist e la
-    shortlist con il listino, ma entrambi gli artefatti sono quelli della run
-    corrente: rispetto a un file di decisioni prodotto la settimana scorsa sono
-    cieche per costruzione, perche' il gestionale e' lo stesso file e le coppie
-    `(riga, fornitore)` si sovrappongono quasi tutte. Una decisione vecchia
-    verrebbe applicata a una shortlist nuova, e un `ACCEPT` con confidenza
-    `ALTA` entra in ordine senza che nessuno lo guardi.
+    The merge step's guards compare the accepted row against the shortlist
+    and the shortlist against the price list, but both artifacts belong to
+    the current run: against a decisions file produced last week they are
+    blind by construction, because the management-software export is the
+    same file and the `(row, supplier)` pairs mostly overlap. An old
+    decision could then apply to a new shortlist, letting a high-confidence
+    `ACCEPT` into the order unreviewed.
 
-    L'impronta chiude quella porta: `valuta_shortlist.py` la scrive su ogni
-    decisione, `merge_match_decisions.py` la ricalcola dalla shortlist di oggi e
-    butta le decisioni che non corrispondono.
+    The fingerprint closes that gap: `valuta_shortlist.py` stamps it onto
+    every decision, `merge_match_decisions.py` recomputes it from today's
+    shortlist and discards any decision that doesn't match.
 
-    Comprende **tutti** i candidati, non solo quello accettato, perche' anche un
-    `REJECT` vecchio fa danno: dice «nessuno di questi va bene» a proposito di
-    un elenco che oggi e' un altro, e il prodotto sparisce dal confronto presso
-    quel fornitore senza che niente lo segnali.
+    Covers every candidate, not just the accepted one, because an old
+    `REJECT` is dangerous too: it says "none of these match" about a list
+    that has since changed, silently dropping the product out of the
+    comparison for that supplier.
 
-    `candidati` e' una sequenza di terne `(source_row, description, score)`:
-    esattamente i tre campi che il modello legge (`Candidato` non porta EAN ne'
-    prezzo). L'ordine conta, perche' e' l'ordine in cui li ha visti."""
+    `candidati` is a sequence of `(source_row, description, score)` triples —
+    exactly the three fields the model reads (`Candidato` carries no EAN or
+    price). Order matters, since it's the order the model saw them in."""
 
     canonico = json.dumps(
         {
@@ -139,31 +140,31 @@ def tokens(value: Any) -> set[str]:
     return result
 
 
-# Le quantita' scritte nel nome, per confrontare due formati: «18PZ» contro
-# «X 9» deve dire «pacchi diversi», e un conflitto toglie 0,35 al punteggio.
+# The quantities written into a product name, to compare two formats:
+# "18PZ" vs "X 9" must read as "different pack sizes", and a conflict
+# subtracts 0.35 from the score.
 #
-# ⚠ Dal 21 settembre 2026 si leggono anche le forme con l'unita' **davanti**,
-# che prima erano invisibili: `X 18`, `PZ.18`, `ML.500`, `LT.3`, `KG 4`. Il
-# caso vero: il gestionale scrive `LINDA SETA ULTRA LUNGO ALI 18PZ`, LARICE
-# `ASS. LINDA SETAMORBI X 18 LUNGO`, e in testa alla shortlist c'era
-# `SETAMORBI X 9 LUNGO ALI` — un altro prodotto — perche' nessuna delle due
-# righe LARICE dichiarava una quantita' leggibile. La riga giusta non e' stata
-# accettata, e il prodotto e' andato a NOCE a 2,31 invece che a LARICE a
-# 2,25. Prima non si leggevano nemmeno `3LT` e `250GR`: il `\b` dopo `L` o `G`
-# falliva dentro `LT` e `GR`.
+# Forms with the unit written before the number are read too — `X 18`,
+# `PZ.18`, `ML.500`, `LT.3`, `KG 4` — alongside the more common
+# unit-after-number forms like `3LT` and `250GR`. Without reading both
+# directions, two rows for the same product can fail to match because
+# neither one's quantity is recognized, and the comparison silently falls
+# back to picking a different, cheaper-looking product instead.
 #
-# Misurato sul gestionale del 18 settembre contro LARICE 39 e NOCE (355 e
-# 308 prodotti di cui la riga giusta e' certa perche' l'EAN coincide; si
-# nasconde l'EAN e si ordina per descrizione): riga giusta al primo posto
-# 199 -> 215 e 220 -> 240, fra le prime cinque 292 -> 302 e 283 -> 284.
+# Measured against the reorder list ranked against LARICE and NOCE (355 and
+# 308 products respectively, where the correct row is known for certain
+# because the EAN matches; EAN hidden, ranked by description alone): correct
+# row in first place rose from 199 to 215 and from 220 to 240; in the top
+# five, from 292 to 302 and from 283 to 284.
 #
-# Il principio e': **meglio non leggere un numero che leggerlo sbagliato**. Un
-# falso conflitto toglie 0,35 proprio alla riga giusta; un numero non letto
-# lascia il punteggio com'era.
+# The guiding principle: better to not read a number than to misread it. A
+# false conflict subtracts 0.35 from exactly the correct row's score; a
+# number that isn't recognized just leaves the score unchanged.
 #
-# ⚠ Il punteggio entra nel testo mandato al modello e nella chiave della
-# memoria AI (`ai_client._caso_serializzato`): cambiare questa lettura fa
-# rifare le domande sui casi il cui punteggio cambia, non su tutti.
+# This score feeds into both the text sent to the model and the AI memory
+# key (`ai_client._caso_serializzato`): changing this parsing logic causes
+# the model to be re-asked only for the cases whose score actually changes,
+# not for all of them.
 _UNITA_LETTE = {
     "ML": "ML", "L": "L", "LT": "L", "LITRI": "L", "LITRO": "L",
     "KG": "KG", "G": "G", "GR": "G",
@@ -176,37 +177,41 @@ _NUMERO = r"\d+(?:\.\d+)?"
 _UNITA_DOPO = re.compile(
     rf"({_NUMERO}) ?(ML|LT|LITRI|LITRO|L|KG|GR|G|PEZZI|PZ|ROTOLI|ROT|LAVAGGI|LAV|MISURINI|MIS|NOTTI)\b"
 )
-# L'unita' davanti: «X 18», «PZ.18», «ML.500», «LT.3», «KG4». Il punto prima e'
-# ammesso («SALVACAM.ML.150», «VER.KG.1,5»), una lettera o una cifra no.
-# Il numero non e' attaccato a lettere («SH. 250 ML 2IN1» non sono 2 ml), tranne
-# la X di un moltiplicatore («GR.50X6»).
+# Unit before the number: "X 18", "PZ.18", "ML.500", "LT.3", "KG4". A period
+# right before the unit is allowed ("SALVACAM.ML.150", "VER.KG.1,5"), a
+# letter or digit isn't. The number can't be glued to other letters
+# ("SH. 250 ML 2IN1" isn't 2 ml), except for a multiplier "X" ("GR.50X6").
 _UNITA_DAVANTI = re.compile(rf"(?<![A-Z0-9])(X|PZ|PEZZI|ML|LT|KG|GR)\.? ?({_NUMERO})(?![\dA-WYZ])")
-# Dopo la X, un'unita' dice che la X e' un «per»: «2 X 250ML», «X 10 PZ». Non
-# se quell'unita' ha un numero suo: in «X 2 GR.90» la X conta le saponette e i
-# grammi sono 90.
+# A unit right after an "X" means the X is a "times", not a pack count: "2 X
+# 250ML", "X 10 PZ". Unless that unit has its own number attached: in
+# "X 2 GR.90" the X counts individual bars and the 90 is the grams of each.
 _UNITA_DOPO_LA_X = re.compile(
     r" ?(ML|LT|L|KG|GR|G|CL|CM|MM|MT|M|PZ|PEZZI|LAV|LAVAGGI|MIS|MISURINI|NOTTI|ROT|ROTOLI|ANNI|MESI)\b(?!\.? ?\d)"
 )
-# Un'unita' subito dopo un numero: dice che quel numero ha gia' la sua.
+# A unit right after a number: means that number already has its own unit.
 _UNITA_SUBITO_DOPO = re.compile(
     r" ?(ML|LT|LITRI|LITRO|L|KG|GR|G|PEZZI|PZ|ROTOLI|ROT|LAVAGGI|LAV|MISURINI|MIS|NOTTI)\b"
 )
-# Solo il «+» attaccato ai due numeri: «70+8 LAV», «PZ.8+2», «500+250ML». Sei
-# cifre bastano a qualunque quantita' vera, e un numero di migliaia di cifre
-# farebbe sollevare `int()` e fermare tutta la shortlist.
+# Only a "+" glued directly between two numbers: "70+8 LAV", "PZ.8+2",
+# "500+250ML". Six digits are enough for any real quantity, and a
+# thousands-of-digits number would make `int()` raise and take down the
+# whole shortlist step.
 _SOMMA = re.compile(r"(?<!\d)(?<!\d\.)(\d{1,6})((?:\+\d{1,6})+)(?!\d)(?!\.\d)")
-# «45+» (eta' della crema), «FP50+», «6+ ANNI»: non sono quantita'.
+# "45+" (a cream's age rating), "FP50+", "6+ ANNI": not quantities.
 _ETA = re.compile(r"(?<![\d.])\d+\+(?!\d)")
-# Misure che non sono la quantita' della confezione, tolte dal testo grezzo
-# prima di leggere (la normalizzazione trasformerebbe «-», «/», «°» e «=» in
-# spazi, e i numeri resterebbero sciolti): le fasce («7-18 KG» del bambino,
-# «KG. 11/25», «0-6» anni), le taglie («5°MIS.») e le formule («2X13=26»).
-# Verifica avversariale del 21 settembre 2026: 56 pannolini BETULLA, CIPRESSO e
-# ACERO leggevano un peso del bambino diverso per listino.
-# La fascia di peso si porta via il suo KG, prima o dopo: resterebbe sciolto e
-# si attaccherebbe al numero vicino («11-25KG 14 P» sarebbero 14 kg). Solo KG:
-# le fasce vere dei listini sono pesi di bambini e animali, e in «60 ML 0-6»
-# o «2/1 ML 250» il ML e' del numero accanto, non della fascia.
+# Measurements that aren't the pack quantity, stripped from the raw text
+# before parsing (normalization would turn "-", "/", "°" and "=" into
+# spaces, leaving loose numbers behind): weight ranges ("7-18 KG" for a
+# child, "KG. 11/25", "0-6" years), sizes ("5°MIS.") and formulas
+# ("2X13=26"). Confirmed by an adversarial check against several diaper
+# products, which without this were reading a different child weight per
+# price list.
+# A weight range takes its "KG" with it wherever it appears, before or
+# after: left loose, it would attach to the nearest unrelated number
+# ("11-25KG 14 P" would misread as 14 kg). Only KG is stripped this way,
+# since real weight ranges in these price lists are for children or
+# animals, and in "60 ML 0-6" or "2/1 ML 250" the ML belongs to the
+# adjacent number, not to the range.
 _FASCIA = re.compile(
     r"(?:(?<![A-Z])KG\.?\s*)?"
     r"\d+(?:[.,]\d+)?\s*[-/]\s*\d+(?:[.,]\d+)?"
@@ -217,34 +222,37 @@ _FORMULA = re.compile(r"\d+\s*X\s*\d+\s*=\s*\d+")
 
 
 def _unita_davanti_girata(trovato: re.Match[str]) -> str:
-    """«X 18» -> «18 PZ», «ML.500» -> «500 ML»; lascia stare le misure.
+    """Turns "X 18" into "18 PZ", "ML.500" into "500 ML"; leaves measurements alone.
 
-    Un numero subito prima vuol dire che non e' un'unita' davanti ma una misura
-    o un codice: «30 X 40 CM», «10 PZ 1276», «25 LT 3». Una X seguita da
-    un'unita' e' un «per»: «X 250ML» resta 250 ML, non 250 pezzi.
+    A number immediately before means this isn't a unit-before-number form
+    but a dimension or a code: "30 X 40 CM", "10 PZ 1276", "25 LT 3". An "X"
+    followed by a unit is a "times": "X 250ML" stays 250 ML, not 250 pieces.
 
-    ⚠ Tranne l'unita' col punto attaccato, che e' sempre la forma «unita'
-    davanti»: in «X 2 GR.90» e «4 IN 1 GR.900» i grammi sono 90 e 900, non 2 e
-    1. Lasciata com'era, `_UNITA_DOPO` incollava l'unita' al numero di prima e
-    la riga giusta prendeva un falso conflitto (18 saponette ACERO, CALGOR
-    e tre WHISKAT di NOCE; revisione del 21 settembre 2026). La barra la
-    separa dal numero di prima.
+    Except for the unit glued with a period, which is always the
+    unit-before-number form: in "X 2 GR.90" and "4 IN 1 GR.900" the grams
+    are 90 and 900, not 2 and 1. Left unhandled, the general unit-after
+    pattern would glue the unit to the preceding number instead and produce
+    a false conflict on the correct row. A separator pipe keeps it apart
+    from the number before it.
     """
 
     unita, numero = trovato.group(1), trovato.group(2)
     parole_prima = trovato.string[: trovato.start()].split()
     prima = parole_prima[-1] if parole_prima else ""
     if re.fullmatch(_NUMERO, prima):
-        # Con un numero subito prima l'unita' puo' essere sua o del numero che
-        # segue. Tre forme, misurate sui listini veri:
-        #   «GR.90» (punto attaccato)  -> sempre del numero che segue;
-        #   «GR. 500» (punto e spazio) -> del numero che segue solo se quello
-        #       prima conta dei pezzi («X 2 GR. 500»); in «ADDITIVO 500 GR. 100
-        #       PIU'» i grammi sono 500;
-        #   «ML 200» (solo lo spazio)  -> la forma di ACERO, «PH 3.5 ML 200»:
-        #       del numero che segue se e' un volume o un peso e quel numero non
-        #       ha un'unita' sua («50 LT 10 PZ» sono 50 litri). Per i pezzi no:
-        #       dopo «PZ» viene spesso un codice articolo («10 PZ 1276»).
+        # With a number right before, the unit could belong to it or to the
+        # number that follows. Three forms, as seen in real price lists:
+        #   "GR.90" (period glued to unit)  -> always belongs to the number
+        #       that follows;
+        #   "GR. 500" (period, then space)  -> belongs to the following
+        #       number only if the number before it counts pieces
+        #       ("X 2 GR. 500"); in "ADDITIVO 500 GR. 100 PIU'" the grams
+        #       are 500;
+        #   "ML 200" (space only)  -> e.g. "PH 3.5 ML 200": belongs to the
+        #       following number if it's a volume or weight and that number
+        #       has no unit of its own ("50 LT 10 PZ" is 50 liters). Not for
+        #       pieces: a "PZ" is often followed by an item code
+        #       ("10 PZ 1276").
         dopo_l_unita = trovato.group(0)[len(unita):]
         pezzi_prima = len(parole_prima) > 1 and parole_prima[-2] == "X"
         if unita == "X":
@@ -254,8 +262,8 @@ def _unita_davanti_girata(trovato: re.Match[str]) -> str:
         elif dopo_l_unita.startswith("."):
             separa = pezzi_prima
         else:
-            # ...e solo se il numero dopo e' piu' grande: «PH 3.5 ML 200» si',
-            # «CHICCA BIBERON 330 ML 3 FORI» no (sono 330 ml e tre fori).
+            # ...and only if the following number is larger: "PH 3.5 ML 200"
+            # yes, "CHICCA BIBERON 330 ML 3 FORI" no (330 ml and 3 openings).
             separa = (
                 unita in {"ML", "LT", "KG", "GR"}
                 and not _UNITA_SUBITO_DOPO.match(trovato.string, trovato.end())
@@ -266,9 +274,10 @@ def _unita_davanti_girata(trovato: re.Match[str]) -> str:
         return trovato.group(0)
     if unita == "X" and _UNITA_DOPO_LA_X.match(trovato.string, trovato.end()):
         return trovato.group(0)
-    # «54 DOSI X 12=648 GR» (BETULLA): dopo il numero della X ne viene un altro
-    # con la sua unita', e 12 sono i grammi di una dose, non dodici pezzi. Un
-    # numero senza unita' no: in «TEMPE BOX X 80 4VELI» sono 80 fazzoletti.
+    # E.g. "54 DOSI X 12=648 GR": after the X's number comes another one with
+    # its own unit, and that 12 is the grams per dose, not twelve pieces. Not
+    # for a bare number without a unit: in "TEMPE BOX X 80 4VELI" that's 80
+    # tissues.
     if unita == "X":
         dopo = re.match(rf" ?({_NUMERO})", trovato.string[trovato.end():])
         if dopo and _UNITA_SUBITO_DOPO.match(trovato.string, trovato.end() + dopo.end()):
@@ -277,8 +286,8 @@ def _unita_davanti_girata(trovato: re.Match[str]) -> str:
 
 
 def attributes(value: Any) -> dict[str, list[float]]:
-    # Il testo grezzo, non quello di `normalize_text`: il «+» delle somme
-    # sparirebbe prima di arrivare qui.
+    # The raw text, not `normalize_text`'s output: the "+" in a sum would be
+    # stripped before reaching this point.
     grezzo = str(value or "").upper()
     for misura in (_FORMULA, _FASCIA, _ORDINALE):
         grezzo = misura.sub(" ", grezzo)
@@ -286,10 +295,11 @@ def attributes(value: Any) -> dict[str, list[float]]:
     text = _ETA.sub(" ", text)
     letture = [text]
     if _SOMMA.search(text):
-        # La somma vale due volte, il totale e la base: lo stesso articolo sta
-        # come «8PZ» nel gestionale e «PZ.8+2» nel listino, e come «78
-        # MISURINI» contro «70+8 LAV». Un numero in piu' non crea conflitti:
-        # basta che una coppia combaci.
+        # A sum is read two ways, as the total and as the base value: the
+        # same product appears as "8PZ" in the reorder list and "PZ.8+2" in
+        # a price list, or as "78 MISURINI" against "70+8 LAV". An extra
+        # reading never creates conflicts, since a single matching pair is
+        # enough.
         letture = [
             _SOMMA.sub(lambda somma: str(sum(int(parte) for parte in somma.group(0).split("+"))), text),
             _SOMMA.sub(lambda somma: somma.group(1), text),
@@ -301,17 +311,19 @@ def attributes(value: Any) -> dict[str, list[float]]:
             number = float(raw_number)
             unit = _UNITA_LETTE[raw_unit]
             if raw_unit == "L" and "." not in raw_number and number >= 10:
-                # «COCCOLONE 952ML 45L», «AMMORB LT2 40L»: una L sola dopo un
-                # intero da 10 in su sono lavaggi. `LT` e `LITRI` restano litri.
+                # E.g. "COCCOLONE 952ML 45L", "AMMORB LT2 40L": a bare "L"
+                # after an integer of 10 or more means washes, not liters.
+                # "LT" and "LITRI" still mean liters.
                 unit = "LAVAGGI"
             if unit == "L":
                 unit, number = "ML", number * 1000
             elif unit == "KG":
                 unit, number = "G", number * 1000
             parsed[unit].add(number)
-    # Pezzi e peso (o volume) nello stesso nome: vale anche il totale, perche'
-    # lo stesso articolo sta come «GR.250 X 2» e come «X 2 GR.500». Come per
-    # le somme, un valore in piu' toglie conflitti e non ne crea.
+    # Pieces and weight (or volume) in the same name: the total is also
+    # valid, since the same product appears as "GR.250 X 2" and as
+    # "X 2 GR.500". As with sums, an extra reading removes conflicts and
+    # creates none.
     for pezzi in [valore for valore in parsed.get("PEZZI", ()) if 1 < valore <= 100]:
         for unit in ("ML", "G"):
             parsed[unit].update({valore * pezzi for valore in list(parsed.get(unit, ()))})
@@ -401,9 +413,10 @@ def main() -> int:
         for token in query_tokens:
             pool.update(token_indexes[supplier].get(token, set()))
 
-        # Le righe con lo stesso EAN entrano comunque, e prima di tutte: quando
-        # lo stato e' `EAN_AMBIGUO` la riga giusta e' una di quelle, e lasciarla
-        # fuori vuol dire far scegliere il modello fra le sbagliate.
+        # Rows sharing the same EAN always enter, ahead of everything else:
+        # in an ambiguous-EAN case the correct row is guaranteed to be one
+        # of these, and leaving it out would force the model to choose among
+        # only the wrong ones.
         ean = str(item.get("ean") or "").strip()
         forzati = ean_indexes[supplier].get(ean, set()) if ean else set()
         pool.update(forzati)
@@ -418,19 +431,19 @@ def main() -> int:
                     "ean": candidate.get("ean"),
                     "description": candidate.get("description"),
                     "unit_price_net": candidate.get("unit_price_net"),
-                    # ⚠ La riga del candidato viaggia **intera** nella sua parte
-                    # commerciale, e non e' un di piu': quando il rifiuto e'
-                    # sospetto la prima riga di questa lista diventa la proposta
-                    # che l'utente puo' accettare, e `offer_from_match` la
-                    # promuove a offerta vera. Con le sole quattro colonne di
-                    # prima nasceva senza pezzi per collo, quindi `available:
-                    # false`, e il «Si» rispondeva «la riga proposta non ha
-                    # prezzo e confezione utilizzabili» — misurato sul confronto
-                    # del 17 agosto 2026: **48 proposte, zero accettabili**.
-                    # Il modello non le vede: `valuta_shortlist.py` costruisce i
-                    # suoi `Candidato` con `source_row`, `description` e `score`
-                    # e basta, quindi il prompt — e la chiave della memoria che
-                    # ci si calcola sopra — non cambiano.
+                    # The candidate row travels with its full commercial data,
+                    # not just a subset: when a rejection looks suspicious,
+                    # the first row of this list becomes the proposal the
+                    # user can accept, and `offer_from_match` promotes it to
+                    # a real offer. With only a handful of core fields, that
+                    # proposal was born without pieces-per-carton and so
+                    # `available: false`, making every such proposal
+                    # unusable — measured on one comparison: 48 proposals,
+                    # zero acceptable. The model itself never sees these
+                    # extra fields: `valuta_shortlist.py` builds its
+                    # `Candidato` objects from just `source_row`,
+                    # `description` and `score`, so the prompt — and the
+                    # memory key computed from it — are unaffected.
                     "supplier_code": candidate.get("supplier_code"),
                     "pieces_per_carton": candidate.get("pieces_per_carton"),
                     "order_multiplier": candidate.get("order_multiplier"),
@@ -443,11 +456,12 @@ def main() -> int:
                     **scoring,
                 }
             )
-        # Ordine: prima l'EAN, poi il punteggio. L'EAN e' una prova, il
-        # punteggio una somiglianza.
+        # Order: EAN match first, then score. The EAN is proof, the score
+        # only a similarity signal.
         ranked.sort(key=lambda value: (not value["stesso_ean"], -value["score"], value["source_row"] or 0))
-        # Il taglio non puo' buttare via una riga con l'EAN giusto: se sono piu'
-        # di `top_k` si mostrano tutte, perche' la scelta sta li' dentro.
+        # The cutoff must never drop a row sharing the correct EAN: if there
+        # are more of them than `top_k`, all of them are shown, since the
+        # correct choice is guaranteed to be among them.
         quanti = max(args.top_k, sum(1 for value in ranked if value["stesso_ean"]))
         forzati_totali += sum(1 for value in ranked[:quanti] if value["stesso_ean"])
         results.append({**item, "candidates": ranked[:quanti]})

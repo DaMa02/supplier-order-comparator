@@ -1,12 +1,12 @@
-# Parte comune all'avvio per macOS. Non si lancia da solo: lo legge
-# avvia.command, che sta in questa stessa cartella.
-# Il compito e' trovare un Python adatto e un Chrome, poi passare la mano
-# ad app/launcher.py, che e' lo stesso identico file che gira su Windows.
+# Shared macOS startup logic. Not run directly: sourced by avvia.command,
+# in this same folder.
+# Finds a suitable Python and Chrome, then hands off to app/launcher.py,
+# the same file that runs on Windows.
 
 trova_python() {
-    # Serve Python 3.10 o successivo, con openpyxl: senza quello il programma
-    # non legge i listini. Si prende il primo che soddisfa entrambe le cose.
-    # E' lo stesso criterio della sonda di Windows (`AVVIA_COMPARATORE.ps1`).
+    # Needs Python 3.10+ with openpyxl: without it the program can't read
+    # price lists. Picks the first candidate that satisfies both. Same
+    # criteria as the Windows probe (`AVVIA_COMPARATORE.ps1`).
     for candidato in \
         /opt/homebrew/bin/python3 \
         /usr/local/bin/python3 \
@@ -25,21 +25,21 @@ PROVA
 }
 
 il_comparatore_risponde() {
-    # Vero se su questa porta risponde IL comparatore, non un programma
-    # qualunque che ha preso la porta.
+    # True if THIS comparator is answering on this port, not just some
+    # other program that happens to hold it.
     #
-    # ⚠ La differenza e' tutta la guardia. Chi chiama questa funzione la usa
-    # per decidere se saltare l'allineamento, e una guardia che dicesse
-    # «occupata» per un programma qualsiasi spegnerebbe gli aggiornamenti di
-    # questa cartella finche' quel programma resta acceso: e' lo stesso difetto
-    # della guardia sull'albero sporco, gia' scartata per questa ragione.
+    # The check matters: whatever calls this function uses it to decide
+    # whether to skip the sync, and a guard that said "busy" for any
+    # program would disable updates to this folder for as long as that
+    # program stays running.
     #
-    # `/api/health` risponde `{"ok": true, ...}` e non chiede nessun token: e'
-    # la stessa rotta con cui `app/launcher.py` riconosce un server acceso.
+    # `/api/health` responds `{"ok": true, ...}` with no token required:
+    # it's the same route `app/launcher.py` uses to recognize a running
+    # server.
     #
-    # Nel dubbio si risponde di no, cosi' l'allineamento si fa: se la sonda
-    # sbaglia si torna al comportamento che c'era prima, che e' l'errore che
-    # costa meno.
+    # When in doubt this answers no, so the sync proceeds: a wrong guess
+    # here just falls back to the previous behavior, which is the cheaper
+    # mistake.
     porta="$1"
     command -v curl >/dev/null 2>&1 || return 1
     risposta="$(curl --silent --max-time 2 "http://127.0.0.1:${porta}/api/health" 2>/dev/null)" || return 1
@@ -50,7 +50,7 @@ il_comparatore_risponde() {
 }
 
 avvia_comparatore() {
-    # $1 = cartella del programma, $2 = prima porta da provare
+    # $1 = program folder, $2 = first port to try
     cartella="$1"
     porta="$2"
     shift 2
@@ -65,9 +65,9 @@ avvia_comparatore() {
         exit 1
     }
 
-    # Su Windows il programma cerca chrome.exe in Program Files: qui quel
-    # percorso non esiste, quindi glielo diciamo noi. Se Chrome manca, il
-    # launcher ripiega da solo sul browser predefinito.
+    # On Windows the program looks for chrome.exe in Program Files: that
+    # path doesn't exist here, so it's passed explicitly. If Chrome is
+    # missing, the launcher falls back to the default browser on its own.
     chrome_mac="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
     [ -f "$chrome_mac" ] && export COMPARATORE_CHROME="$chrome_mac"
 

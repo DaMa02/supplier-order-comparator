@@ -1,42 +1,42 @@
 /*
- * Contratto REST atteso
+ * REST contract
  *
  * GET  /api/review
  *   -> { run, files, suppliers, products, warnings }
  *
  * POST /api/upload
- *   <- { files: [{ name, data }] } dove data è base64 senza prefisso data:
+ *   <- { files: [{ name, data }] } where data is base64 with no data: prefix
  *   -> { files, status, message }
  *
  * PUT  /api/state
  *   <- { runId, currentStep, summaryGrouping, products: [{ id, quantity, selectedSupplierId, confirmed, excluded }] }
  *
- * GET  /api/products/search e POST /api/products/add
- *   -> ricerca e aggiunta di prodotti dai cataloghi correnti
+ * GET  /api/products/search and POST /api/products/add
+ *   -> search and add products from the current catalogs
  *
  * GET  /api/history/pending
  *   -> { ok, pending: [{ orderId, supplier, supplierName, createdAt,
  *                        answeredAt, askAgainAt, lineCount, totalNet }] }
- *   Solo gli ordini già compilati e non ancora confermati come ricevuti.
+ *   Only orders already compiled and not yet confirmed as received.
  *
  * POST /api/history/answer
- *   <- { orderId, received } oppure { orderId, closed: true }
- *      SÌ = ricevuto; NO = chiedi di nuovo fra sette giorni;
- *      closed = non arriverà più. Sempre per l'intero ordine.
- *   -> { ok, pending: [...] }  elenco aggiornato
+ *   <- { orderId, received } or { orderId, closed: true }
+ *      received=true = received; received=false = ask again in seven days;
+ *      closed = will not be asked again. Always for the whole order.
+ *   -> { ok, pending: [...] }  updated list
  *
  * POST /api/matches/answer
  *   <- { runId, productId, supplierId, candidateKey, accepted }
- *   Conferma o esclude una riga proposta per il solo confronto corrente.
+ *   Confirms or rejects a proposed match, scoped to the current comparison run.
  *
  * POST /api/uploads/elimina
- *   <- { name }  elimina una singola copia di un listino caricato
+ *   <- { name }  deletes a single uploaded price-list copy
  *
  * POST /api/ordini/elimina
- *   <- { cartella }  elimina una compilazione e i relativi promemoria
+ *   <- { cartella }  deletes a compilation and its related reminders
  *
  * POST /api/suppliers/move-preview
- *   <- stesso snapshot di /api/state più { from: "<idFornitore di partenza>" }
+ *   <- same snapshot as /api/state plus { from: "<source supplier id>" }
  *   -> { ok, from, fromName, movableCount, currentNetTotal, options: [{
  *          id, kind, label, movedCount, movableCount, deltaNet,
  *          assignments: [{ productId, productName, toSupplierId, previousFactor,
@@ -46,23 +46,23 @@
  *          supplierTotalsAfter: [{ supplierId, supplierName, netTotalBefore,
  *                                  netTotalAfter, threshold,
  *                                  meetsThresholdBefore, meetsThresholdAfter }] }] }
- *   È solo un preventivo: non scrive nulla e non cambia l'ordine. Lo spostamento
- *   vero passa dal PUT /api/state come qualsiasi altra modifica.
+ *   Preview only: writes nothing and does not change the order. The actual
+ *   move goes through PUT /api/state like any other edit.
  *
  * POST /api/compile
- *   <- stesso snapshot di /api/state
+ *   <- same snapshot as /api/state
  *   -> { ok, message, cartella, zipUrl, zipNome, outputs: [{ name, url, tipo }] }
- *   zipUrl è null quando la compilazione non ha prodotto nessun listino.
+ *   zipUrl is null when the compilation produced no price list.
  *
  * GET  /api/ordini
  *   -> { ok, compilazioni: [{ cartella, etichetta, creatoIl, stato,
  *          fornitori: [{ id, nome, totaleNetto }], totaleNetto, righe, listini,
  *          file: [{ nome, tipo, url }], zipUrl, zipNome, completa }] }
- *   Dalla più recente. `completa: false` vuol dire che l'audit di quella
- *   compilazione non si legge: la cartella c'è lo stesso e i suoi file si
- *   scaricano lo stesso.
+ *   Newest first. `completa: false` means that compilation's audit trail
+ *   can't be read back: the folder and its files are still there and
+ *   still downloadable.
  *
- * I dati dimostrativi vengono usati esclusivamente con ?demo=1.
+ * Demo data is used only with ?demo=1.
  */
 
 const STEPS = [
@@ -80,59 +80,58 @@ const API = {
   compile: configuredApi.compile || "/api/compile",
   productSearch: configuredApi.productSearch || "/api/products/search",
   productAdd: configuredApi.productAdd || "/api/products/add",
-  // Il ricalcolo completo del confronto: un pulsante, e la catena va da sola.
+  // Full recompute of the comparison: one button, the pipeline runs on its own.
   pipelineAvvia: configuredApi.pipelineAvvia || "/api/pipeline/avvia",
   pipelineStato: configuredApi.pipelineStato || "/api/pipeline/stato",
   schemasPending: configuredApi.schemasPending || "/api/schemas/pending",
   schemasValidate: configuredApi.schemasValidate || "/api/schemas/validate",
   schemasConfirm: configuredApi.schemasConfirm || "/api/schemas/confirm",
-  // Le colonne di un listino già caricato, riviste quando si vuole: senza
-  // queste tre la mappatura si poteva vedere solo quando la catena si fermava.
+  // Columns of an already-uploaded price list, editable on demand: without
+  // these three, the mapping was only visible when the pipeline stalled.
   colonneDocumento: configuredApi.colonneDocumento || "/api/schemas/documento",
   colonneProva: configuredApi.colonneProva || "/api/schemas/documento/prova",
   colonneSalva: configuredApi.colonneSalva || "/api/schemas/documento/salva",
-  // Quali colonne il confronto vivo ha letto in ogni documento. Non è la
-  // mappatura guidata (che compare solo quando il programma NON riconosce un
-  // file): è quello che ha fatto sui file che ha riconosciuto.
+  // Which columns the current comparison actually read from each document.
+  // Not the guided mapping (shown only when a file isn't recognized): this
+  // is what happened on files that were recognized.
   schemasColumns: configuredApi.schemasColumns || "/api/schemas/columns",
   historyPending: configuredApi.historyPending || "/api/history/pending",
   historyAnswer: configuredApi.historyAnswer || "/api/history/answer",
   matchAnswer: configuredApi.matchAnswer || "/api/matches/answer",
-  // Il listino di un fornitore come il programma l'ha letto, e l'abbinamento
-  // fatto a mano su una sua riga.
+  // A supplier's price list as the app parsed it, and manual matches made
+  // on one of its rows.
   listino: configuredApi.listino || "/api/listino",
   matchAbbina: configuredApi.matchAbbina || "/api/matches/abbina",
-  // «Non è lo stesso articolo»: il no all'offerta di un fornitore su un
-  // prodotto, e il ritorno indietro. Rotta a sé come il sì alla proposta
-  // automatica, e per la stessa ragione: è una risposta, non una quantità, e va
-  // registrata subito in una memoria che sopravvive al ricalcolo.
+  // "Not the same item": rejects a supplier's proposed match for a product.
+  // Its own endpoint, same as accepting a match, and for the same reason:
+  // it's an answer, not a quantity, and must be recorded in memory that
+  // survives a recompute.
   matchRifiuta: configuredApi.matchRifiuta || "/api/matches/rifiuta",
-  // Le dichiarazioni «questi due codici sono lo stesso articolo». Rotta a sé e
-  // non dentro il confronto: si rileggono in Impostazioni, che si apre anche
-  // quando un confronto non c'è.
+  // Manual "these two codes are the same item" declarations. Its own endpoint,
+  // outside the comparison: read back from Settings, which opens even without
+  // an active comparison.
   uguaglianze: configuredApi.uguaglianze || "/api/matches/uguaglianze",
   uguaglianzaTogli: configuredApi.uguaglianzaTogli || "/api/matches/uguaglianze/togli",
-  // Tutto quello che hai confermato, come file da salvare. `conferme.db` è la
-  // memoria «per sempre» del programma e non ha nessuna copia di sicurezza:
-  // questa è l'unica via per fargliene una senza copiare a mano un file
-  // SQLite aperto.
+  // Exports every confirmed match as a downloadable file. `conferme.db` is
+  // the app's permanent memory with no built-in backup; this is the only way
+  // to get one without copying an open SQLite file by hand.
   confermeEsporta: configuredApi.confermeEsporta || "/api/conferme/esporta",
-  // La colonna in cui il programma scrive le quantità ordinate. Si legge e si
-  // cambia dallo stesso indirizzo: la GET dice fra quali colonne scegliere, la
-  // POST sposta — e la prova che quella colonna sia scrivibile è la stessa che
-  // attiva la compilazione, quindi il «no» che torna qui è quello vero.
+  // The column the app writes ordered quantities into. Read and changed at
+  // the same endpoint: GET lists the candidate columns, POST switches it —
+  // and the writability check that gates this is the same one that gates
+  // compilation, so a failure here is the real one.
   colonnaOrdine: configuredApi.colonnaOrdine || "/api/schemas/order-column",
   uploadDelete: configuredApi.uploadDelete || "/api/uploads/elimina",
   comparazioneNuova: configuredApi.comparazioneNuova || "/api/comparazione/nuova",
   supplierMovePreview: configuredApi.supplierMovePreview || "/api/suppliers/move-preview",
-  // Lo sconto di testata su tutto il listino di un fornitore.
+  // Header discount applied to a supplier's whole price list.
   supplierDiscount: configuredApi.supplierDiscount || "/api/suppliers/discount",
-  // Le compilazioni già fatte, una cartella datata per ciascuna.
+  // Past compilations, one dated folder per run.
   ordini: configuredApi.ordini || "/api/ordini",
   ordiniDelete: configuredApi.ordiniDelete || "/api/ordini/elimina",
-  // Impostazioni della fase AI. La chiave viaggia soltanto nel corpo di una
-  // POST: il servizio locale stampa la riga di richiesta a ogni chiamata, e una
-  // chiave passata come parametro dell'indirizzo finirebbe stampata.
+  // AI-stage settings. The API key only ever travels in a POST body: the
+  // local service logs the request line on every call, and a key passed as
+  // a URL parameter would end up in that log.
   impostazioni: configuredApi.impostazioni || "/api/impostazioni",
   impostazioniModelli: configuredApi.impostazioniModelli || "/api/impostazioni/modelli",
   impostazioniChiave: configuredApi.impostazioniChiave || "/api/impostazioni/chiave",
@@ -141,8 +140,8 @@ const API = {
 
 const mode = new URLSearchParams(window.location.search).get("demo") === "1" ? "demo" : "live";
 
-// Finestra "Sposta tutto su un altro fornitore" chiusa: from vuoto significa che
-// non c'è nessuna richiesta in corso e nessuna destinazione da scegliere.
+// Closed state of the "move everything to another supplier" panel: an empty
+// `from` means no move is in progress and no destination has been chosen.
 function emptySupplierMove() {
   return {
     from: "",
@@ -164,19 +163,19 @@ const state = {
     status: "all",
     page: 1,
     pageSize: 20,
-    // Impostato da "Mostra i prodotti" nel pannello offerte (pagina 2): filtra
-    // l'elenco sui soli prodotti coinvolti da quella promozione. Si azzera da
-    // solo appena l'utente tocca di nuovo ricerca/tipo/stato, oppure col
-    // pulsante "Rimuovi filtro" del chip dedicato.
+    // Set by "Show products" in the promotions panel (step 2): filters the
+    // list to the products covered by that promotion. Resets as soon as the
+    // user touches search/type/status again, or via the chip's "Remove
+    // filter" button.
     promotionId: null,
-    // Ricerca nel testo delle condizioni dei listini: con centinaia di voci
-    // scorrere l'elenco non è un modo di trovare niente.
+    // Search over promotion condition text: with hundreds of entries,
+    // scrolling the list isn't a way to find anything.
     promotionQuery: "",
-    // In che ordine si scorre l'elenco della pagina 2. "gestionale" è l'ordine
-    // in cui il documento del gestionale elenca i prodotti — resta il
-    // predefinito, perché è l'ordine in cui chi ordina li ha scritti — e le
-    // altre due mettono in fila i nomi, che con cinquecento righe è l'unico
-    // modo di ritrovare un prodotto senza cercarlo per nome.
+    // Sort order for the step-2 product list. "gestionale" is the order the
+    // management-software export lists products in — kept as the default,
+    // since it's the order the person placing the order wrote them in — the
+    // other two sort by name, the only way to find a product by name once
+    // there are hundreds of rows.
     sort: "gestionale",
   },
   summary: {
@@ -184,82 +183,81 @@ const state = {
     supplierId: "all",
     sort: "name",
   },
-  // Il riquadro delle offerte contiene il campo di ricerca: se non si ricorda
-  // che era aperto, si richiude a ogni ridisegno e il campo sparisce da sotto
-  // le dita mentre si scrive.
+  // The promotions panel holds the search field: if this isn't remembered,
+  // the panel closes on every redraw and the field disappears while typing.
   promotionCatalogOpen: false,
   pendingFiles: [],
-  // I documenti trascinati e non riconosciuti. Stanno FUORI da `pendingFiles`,
-  // che è l'array da cui parte la richiesta al servizio locale: qui dentro non
-  // deve finire niente che possa essere spedito per sbaglio. Restano finché non
-  // li si toglie, perché un messaggio che vive 3,6 secondi non è un posto dove
-  // un'informazione esiste.
+  // Dropped documents the app didn't recognize. Kept OUTSIDE `pendingFiles`,
+  // the array the upload request is built from, so nothing here can be sent
+  // by mistake. They stay until dismissed, since a toast that lives 3.6s is
+  // not a place to keep information.
   fileScartati: [],
-  // Quanti salvataggi di fila non sono riusciti: dopo tre il programma smette
-  // di riprovare da solo e lascia il comando in cima alla pagina.
+  // Consecutive failed save attempts: after three, the app stops retrying on
+  // its own and leaves the retry action at the top of the page.
   tentativiDiSalvataggio: 0,
   excludedProductIds: new Set(),
   exclusionUndo: null,
-  // productId -> { quantity, selectedSupplierId, confirmed }: che cosa aveva il
-  // prodotto prima di essere escluso.
-  // ⚠ Esiste perché `exclusionUndo` è UNO SOLO e scade: la fascia «… è stato
-  // escluso. [Annulla]» rimetteva quantità e fornitore, ma «Rimetti
-  // nell'ordine» — l'unico comando che resta dopo la fascia, e l'unico dopo un
-  // ricaricamento — rimetteva il prodotto nell'elenco **con la quantità a
-  // zero**. Il prodotto tornava, sembrava a posto e non veniva ordinato, e la
-  // quantità di prima non era scritta da nessuna parte. Vive accanto agli
-  // esclusi nella memoria del browser, sotto la chiave della run: al ricalcolo
-  // se ne va con loro, che è giusto — quelle scelte parlavano del confronto di
-  // prima.
+  // productId -> { quantity, selectedSupplierId, confirmed }: what the
+  // product had before being excluded.
+  // Needed because `exclusionUndo` is a single slot that expires: the "…
+  // was excluded. [Undo]" toast restored quantity and supplier, but "Put
+  // back in the order" — the only action left after the toast expires, and
+  // the only one after a reload — restored the product with its quantity
+  // reset to zero. The product came back looking fine but wasn't ordered,
+  // and the previous quantity was lost. Lives alongside the exclusion set
+  // in browser storage, keyed by run id: cleared together with it on
+  // recompute, which is correct — those choices were about the previous
+  // comparison.
   sceltePrimaDellEsclusione: new Map(),
-  // Il gemello di `exclusionUndo` per il «×» del riepilogo (pagina 3). Sono due
-  // comandi diversi — quello esclude il prodotto dall'elenco, questo ne azzera
-  // la quantità — e tutti e due fanno sparire il prodotto da sotto gli occhi
-  // nello stesso istante in cui si preme. Tiene quantità E conferma: il comando
-  // azzera tutte e due, e rimettere solo la quantità farebbe tornare il prodotto
-  // senza la sua conferma, cioè con la compilazione bloccata.
+  // Counterpart to `exclusionUndo` for the "x" on the summary (step 3). Two
+  // different actions — one excludes the product from the list, the other
+  // zeroes its quantity — and both make the product disappear the instant
+  // they're pressed. Holds both quantity AND confirmation: the action clears
+  // both, since restoring only the quantity would bring the product back
+  // without its confirmation, blocking compilation.
   rimozioneUndo: null,
-  // Le quantità azzerate in blocco da «Azzera le quantità proposte dal
-  // gestionale», per rimetterle. È il comando di massa della pagina 2: senza
-  // annullo era l'azione più grave della schermata con la rete di sicurezza più
-  // sottile — escludere UN prodotto, che è meno grave, ce l'aveva già.
+  // Quantities zeroed in bulk by "Clear quantities proposed by the
+  // management software", kept so they can be restored. The step-2 bulk
+  // action: without undo it was the most destructive action on the screen
+  // with the thinnest safety net — excluding a single product, which is
+  // less destructive, already had one.
   azzeramentoUndo: null,
   // productId -> { supplierName, quantityText, previousFactor, newFactor, previousPieces, newPieces }
-  // Evidenzia temporaneamente una scheda quando il cambio di fornitore cambia i pezzi per collo.
+  // Temporarily highlights a card when a supplier change alters pieces per carton.
   supplierChangeNotices: new Map(),
   supplierChangeTimers: new Map(),
-  // Spostamento di tutti i prodotti di un fornitore su un altro (pagina 3).
-  // I prezzi e le differenze arrivano dal servizio locale: qui si tiene solo
-  // quale fornitore si sta svuotando e quale destinazione l'utente ha scelto.
+  // Moving all of a supplier's products to another supplier (step 3). Prices
+  // and deltas come from the local service; only the source supplier and the
+  // user's chosen destination are kept here.
   supplierMove: emptySupplierMove(),
-  // Assegnazioni e conferme di prima dell'ultimo spostamento: servono al comando
-  // "Rimetti i fornitori di prima", come state.exclusionUndo per i prodotti
-  // esclusi.
+  // Assignments and confirmations from before the last move: back "Restore
+  // previous suppliers", same role as state.exclusionUndo for excluded
+  // products.
   supplierMoveUndo: null,
-  // «Inizia nuova comparazione»: `chiedendo` è la riga di conferma aperta,
-  // `inCorso` il tempo fra la conferma e la risposta del servizio. Non serve
-  // ricordare altro: quello che il comando fa lo si rilegge dalla pagina
-  // rifatta, non da una bandierina.
+  // "Start new comparison": `chiedendo` is the open confirmation prompt,
+  // `inCorso` the window between confirming and the service's response.
+  // Nothing else needs tracking: the outcome is read back from the rebuilt
+  // page, not from a flag.
   nuovaComparazione: { chiedendo: false, inCorso: false },
-  // Ordini già compilati la settimana scorsa e non ancora confermati come ricevuti.
-  // È un aiuto per non riordinare merce in arrivo: se il servizio locale non
-  // risponde l'elenco resta vuoto e la pagina funziona esattamente come prima.
+  // Orders compiled last week and not yet confirmed as received. A nudge to
+  // avoid reordering stock that's already on its way; if the local service
+  // doesn't respond, the list stays empty and the page works as before.
   history: {
     pending: [],
     loading: false,
-    // Perché l'elenco degli ordini in sospeso non c'è. Vuoto = non c'è niente
-    // in sospeso; pieno = non si è potuto sapere, ed è tutt'altra notizia.
+    // Why the pending-orders list is missing. Empty string = nothing pending;
+    // non-empty = it couldn't be determined, a different situation entirely.
     errore: "",
-    // orderId della domanda a cui si sta rispondendo in questo momento.
+    // orderId of the question currently being answered.
     answering: "",
-    // orderId a cui l'utente ha già risposto in questa sessione: la domanda non
-    // viene riproposta finché la pagina resta aperta.
+    // orderId the user already answered in this session: not asked again
+    // while the page stays open.
     answered: new Set(),
   },
-  // Le compilazioni precedenti, lette da GET /api/ordini scandendo le cartelle
-  // datate. Non sono un requisito del passo 3: se l'elenco non arriva, il
-  // riquadro lo dice e il riepilogo resta usabile com'era. Il browser non
-  // ricalcola niente di quello che c'è qui dentro, lo mostra e basta.
+  // Past compilations, read from GET /api/ordini by scanning the dated
+  // folders. Not required for step 3: if the list fails to load, the panel
+  // says so and the summary stays usable as before. The browser doesn't
+  // recompute anything from this data, only displays it.
   compilazioni: {
     caricate: false,
     inCorso: false,
@@ -279,17 +277,17 @@ const state = {
     error: "",
     timer: null,
   },
-  // Il visualizzatore dei listini: si apre da un prodotto e mostra il listino di
-  // un fornitore come il programma l'ha letto. `prodottoId` è il prodotto da cui
-  // si è partiti — è lui che si abbina — e `rigaFuoco` la riga già abbinata,
-  // quella su cui la finestra si apre.
+  // The price-list viewer: opens from a product and shows a supplier's price
+  // list as the app parsed it. `prodottoId` is the product it was opened
+  // from — the one being matched — and `rigaFuoco` the already-matched row
+  // the viewer opens on.
   listino: {
     aperto: false,
     prodottoId: "",
     fornitore: "",
     query: "",
-    // Il numero dell'ultima lettura chiesta: una risposta che non porta questo
-    // numero e' vecchia e non si applica.
+    // Sequence number of the last requested fetch: a response that doesn't
+    // carry this number is stale and is discarded.
     richiesta: 0,
     da: 0,
     quante: 50,
@@ -302,27 +300,28 @@ const state = {
     caricando: false,
     nome: "",
     errore: "",
-    // Il listino chiesto non c'è, e il servizio dice perché. Non è `errore`:
-    // la finestra funziona, è quel fornitore che non si legge.
+    // The requested price list isn't there, and the service says why. Not
+    // `errore`: the viewer itself works, it's that one supplier that failed
+    // to load.
     problema: "",
     esito: "",
     abbinando: "",
     timer: null,
   },
-  // Il ricalcolo del confronto. `stato` è esattamente quello che risponde
-  // GET /api/pipeline/stato: qui non si ricostruisce niente, si mostra.
-  // `chiesto` distingue "ho premuto io il pulsante adesso" da "il servizio
-  // ricorda una esecuzione di prima", che non deve far comparire la barra.
-  // `controlliPersi` conta le richieste di stato andate a vuoto di fila;
-  // `contattoPerso` è la frase che compare quando sono troppe, perché una barra
-  // ferma senza una parola si legge come «sta ancora lavorando».
-  // `avviando`: la richiesta di partenza è in volo. Sta fuori da `stato`, che è
-  // quello che manda il servizio, perché è una cosa che sa solo questa scheda.
+  // Recompute of the comparison. `stato` is exactly what GET /api/pipeline/stato
+  // returns: nothing is rebuilt here, just displayed. `chiesto` distinguishes
+  // "I just pressed the button" from "the service remembers a previous run",
+  // which must not make the progress bar appear. `controlliPersi` counts
+  // consecutive failed status polls; `contattoPerso` is the message shown once
+  // there are too many, since a stalled bar with no message reads as "still
+  // working". `avviando`: the start request is in flight. Kept outside `stato`,
+  // which is what the service sends, since only this tab knows it.
   pipeline: { stato: null, chiesto: false, errore: "", timer: null, controlliPersi: 0, contattoPerso: "", avviando: false },
-  // Come sta ogni sezione apribile, per chiave: la pagina si ridisegna da sola
-  // e senza questa mappa si richiudono sotto le dita. Il valore è `true` o
-  // `false` — non basta «c'è la chiave», perché i riquadri che nascono aperti
-  // hanno bisogno che il «chiuso» sia scritto, non dedotto da un'assenza.
+  // Open/closed state of each collapsible section, by key: the page redraws
+  // itself, and without this map sections would collapse under the user's
+  // fingers. Value is `true` or `false` — key presence alone isn't enough,
+  // since panels that start open need "closed" to be written explicitly,
+  // not inferred from absence.
   aperti: {},
   schemaMapping: {
     loading: false,
@@ -333,18 +332,18 @@ const state = {
     error: "",
     validating: false,
     confirming: false,
-    // Il documento di cui si stanno rivedendo le colonne **a mano**, aperto
-    // dalla sua scheda nella pagina 1. Vuoto quando il selettore compare
-    // perché la catena si è fermata: quello è un altro percorso, e riparte da
-    // solo dopo la conferma.
+    // The document whose columns are being reviewed manually, opened from
+    // its card on step 1. Empty when the selector appears because the
+    // pipeline stalled instead: that's a different path, restarted
+    // automatically after confirmation.
     documento: "",
   },
-  // Le colonne usate dal confronto vivo, per nome di documento. Si caricano una
-  // volta per ricalcolo: cambiano solo quando cambia la run.
+  // Columns actually used by the current comparison, by document name.
+  // Loaded once per recompute: they only change when the run changes.
   colonneDocumenti: { caricate: false, caricando: false, runId: "", perNome: {}, motivo: "", errore: "" },
-  // La finestra «in quale colonna si scrive l'ordine». Sta qui e non dentro
-  // `schemaMapping` perché quella è la mappatura guidata, che si apre solo
-  // quando il programma NON riconosce un documento: questa si apre sempre.
+  // The "which column to write the order into" panel. Kept separate from
+  // `schemaMapping`, which is the guided mapping shown only when a document
+  // isn't recognized: this one is always available.
   colonnaOrdine: {
     aperta: false,
     fornitore: "",
@@ -358,11 +357,10 @@ const state = {
     attuale: null,
     scelta: "",
   },
-  // La `data-focus-key` del comando che ha aperto la finestra modale in cima:
-  // alla chiusura il fuoco ci torna sopra. La stringa vuota vuol dire «quel
-  // comando non aveva una chiave, ripiega su #workspace»; `null` vuol dire
-  // «nessuna finestra da chiudere», e serve perche' le funzioni di chiusura
-  // vengono chiamate anche quando non c'e' niente di aperto.
+  // `data-focus-key` of the control that opened the topmost modal: focus
+  // returns there on close. Empty string means "that control had no key,
+  // fall back to #workspace"; `null` means "no modal to close", needed
+  // because the close functions are called even when nothing is open.
   fuocoPrimaDellaFinestra: null,
   loading: true,
   uploading: false,
@@ -371,39 +369,39 @@ const state = {
   dirty: false,
   saveVersion: 0,
   savedVersion: 0,
-  // La versione dello stato SUL DISCO da cui questa scheda è partita. Non ha
-  // niente a che vedere con saveVersion/savedVersion, che contano le modifiche
-  // di questa scheda: serve al servizio locale per accorgersi che nel frattempo
-  // ha salvato un'altra scheda, invece di lasciarle cancellare il lavoro a
-  // vicenda in silenzio.
+  // Version of the state ON DISK this tab started from. Unrelated to
+  // saveVersion/savedVersion, which count this tab's own edits: lets the
+  // local service detect that another tab saved in the meantime, instead of
+  // letting two tabs silently overwrite each other's work.
   stateVersion: 0,
   savePromise: null,
   runtimeError: "",
   uploadMessage: "",
   compileResult: null,
-  // La compilazione andata male: frase in italiano e testo tecnico separati, così
-  // il primo si legge e il secondo resta a disposizione senza occupare il posto.
+  // A failed compilation: user-facing message and technical detail kept
+  // separate, so the former stays readable and the latter is available
+  // without taking up space.
   compileFailure: null,
   acceptBelowThreshold: false,
   saveTimer: null,
   quantityRenderTimer: null,
-  // Pagina Impostazioni. Non è un passo del flusso: `currentStep` vale 1..3 sia
-  // qui sia sul servizio locale, e infilarci un quarto valore lo farebbe
-  // tagliare al salvataggio. È una pagina a sé, raggiungibile dalla schermata 1.
+  // Settings page. Not a step of the flow: `currentStep` ranges 1..3 both
+  // here and on the local service, and adding a fourth value would get it
+  // truncated on save. A separate page, reachable from step 1.
   impostazioni: {
     aperta: false,
     caricamento: false,
     caricate: false,
     errore: "",
-    // Solo presenza, provenienza e coda di quattro caratteri: il valore della
-    // chiave dal servizio locale non torna mai indietro.
+    // Only presence, source, and a four-character tail: the local service
+    // never sends the actual key value back.
     chiave: { presente: false, origine: "", coda: "" },
     percorsoChiave: "",
     valori: {},
     predefinite: {},
-    // Le dichiarazioni «questi due codici sono lo stesso articolo». Vivono qui
-    // perché è qui che si rileggono, e non dipendono dal confronto: valgono per
-    // sempre e la pagina si apre anche senza.
+    // "These two codes are the same item" declarations. Live here since this
+    // is where they're read back, and they don't depend on the comparison:
+    // they're permanent and this page opens even without one.
     uguaglianze: {
       caricate: false,
       caricando: false,
@@ -415,9 +413,9 @@ const state = {
       togliendo: "",
       timer: null,
     },
-    // La chiave appena incollata vive soltanto qui, e soltanto per il tempo che
-    // passa fra l'incollarla e l'inviarla. Non entra mai nell'HTML della pagina:
-    // il campo la riceve come proprietà del nodo, che nel sorgente non compare.
+    // The freshly pasted key lives only here, only for the time between
+    // pasting and sending. Never enters the page's HTML: the field receives
+    // it as a DOM property, which doesn't show up in the page source.
     nuovaChiave: "",
     salvandoChiave: false,
     salvando: false,
@@ -435,10 +433,10 @@ const modeBadgeElement = document.querySelector("#mode-badge");
 const saveStatusElement = document.querySelector("#save-status");
 const toastRegionElement = document.querySelector("#toast-region");
 
-// ⚠ `useGrouping: "always"`. Il predefinito italiano di `Intl` non raggruppa le
-// migliaia sotto le cinque cifre, quindi nella stessa colonna si leggevano
-// «1264,20 €» e «12.345,68 €»: due formati per lo stesso tipo di numero, e a
-// colpo d'occhio il primo si scambia per un ordine di grandezza in meno.
+// `useGrouping: "always"`: the Italian `Intl` default doesn't group
+// thousands below five digits, so the same column could show "1264,20 €"
+// next to "12.345,68 €" — two formats for the same kind of number, and the
+// first reads at a glance as an order of magnitude smaller than it is.
 const euros = new Intl.NumberFormat("it-IT", {
   style: "currency",
   currency: "EUR",
@@ -450,34 +448,34 @@ const integers = new Intl.NumberFormat("it-IT", {
   maximumFractionDigits: 0,
 });
 
-// I modelli si pagano in dollari, non in euro: il listino di OpenRouter è in
-// dollari e convertirlo qui vorrebbe dire inventare un cambio.
+// Models are billed in dollars, not euros: OpenRouter's price list is in
+// dollars, and converting here would mean inventing an exchange rate.
 const dollars = new Intl.NumberFormat("it-IT", {
   style: "currency",
   currency: "USD",
   maximumFractionDigits: 2,
 });
 
-// "3 agosto": giorno e mese per le domande sugli ordini non ancora ricevuti.
+// "3 agosto": day and month, for prompts about orders not yet received.
 const dayAndMonth = new Intl.DateTimeFormat("it-IT", {
   day: "numeric",
   month: "long",
 });
 
-// "lunedì 11 agosto": la data del confronto che si sta ancora guardando. Il
-// giorno della settimana non è un vezzo — è il modo in cui una persona ricorda
-// quando ha caricato i listini — e serve anche a tenere italiane le frasi che
-// la contengono: si scrive "di lunedì 11 agosto", mentre "del 11 agosto" no.
+// "lunedì 11 agosto": date of the comparison still being viewed. The weekday
+// isn't decoration — it's how a person actually recalls when they uploaded
+// the price lists — and it also keeps the surrounding Italian sentence
+// grammatical ("di lunedì 11 agosto" reads correctly; "del 11 agosto" doesn't).
 const weekdayDayMonth = new Intl.DateTimeFormat("it-IT", {
   weekday: "long",
   day: "numeric",
   month: "long",
 });
 
-// "19 agosto 2026": la data della versione che sta girando. Qui l'anno serve,
-// al contrario che nelle altre date: un programma rimasto indietro di mesi e
-// uno rimasto indietro di un anno vanno distinti a colpo d'occhio, ed e'
-// esattamente il caso che questa riga esiste per far vedere.
+// "19 agosto 2026": date of the running version. Unlike the other date
+// formats, the year matters here: an install that's months out of date and
+// one that's a year out of date need to be distinguishable at a glance,
+// which is the whole reason this format exists.
 const dayMonthYear = new Intl.DateTimeFormat("it-IT", {
   day: "numeric",
   month: "long",
@@ -695,9 +693,9 @@ function finiteNumber(value, fallback = 0) {
   return Number.isFinite(number) ? number : fallback;
 }
 
-// A differenza di finiteNumber(), qui l'assenza del dato (null/undefined) resta
-// assenza: serve per campi facoltativi calcolati dal backend (es. lastUnitPrice,
-// suggestedQuantity) dove "non disponibile" e "zero" hanno significati diversi.
+// Unlike finiteNumber(), a missing value (null/undefined) stays missing.
+// Used for optional backend-computed fields (e.g. lastUnitPrice,
+// suggestedQuantity) where "not available" and "zero" mean different things.
 function optionalNumber(value) {
   if (value === null || value === undefined || value === "") return null;
   const number = Number(value);
@@ -706,10 +704,10 @@ function optionalNumber(value) {
 
 function userFacingText(value) {
   return String(value ?? "")
-    // La parola sostituita cambia genere e numero, quindi l'articolo apostrofato
-    // che la precede va sciolto insieme a lei: senza questa riga in pagina
-    // compare "nell'controlli". Vale per l'unico caso che il programma produce
-    // davvero; se in futuro se ne aggiungono altri vanno trattati qui.
+    // The replaced word changes gender/number, so the apostrophized article
+    // before it must be resolved together with it — without this, the page
+    // would show "nell'controlli". Handles the one case the app actually
+    // produces; add more here if new ones show up.
     .replace(/\b(nell|dell|all|sull|dall|l)['’]audit\b/gi, (_intero, articolo) =>
       ({ nell: "nei", dell: "dei", all: "ai", sull: "sui", dall: "dai", l: "i" })[articolo.toLowerCase()] + " controlli")
     .replace(/\baudit\b/gi, "controlli")
@@ -734,14 +732,14 @@ function friendlyMatchStatus(value) {
   return known[text.toUpperCase()] || userFacingText(text);
 }
 
-// ⚠ Il caso normale non porta distintivo. «EAN esatto» e «Espositore identico»
-// vogliono dire che tutto è andato come doveva, e su venti prodotti con quattro
-// fornitori facevano ottanta bolli verdi per schermata — tutti a dire che la
-// normalità è normale. Nello stesso riquadro il verde è anche il modo in cui si
-// riconosce l'offerta scelta: la cosa da trovare a colpo d'occhio aveva lo
-// stesso colore delle tre che non contavano. Il verde torna a voler dire una
-// cosa sola. Il testo non sparisce — resta accanto al nome del fornitore, in
-// grigio, perché dice COME quella riga è stata abbinata — ma smette di gridare.
+// The normal case gets no badge. "EAN esatto" and "Espositore identico" just
+// mean the match went as expected, and across twenty products with four
+// suppliers that was eighty green badges per screen, all saying the same
+// thing. Green is also how the selected offer is highlighted in the same
+// card, so the one thing worth spotting at a glance shared its color with
+// three that didn't matter. Keeping green for a single meaning fixes that.
+// The text itself stays, next to the supplier name in gray, since it still
+// says HOW the row was matched — it just stops competing for attention.
 const ABBINAMENTI_NORMALI = new Set(["EAN esatto", "Espositore identico", "Confermato"]);
 
 function abbinamentoNormale(offer) {
@@ -759,9 +757,8 @@ function normalizeIssue(issue, fallbackId) {
     title: userFacingText(issue?.title || (severity === "error" ? "Controllo necessario" : "Avviso")),
     message: userFacingText(issue?.message || issue?.detail || "Verifica richiesta."),
     productId: issue?.productId == null ? "" : String(issue.productId),
-    // Il nome del prodotto e del fornitore: il servizio li manda con ogni
-    // controllo non superato, ed è l'unico modo di ritrovare la riga fra
-    // cinquecento.
+    // Product and supplier name: the service sends them with every failed
+    // check, and they're the only way to find the row among five hundred.
     productName: String(issue?.productName ?? issue?.product_name ?? ""),
     supplierName: String(issue?.supplierName ?? issue?.supplier_name ?? ""),
     code: String(issue?.code || ""),
@@ -774,11 +771,10 @@ function normalizeIssue(issue, fallbackId) {
 
 function normalizeCandidate(candidate) {
   if (!candidate || typeof candidate !== "object") return null;
-  // ⚠ Qui c'era `Math.max(1, …)`, e trasformava «non lo so» in «1 pezzo per
-  // collo»: la scheda stampava quel numero come se l'avesse letto nel listino,
-  // mentre la riga proposta non lo dice affatto. Zero vuol dire che manca, ed è
-  // esattamente la ragione per cui il servizio locale non lascia accettare
-  // quella riga: senza pezzi per collo l'ordine non si può calcolare.
+  // Floor at 0, not 1: "unknown" must stay 0, not silently become "1 piece
+  // per carton" printed as if it came from the price list. A zero factor is
+  // exactly why the local service refuses to accept this candidate — without
+  // pieces per carton, the order quantity can't be computed.
   const quantityFactor = Math.max(0, finiteNumber(
     candidate.quantityFactor
       ?? candidate.quantity_factor
@@ -807,20 +803,18 @@ function normalizeCandidate(candidate) {
       quantityFactor > 0 ? orderUnitPriceNet / quantityFactor : 0,
     )),
     details: String(candidate.details ?? candidate.packaging ?? ""),
-    // Il motivo per cui l'analisi automatica ha scartato questa riga — «è una
-    // confezione da 2 pezzi, mentre l'articolo cercato è singolo». ⚠ Era l'unica
-    // cosa che serviva per rispondere, ed era l'unica che questa funzione non
-    // copiava: la scheda chiedeva «è lo stesso?» mostrando codice e prezzo, e
-    // al posto del motivo offriva il punteggio di somiglianza, che a chi ordina
-    // non dice niente.
+    // Why the automatic matcher rejected this row, e.g. "it's a 2-piece pack
+    // while the searched item is sold single". The one field that answers
+    // "is this the same item?": the card shows it instead of a similarity
+    // score, which means nothing to whoever is placing the order.
     rationale: String(candidate.rationale ?? ""),
     available: candidate.available === true,
   };
 }
 
-// Ordini in sospeso: l'abbinamento con i prodotti è deciso dal servizio locale
-// sull'EAN (gli identificativi "product:<riga>" cambiano a ogni export del
-// gestionale). Qui i dati arrivano già abbinati e vengono soltanto mostrati.
+// Pending orders: matching to products is decided by the local service on
+// the EAN (the "product:<row>" ids change on every management-software
+// export). Data arrives already matched here and is only displayed.
 function normalizePendingOrder(entry) {
   return {
     orderId: String(entry?.orderId ?? entry?.order_id ?? ""),
@@ -828,8 +822,8 @@ function normalizePendingOrder(entry) {
     supplierName: String(entry?.supplierName ?? entry?.supplier_name ?? entry?.supplier ?? "Fornitore"),
     createdAt: String(entry?.createdAt ?? entry?.created_at ?? entry?.orderedAt ?? entry?.ordered_at ?? ""),
     answeredAt: String(entry?.answeredAt ?? entry?.answered_at ?? ""),
-    // Quando la domanda torna dopo un "non ancora arrivata": la data la decide
-    // il servizio locale, qui si confronta soltanto con l'orologio.
+    // When the question comes back after a "not received yet": the date is
+    // decided by the local service, only compared against the clock here.
     askAgainAt: String(entry?.askAgainAt ?? entry?.ask_again_at ?? ""),
     lineCount: Math.max(0, Math.trunc(finiteNumber(entry?.lineCount ?? entry?.line_count, 0))),
     totalNet: Math.max(0, finiteNumber(entry?.totalNet ?? entry?.total_net, 0)),
@@ -840,8 +834,8 @@ function normalizePendingOrders(list) {
   return asArray(list).map(normalizePendingOrder).filter((entry) => entry.orderId);
 }
 
-// Voce agganciata al singolo prodotto da GET /api/review: quantità già ordinata
-// (in unità d'ordine, cioè colli) e data dell'ordine.
+// Per-product entry from GET /api/review: quantity already ordered (in order
+// units, i.e. cartons) and the order date.
 function normalizeProductPendingOrder(entry) {
   return {
     orderId: String(entry?.orderId ?? entry?.order_id ?? ""),
@@ -849,11 +843,11 @@ function normalizeProductPendingOrder(entry) {
     supplierName: String(entry?.supplierName ?? entry?.supplier_name ?? entry?.supplier ?? "Fornitore"),
     orderedAt: String(entry?.orderedAt ?? entry?.ordered_at ?? entry?.createdAt ?? entry?.created_at ?? ""),
     quantity: Math.max(0, Math.trunc(finiteNumber(entry?.quantity, 0))),
-    // Unità del momento dell'ordine, non di questa settimana.
+    // Unit at order time, not necessarily this week's unit.
     unit: String(entry?.unit ?? ""),
-    // Quanti articoli del confronto condividono lo stesso codice a barre: se
-    // più di uno, la quantità non è attribuibile a QUESTO articolo e la
-    // frase deve dirlo (revisione avversariale R4).
+    // How many products in this comparison share the same barcode: when more
+    // than one, the ordered quantity can't be attributed to THIS item, and
+    // the message must say so.
     sharedWith: Math.max(0, Math.trunc(finiteNumber(entry?.sharedWith ?? entry?.shared_with, 0))),
   };
 }
@@ -910,9 +904,8 @@ function promotionText(promotion) {
   if (kind === "soglia_omaggio") {
     const stateMessage = String(promotionState.message || "Promozione con omaggio disponibile.");
     const rewardDescription = String(reward.description || "").trim();
-    // ⚠ Il messaggio della soglia l'omaggio lo nomina già quasi sempre («…= 1
-    // cartone di RESALINA SALE LAVASTOVIGLIE KG1 in omaggio: ne hai 49 in
-    // tutto…»): la coda lo scriveva una seconda volta nella stessa frase.
+    // The threshold message already names the free item in almost every
+    // case; appending it again would repeat it in the same sentence.
     if (!rewardDescription || stateMessage.includes(rewardDescription)) return stateMessage;
     return `${stateMessage} Omaggio: ${rewardDescription}`;
   }
@@ -930,17 +923,15 @@ function promotionText(promotion) {
   return String(promotionState.message || sourceText || promotion.label || promotion.message || "");
 }
 
-// Che cosa il programma ha buttato via leggendo i listini. Il dato esiste già
-// in review_data.json (auditSummary, scritto dalla catena del ricalcolo) e
-// finiva nel nulla: normalizeReview lo scartava, e le righe non ordinabili, le
-// escluse dal filtro e i codici a barre ripetuti si potevano vedere solo
-// aprendo l'audit sul disco. Qui non si inventa niente: si legge quello che
-// c'è. Uno scarto che non si conta non è una scelta, è una perdita di dati.
-// I nomi dei fornitori arrivano con la mappa del PAYLOAD che si sta
-// normalizzando: `supplierName()` legge `state.review`, che a questo punto è
-// ancora la review precedente (o `null` alla prima apertura) — il riquadro
-// rendeva «larice» e «noce» al posto dei nomi veri (revisione
-// avversariale R4).
+// What the app discarded while reading the price lists: unorderable rows,
+// rows excluded by filters, and duplicate barcodes. The data already exists
+// in `review_data.json` (`auditSummary`, written by the recompute pipeline).
+// Nothing here is invented, only read back — a discard that isn't counted
+// isn't a choice, it's lost data.
+// Supplier names come from the payload being normalized, not from
+// `state.review` (which at this point is still the *previous* review, or
+// `null` on first load) — reading names from the old state would render raw
+// supplier ids instead of their display names.
 function normalizeDiscardedRows(payload, supplierNamesById) {
   const audit = payload && typeof payload === "object" ? payload : {};
   const sources = audit.sources && typeof audit.sources === "object" ? audit.sources : {};
@@ -1005,10 +996,10 @@ function normalizeReview(payload) {
   }));
 
   const supplierById = new Map(suppliers.map((supplier) => [supplier.id, supplier]));
-  // I prodotti che la pagina ha dovuto riassegnare da sola perché il fornitore
-  // salvato non ha più un'offerta disponibile. La riassegnazione va bene; farla
-  // in silenzio no: chi aveva scelto CIPRESSO a mano si ritroverebbe BETULLA
-  // senza che niente glielo dica.
+  // Products the page had to reassign on its own because the saved supplier
+  // no longer has an available offer. The reassignment itself is fine;
+  // doing it silently isn't: a user who picked a supplier by hand should be
+  // told when the page switches them to a different one.
   const supplierReassignments = [];
   const products = asArray(payload.products).map((product, productIndex) => {
     const id = String(product.id ?? product.productId ?? `product-${productIndex + 1}`);
@@ -1017,10 +1008,10 @@ function normalizeReview(payload) {
     const quantity = Math.max(0, finiteNumber(product.quantity ?? product.orderQuantity ?? product.order_quantity, 0));
     const offers = asArray(product.offers).map((offer, offerIndex) => {
       const supplierId = String(offer.supplierId ?? offer.supplier_id ?? "");
-      // Per gli espositori la quantità indicata nel listino è quasi sempre
-      // un espositore, mentre il numero di pezzi contenuti è separato.  Dare
-      // precedenza a quel numero evita di mostrare, erroneamente, "1 pezzo
-      // ciascuno" e di calcolare un prezzo al pezzo uguale al prezzo intero.
+      // For displays, the quantity in the price list almost always refers to
+      // one display, while the piece count inside it is a separate field.
+      // Preferring that field avoids wrongly showing "1 piece each" and
+      // computing a per-piece price equal to the whole display's price.
       const unitsPerOrderUnit = Math.max(1, finiteNumber(
         normalizedItemType === "display"
           ? (offer.declaredUnits
@@ -1074,20 +1065,19 @@ function normalizeReview(payload) {
         orderUnitPriceNet: price,
         pricePerPiece: Math.max(0, finiteNumber(offer.pricePerPiece ?? offer.price_per_piece, price / unitsPerOrderUnit)),
         available: offer.available !== false,
-        // Il no già dato su questa riga, quando c'è: lo mette il servizio
-        // leggendo il magazzino delle conferme. Senza portarlo fin qui la
-        // pagina direbbe di quel fornitore «non ce l'hanno nel listino di
-        // adesso», che è falso — la riga ce l'hanno, è l'utente ad aver detto
-        // che è un altro articolo — e non ci sarebbe nessun posto da cui
-        // tornare indietro.
+        // The rejection already recorded for this row, if any: set by the
+        // service from the confirmations store. Without carrying it here,
+        // the page would say the supplier "doesn't have it in the current
+        // price list", which is false — they do have the row, the user said
+        // it's a different item — and there'd be no way back from that.
         rifiutata: offer.rifiutata && typeof offer.rifiutata === "object" ? {
           since: String(offer.rifiutata.since ?? ""),
           description: String(offer.rifiutata.description ?? ""),
         } : null,
-        // La conferma può essere richiesta dalla singola offerta, non solo dal
-        // prodotto: se non la si porta fin qui, spostando un prodotto su
-        // un'offerta che la richiede il salvataggio viene rifiutato dal
-        // servizio locale e nella pagina non compare nessuna casella per darla.
+        // Confirmation can be required by a single offer, not only by the
+        // product: without carrying it here, switching a product to an offer
+        // that requires it gets the save rejected by the local service with
+        // no checkbox on the page to give that confirmation.
         requiresConfirmation: Boolean(offer.requiresConfirmation ?? offer.requires_confirmation),
         confirmationMessage: String(offer.confirmationMessage ?? offer.confirmation_message ?? ""),
         matchStatus: friendlyMatchStatus(offer.matchStatus ?? offer.match_status ?? "Offerta disponibile"),
@@ -1095,8 +1085,8 @@ function normalizeReview(payload) {
         warning: String(offer.warning ?? ""),
         promotions: promotionItems,
         promotion: promotionItems.map(promotionText).filter(Boolean).join(" · ") || legacyPromotion,
-        // Calcolati dal backend rispetto all'ultimo prezzo pagato (product.lastUnitPrice);
-        // il frontend li mostra così come sono, senza ricalcolarli.
+        // Computed by the backend against the last paid price (product.lastUnitPrice);
+        // the frontend only displays these, never recomputes them.
         lastPriceDifference: optionalNumber(offer.lastPriceDifference ?? offer.last_price_difference),
         lastPriceDifferencePct: optionalNumber(offer.lastPriceDifferencePct ?? offer.last_price_difference_pct),
       };
@@ -1104,15 +1094,15 @@ function normalizeReview(payload) {
 
     let selectedSupplierId = String(product.selectedSupplierId ?? product.selected_supplier_id ?? "");
     if (!offers.some((offer) => offer.supplierId === selectedSupplierId && offer.available)) {
-      // Il fornitore più conveniente si sceglie sempre sul prezzo al pezzo, mai sul
-      // totale in colli: colli di taglie diverse (es. 6 pezzi vs 24 pezzi) non sono
-      // confrontabili sul totale.
+      // The cheapest supplier is always chosen on price per piece, never on
+      // total per carton: cartons of different sizes (e.g. 6 vs 24 pieces)
+      // aren't comparable on the total.
       const precedente = selectedSupplierId;
       selectedSupplierId = offers
         .filter((offer) => offer.available)
         .sort((a, b) => a.pricePerPiece - b.pricePerPiece)[0]?.supplierId || "";
-      // Si conta solo chi aveva davvero un fornitore scelto e adesso ne ha un
-      // altro: un prodotto mai assegnato non è stato «spostato» da nessuno.
+      // Only counts products that actually had a supplier and now have a
+      // different one: a product that was never assigned wasn't "moved".
       if (precedente && selectedSupplierId && precedente !== selectedSupplierId) {
         supplierReassignments.push({
           productId: id,
@@ -1129,8 +1119,9 @@ function normalizeReview(payload) {
       }
     }
 
-    // suggestedQuantity/quantitySource arrivano dal gestionale: finché la quantità non è
-    // stata toccata dall'utente, la scheda mostra un piccolo indicatore "valore dal gestionale".
+    // suggestedQuantity/quantitySource come from the management-software export:
+    // until the user edits the quantity, the card shows a small "from the
+    // management software" indicator.
     const suggestedQuantityRaw = product.suggestedQuantity ?? product.suggested_quantity;
     const suggestedQuantity = suggestedQuantityRaw === null || suggestedQuantityRaw === undefined
       ? null
@@ -1147,19 +1138,18 @@ function normalizeReview(payload) {
       quantity,
       suggestedQuantity,
       quantitySource,
-      // Ultimo prezzo netto pagato per pezzo (facoltativo, calcolato dal backend).
+      // Last net price paid per piece (optional, computed by the backend).
       lastUnitPrice: optionalNumber(product.lastUnitPrice ?? product.last_unit_price),
       orderUnitLabel: String(product.orderUnitLabel ?? product.order_unit_label ?? (itemType === "display" ? "espositori" : "colli")),
       selectedSupplierId,
       confirmed: Boolean(product.confirmed),
       requiresConfirmation: Boolean(product.requiresConfirmation ?? product.requires_confirmation),
-      // Il motivo si legge sempre, quindi deve dire che cosa guardare: «conferma
-      // la corrispondenza» chiedeva di spuntare senza dire in base a che cosa.
+      // Always shown when confirmation is required, so it must say what to
+      // check, not just ask for a checkbox with no basis given.
       confirmationMessage: String(product.confirmationMessage ?? product.confirmation_message ?? "Il codice a barre non coincide: confronta nome e formato con quello qui sotto."),
-      // La conferma già registrata nel magazzino: chi, da quando, su quale
-      // articolo. Sola lettura — non entra mai in `snapshot()`, che manda al
-      // servizio soltanto `confirmed` — e assente finché una risposta non è
-      // stata data davvero.
+      // The confirmation already recorded in the store: who, since when, on
+      // which item. Read-only — never sent back in `snapshot()`, which only
+      // sends `confirmed` — and absent until an actual answer was given.
       confirmation: product.confirmation && typeof product.confirmation === "object" ? {
         supplierId: String(product.confirmation.supplierId ?? ""),
         since: String(product.confirmation.since ?? ""),
@@ -1178,8 +1168,8 @@ function normalizeReview(payload) {
       addedManually: Boolean(product.addedManually ?? product.added_manually),
       excluded: Boolean(product.excluded),
       promotions: asArray(product.promotions),
-      // Solo decorazione informativa in sola lettura: non entra mai in snapshot()
-      // e non cambia quantità, prezzi o fornitore scelto.
+      // Read-only informational display only: never sent in snapshot() and
+      // never changes quantity, prices or the selected supplier.
       pendingOrders: asArray(product.pendingOrders ?? product.pending_orders)
         .map(normalizeProductPendingOrder)
         .filter((entry) => entry.orderId),
@@ -1192,9 +1182,9 @@ function normalizeReview(payload) {
       status: String(payload.run?.status ?? payload.status ?? "ready"),
       createdAt: String(payload.run?.createdAt ?? payload.run?.created_at ?? ""),
       label: String(payload.run?.label ?? "Confronto fornitori"),
-      // Da quale ricalcolo viene questo confronto. Serve a sapere quando le
-      // colonne mostrate nelle schede dei documenti vanno riprese: cambiano
-      // solo quando cambia la run che le ha usate.
+      // Which recompute produced this comparison. Used to know when the
+      // columns shown on document cards need to be re-fetched: they only
+      // change when the run that used them changes.
       pipelineRunId: String(payload.run?.pipelineRunId ?? payload.run?.pipeline_run_id ?? ""),
     },
     files: asArray(payload.files ?? payload.sources).map((file, index) => ({
@@ -1202,13 +1192,11 @@ function normalizeReview(payload) {
       name: String(file.name ?? file.filename ?? `Documento ${index + 1}`),
       kind: userFacingText(file.kind ?? file.type ?? "Listino"),
       supplier: String(file.supplier ?? file.supplierName ?? "Da riconoscere"),
-      // ⚠ Manca dal 20 agosto 2026 al 23, e con lui mancava un comando: la
-      // scheda del documento chiama `renderColonnaDellOrdine(file, ...)`, che
-      // disegna «Cambia colonna» soltanto se `file.supplierId` c'e'. Qui non
-      // veniva copiato, quindi era `undefined` per tutti i documenti e il
-      // pulsante non compariva mai — mentre la riga sopra di lui, «L'ordine
-      // viene scritto nella colonna C», compariva eccome. Il servizio quel
-      // campo lo manda; era questa funzione a buttarlo via.
+      // Must be copied through: `renderColonnaDellOrdine(file, ...)` only
+      // draws the "change column" action when `file.supplierId` is set. The
+      // service always sends this field; dropping it here silently hides
+      // that action while the "order written to column C" line above it
+      // still renders.
       supplierId: String(file.supplierId ?? file.supplier_id ?? ""),
       status: String(file.status ?? "ready").toLowerCase(),
       schemaState: String(file.schemaState ?? file.schema_state ?? ""),
@@ -1222,24 +1210,22 @@ function normalizeReview(payload) {
     warnings: asArray(payload.warnings).map((issue, index) => normalizeIssue(issue, `review-warning-${index + 1}`)),
     promotions: asArray(payload.promotions),
     promotionSummary: payload.promotionSummary && typeof payload.promotionSummary === "object" ? payload.promotionSummary : { counts: {} },
-    // Gli scarti della lettura dei listini e i totali del Riepilogo: due dati
-    // che il servizio locale manda già e che la pagina buttava via.
+    // Price-list read discards and the summary totals, read from fields the
+    // local service already sends.
     discardedRows: normalizeDiscardedRows(
       payload.auditSummary ?? payload.audit_summary,
       new Map(suppliers.map((supplier) => [supplier.id, supplier.name])),
     ),
     orderSummary: normalizeOrderSummary(payload.orderSummary ?? payload.order_summary),
-    // Gli sconti di testata che il servizio ha già applicato ai prezzi, in
-    // percentuale, per il solo campo che li mostra.
-    // ⚠ Erano l'unica cosa che il servizio mandava dentro `payload.state`, e
-    // questa funzione `state` non lo copiava: `state.review.state` non è mai
-    // esistito. Il campo si ridisegnava vuoto a ogni rilettura — cioè subito
-    // dopo averlo scritto — e sembrava che lo sconto non fosse stato preso,
-    // mentre i prezzi erano già scontati ovunque.
+    // Header discounts the service already applied to prices, as a
+    // percentage, only for the field that displays them. Must be read from
+    // `payload.state`: `state.review.state` doesn't exist, so this field
+    // needs to be copied out explicitly or it renders empty on every
+    // refresh even though the prices are already discounted.
     supplierDiscounts: normalizeSupplierDiscounts(payload.state?.supplierDiscounts),
-    // Le coppie di codici a barre dichiarate lo stesso articolo. Valgono per
-    // sempre e su tutti i fornitori: si vedono e si tolgono dal visualizzatore
-    // dei listini, che è dove si fanno.
+    // Barcode pairs declared to be the same item. Permanent, across all
+    // suppliers: viewed and removed from the price-list viewer, where
+    // they're created.
     uguaglianze: asArray(payload.uguaglianze).map((voce) => ({
       codici: asArray(voce?.codici).map((codice) => String(codice)),
       motivo: String(voce?.motivo ?? ""),
@@ -1249,8 +1235,8 @@ function normalizeReview(payload) {
   };
 }
 
-// Percentuali, non frazioni: il servizio le manda già moltiplicate per cento,
-// perché è così che si scrivono nel campo dove si digita «6».
+// Percentages, not fractions: the service already sends them multiplied by
+// 100, matching the field where the user types "6".
 function normalizeSupplierDiscounts(value) {
   if (!value || typeof value !== "object") return {};
   const sconti = {};
@@ -1261,9 +1247,8 @@ function normalizeSupplierDiscounts(value) {
   return sconti;
 }
 
-// «3 prodotti erano assegnati a CIPRESSO: ora sono passati a BETULLA.»
-// Raggruppa per coppia partenza→arrivo, perché è la coppia che l'utente
-// riconosce, non il singolo prodotto.
+// Groups reassignments by from→to supplier pair, since that pair is what the
+// user recognizes, not the individual product.
 function supplierReassignmentNotices() {
   const gruppi = new Map();
   for (const voce of asArray(state.review?.supplierReassignments)) {
@@ -1321,8 +1306,7 @@ function formatPercent(value) {
   return `${finiteNumber(value).toLocaleString("it-IT", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
 }
 
-// «1 controlli», «1 offerte», «1 pezzi per collo»: il plurale sbagliato e' la
-// firma di un programma scritto in fretta, e questa pagina ne aveva tre.
+// Picks the singular or plural Italian form based on count.
 function contati(quanti, singolare, plurale) {
   return `${formatInteger(quanti)} ${Number(quanti) === 1 ? singolare : plurale}`;
 }
@@ -1383,22 +1367,23 @@ function excludedStorageKey() {
 }
 
 function restoreExcludedProducts() {
-  // Chiamata subito dopo ogni sostituzione di state.review: eventuali avvisi di
-  // cambio fornitore lasciati da una scheda precedente non hanno più senso.
+  // Called right after every state.review replacement: any supplier-change
+  // notices left from the previous comparison no longer apply.
   for (const timer of state.supplierChangeTimers.values()) window.clearTimeout(timer);
   state.supplierChangeNotices.clear();
   state.supplierChangeTimers.clear();
-  // Vale anche per lo spostamento fra fornitori: il preventivo era calcolato sui
-  // prodotti di prima e l'annulla ripristinerebbe assegnazioni non più valide.
+  // Same for a supplier move in progress: its preview was computed against
+  // the previous products, and undoing it would restore assignments that no
+  // longer apply.
   state.supplierMove = emptySupplierMove();
   state.supplierMoveUndo = null;
-  // ⚠ E vale per l'«Annulla» dell'esclusione, che invece restava. Dopo un
-  // ricalcolo la barra «… è stato escluso. [Annulla]» era ancora lì e rimetteva
-  // fornitore e conferma DEL CONFRONTO PRECEDENTE su un prodotto del confronto
-  // nuovo, che nel frattempo poteva avere offerte e prezzi diversi.
+  // Same for exclusion undo: it must be cleared here too. Otherwise the "…
+  // was excluded. [Undo]" toast from before a recompute would restore the
+  // supplier and confirmation FROM THE PREVIOUS COMPARISON onto a product
+  // in the new one, which can have different offers and prices by now.
   state.exclusionUndo = null;
-  // Stessa ragione per il «×» del riepilogo e per l'azzeramento in blocco: le
-  // quantità salvate erano quelle del confronto di prima.
+  // Same reasoning for the summary's "x" undo and the bulk quantity reset:
+  // the saved quantities belonged to the previous comparison.
   state.rimozioneUndo = null;
   state.azzeramentoUndo = null;
   const valid = new Set(state.review?.products.map((product) => product.id) || []);
@@ -1412,11 +1397,11 @@ function restoreExcludedProducts() {
   }
   try {
     const stored = JSON.parse(localStorage.getItem(excludedStorageKey()) || "[]");
-    // Due forme, e la vecchia va letta lo stesso: prima qui c'era il solo
-    // elenco degli identificativi, e chi aggiorna il programma con dei prodotti
-    // già esclusi ha ancora quella nel browser. Un elenco senza le scelte non è
-    // un errore: vuol dire che di quei prodotti non sappiamo la quantità di
-    // prima, ed è esattamente com'era il programma fino a ieri.
+    // Two storage shapes, and the old one must still be readable: earlier
+    // versions stored only a plain id list, and browsers upgraded from that
+    // still have it. A list with no saved choices isn't an error — it just
+    // means the previous quantity for those products isn't known, the same
+    // as the older behavior.
     const elenco = Array.isArray(stored) ? stored : asArray(stored?.esclusi);
     const scelte = (!Array.isArray(stored) && stored && typeof stored.scelte === "object") ? stored.scelte : {};
     state.excludedProductIds = new Set(
@@ -1447,7 +1432,7 @@ function persistExcludedProducts() {
       ),
     }));
   } catch {
-    // La mancata disponibilità della memoria del browser non deve bloccare l'ordine.
+    // Browser storage being unavailable must not block placing the order.
   }
 }
 
@@ -1455,27 +1440,22 @@ function isExcluded(product) {
   return state.excludedProductIds.has(product.id);
 }
 
-// ⚠ Le sezioni apribili si richiudevano da sole, e non era un mistero: mentre
-// il ricalcolo gira la pagina si ridisegna **ogni secondo**
-// (RITMO_PIPELINE_MS), e `render()` non aggiorna il contenuto — lo sostituisce
-// (`appElement.innerHTML = …`). L'apertura di un <details> vive nel nodo, non
-// nel testo che l'ha prodotto: il nodo aperto veniva buttato e ne nasceva uno
-// nuovo, chiuso. Chi apriva «Dettagli del confronto» — allora «del ricalcolo» — se lo vedeva richiudere in
-// mezzo secondo — cioè in media metà del giro di polling (15 agosto 2026).
+// Collapsible sections must remember their own open/closed state in
+// `state.aperti`, keyed by name, because `render()` replaces the whole DOM
+// (`appElement.innerHTML = …`) instead of patching it — a <details> element's
+// open state lives on the node, and the node is discarded and rebuilt closed
+// on every redraw. This matters most during a recompute, where the page
+// redraws on every poll tick (RITMO_PIPELINE_MS).
 //
-// La memoria sta in una mappa sola, con una chiave per riquadro: nove
-// bandierine separate sarebbero nove occasioni di dimenticarsene una. Le
-// chiavi che dipendono da un prodotto lo portano dentro, così due schede
-// diverse non si aprono e chiudono insieme.
+// One map, one key per panel: separate flags per panel would be easy to
+// miss one of. Keys that depend on a specific product include its id, so two
+// different cards don't open and close together.
 //
-// ⚠ `apertoDiDefault` è per i riquadri che nascono APERTI — l'elenco dei
-// prodotti di un fornitore nel riepilogo, che si richiude per scelta di chi
-// ordina. Per quelli la mappa deve ricordare anche il «chiuso»: finché
-// `ricordaApertura` cancellava la chiave, un riquadro aperto di suo tornava
-// al valore di partenza al primo ridisegno, cioè si riapriva sotto le dita —
-// lo stesso difetto del 15 agosto, preso dall'altro verso. Perciò adesso si
-// scrive `false`, e «mai toccato» (`undefined`) resta una cosa diversa da
-// «chiuso da chi ordina».
+// `apertoDiDefault` covers panels that start OPEN — e.g. a supplier's
+// product list in the summary, which the user can collapse. For those, the
+// map must also remember an explicit "closed" (`false`), not just delete the
+// key on close: a deleted key falls back to the default (open) on the next
+// redraw, which would silently reopen the panel the user just closed.
 function apribile(chiave, apertoDiDefault = false) {
   const nome = String(chiave);
   const ricordato = state.aperti[nome];
@@ -1493,18 +1473,18 @@ function selectedOffer(product) {
   return product.offers.find((offer) => offer.supplierId === product.selectedSupplierId && offer.available) || null;
 }
 
-// Nessun fornitore può servire questo prodotto: non è «l'utente non ha ancora
-// scelto», è «non c'è niente da scegliere». È la stessa domanda che il servizio
-// locale si fa in `nessuna_offerta_utilizzabile` (server.py), e va fatta con le
-// stesse parole: una quantità senza fornitore è uno stato valido, che alla
-// compilazione finisce nell'elenco «Prodotti da reperire».
+// No supplier can fulfill this product: not "the user hasn't chosen yet",
+// but "there's nothing to choose from". Mirrors the same check the local
+// service makes in `nessuna_offerta_utilizzabile` (server.py): a quantity
+// with no supplier is a valid state, and ends up in the "to be sourced"
+// list at compile time.
 function nessunaOffertaUtilizzabile(product) {
   return !asArray(product?.offers).some((offer) => offer.available);
 }
 
-// Quanti fornitori sono fuori da questo prodotto per una tua risposta, non
-// perché non ce l'abbiano. Si contano i fornitori, non le righe: un listino che
-// porta due volte lo stesso articolo non deve contare due volte.
+// How many suppliers are excluded for this product because of a previous
+// rejection, not because they don't carry it. Counts suppliers, not rows: a
+// price list listing the same item twice must not count twice.
 function rifiutatiDaTe(product) {
   return new Set(
     asArray(product?.offers)
@@ -1513,11 +1493,12 @@ function rifiutatiDaTe(product) {
   ).size;
 }
 
-// Le due domande aperte sull'abbinamento, che sono la stessa attività — dire se
-// la merce è quella: «è lo stesso prodotto?» sulla riga che un fornitore
-// propone, e la spunta di conferma sull'offerta scelta. Prima stavano in un
-// filtro che si chiamava «Da verificare» e prendeva dentro qualunque avviso,
-// compresi i prodotti che nessuno ha: due elenchi diversi sotto lo stesso nome.
+// The two open questions about matching, which are really the same task —
+// confirming an item is the right one: "is this the same product?" on a
+// row a supplier proposes, and the confirmation checkbox on the selected
+// offer. Kept apart from the general "to verify" filter, which also covers
+// unrelated warnings like products no supplier carries: merging them back
+// would put two different lists under one name.
 function daConfermare(product) {
   if (confirmationRequired(product) && !product.confirmed) return true;
   return asArray(product?.offers).some(
@@ -1525,8 +1506,8 @@ function daConfermare(product) {
   );
 }
 
-// L'utente inserisce COLLI, non pezzi: nessun arrotondamento, nessuna eccedenza.
-// Vale per ogni tipo di articolo (prodotto, espositore, kit) e per ogni fornitore.
+// The user enters CARTONS, not pieces: no rounding, no leftover. Applies to
+// every item type (product, display, kit) and every supplier.
 function offerCalculation(product, offer, desiredQuantity = orderQuantity(product)) {
   const desired = Math.max(0, Math.trunc(finiteNumber(desiredQuantity)));
   const factor = Math.max(1, finiteNumber(offer?.quantityFactor ?? offer?.unitsPerOrderUnit, 1));
@@ -1539,33 +1520,33 @@ function offerCalculation(product, offer, desiredQuantity = orderQuantity(produc
     orderedPieces: desired * factor,
     unitPrice,
     total: desired * unitPrice,
-    // Il prezzo al pezzo del listino, quando c'è, e non il collo diviso i
-    // pezzi: 16,74 € / 12 fa 1,3949999… e si scriveva 1,39, mentre il listino
-    // dice 1,395 e la colonna «Prezzo per pezzo» di pagina 2 scriveva 1,40
-    // (KIF CANDEGGINA SPRAY 650ML, LARICE, 23 agosto 2026). Lo stesso numero
-    // con cui il fornitore è stato scelto, dappertutto.
+    // Uses the price list's own per-piece price when available, not
+    // carton price / pieces: that division can round differently than the
+    // supplier's stated per-piece price, producing a value that disagrees
+    // with the one the "price per piece" column elsewhere shows. Using the
+    // supplier's number keeps it consistent everywhere it's shown.
     pricePerPiece: finiteNumber(offer?.pricePerPiece) > 0
       ? finiteNumber(offer.pricePerPiece)
       : (factor > 0 ? unitPrice / factor : 0),
   };
 }
 
-// Il prezzo di un pezzo nel riepilogo di pagina 3, accanto al totale della
-// riga e in grigio. Sotto l'intestazione «Prezzo al pezzo» quando le colonne
-// ci stanno; sugli schermi stretti l'intestazione non si allinea più e sparisce
-// (come in `.offer-grid__head`), e allora la parola accanto al numero si vede.
-// Come là, l'intestazione è `aria-hidden` e la parola c'è sempre: chi legge
-// con un lettore di schermo sente «1,67 € al pezzo», non una riga in più.
+// Per-piece price in the step-3 summary, next to the line total, in gray.
+// Sits under a "price per piece" column header when there's room; on narrow
+// screens that header collapses (see `.offer-grid__head`) and the inline
+// label next to the number becomes the only cue. The column header is
+// `aria-hidden` while this inline label always renders, so a screen reader
+// announces "1,67 € al pezzo" either way, not an extra unlabeled row.
 function renderPrezzoAlPezzo(calculation) {
   if (!calculation) return '<span class="order-lines__pezzo"></span>';
   return `<span class="order-lines__pezzo">${formatEuro(calculation.pricePerPiece)}<span class="order-lines__pezzo-etichetta"> al pezzo</span></span>`;
 }
 
-// Il fornitore più conveniente si sceglie SEMPRE sul prezzo al pezzo, mai sul totale in
-// colli: colli con un numero di pezzi diverso non sono confrontabili sul totale.
-// Confronta il prezzo al pezzo di un'offerta con l'ultimo prezzo pagato per quel prodotto.
-// I campi lastPriceDifference/lastPriceDifferencePct sono calcolati dal backend quando
-// disponibili; in loro assenza si ripiega su un confronto client-side equivalente.
+// The cheapest supplier is ALWAYS chosen on price per piece, never on total
+// per carton: cartons with different piece counts aren't comparable on total.
+// Compares an offer's per-piece price with the last price paid for that
+// product. Uses lastPriceDifference/lastPriceDifferencePct from the backend
+// when available, falling back to an equivalent client-side comparison.
 function lastPriceComparison(product, offer) {
   if (offer.lastPriceDifference != null) {
     return {
@@ -1590,9 +1571,8 @@ function orderedProducts() {
 function snapshot() {
   return {
     runId: state.review?.run.id || "",
-    // La versione da cui questa scheda è partita: se sul disco ce n'è una più
-    // nuova, il salvataggio viene rifiutato invece di cancellare in silenzio
-    // quello che ha scritto l'altra scheda.
+    // The version this tab started from: if disk has a newer one, the save
+    // is rejected instead of silently overwriting what another tab wrote.
     stateVersion: state.stateVersion,
     currentStep: state.currentStep,
     acceptBelowThreshold: Boolean(state.acceptBelowThreshold),
@@ -1603,9 +1583,9 @@ function snapshot() {
       selectedSupplierId: product.selectedSupplierId || null,
       confirmed: Boolean(product.confirmed),
       excluded: isExcluded(product),
-      // Facoltativo: permette al servizio locale di ricordare che l'utente ha
-      // già toccato la quantità, così l'indicatore "valore dal gestionale" non
-      // ricompare dopo un ricaricamento.
+      // Optional: lets the local service remember the user already edited
+      // the quantity, so the "from the management software" indicator
+      // doesn't reappear on reload.
       quantitySource: product.quantitySource,
     })) || [],
   };
@@ -1630,10 +1610,10 @@ async function requestJson(url, options = {}) {
   const contentType = response.headers.get("content-type") || "";
   const attesoJson = contentType.includes("application/json");
   let body;
-  // Una risposta che dichiara di essere JSON e non lo è non è una risposta
-  // vuota. Trattarla come `{}` faceva uscire da /api/review un confronto di
-  // «0 prodotti» — indistinguibile da un confronto davvero vuoto — invece di un
-  // errore leggibile (revisione del 14 agosto 2026).
+  // A response that claims to be JSON but fails to parse is not an empty
+  // response. Treating it as `{}` would make /api/review look like a
+  // comparison with "0 products" — indistinguishable from a genuinely empty
+  // one — instead of surfacing a readable error.
   let illeggibile = false;
   if (attesoJson) {
     try {
@@ -1649,10 +1629,9 @@ async function requestJson(url, options = {}) {
   if (!response.ok) {
     const detail = typeof body === "object" && body ? body.message || body.error : body;
     const errore = new Error(detail || `${response.status} ${response.statusText}`);
-    // Il corpo della risposta viaggia con l'errore: dentro ci sono i controlli
-    // non superati **uno per uno**, che il servizio manda apposta e che la
-    // pagina buttava via — chi aveva dodici prodotti fermi ne leggeva tre e
-    // «e altri 9», senza modo di trovarli.
+    // The response body travels with the error: it lists every failed check
+    // individually, sent by the service on purpose. Dropping it here would
+    // leave only a truncated summary with no way to find the actual rows.
     errore.dettagli = typeof body === "object" && body ? body : null;
     throw errore;
   }
@@ -1664,19 +1643,19 @@ async function requestJson(url, options = {}) {
     throw new Error("Il servizio locale ha restituito una risposta non valida.");
   }
 
-  // ⚠ Qui, e non nei singoli gestori. Ogni risposta che porta una versione
-  // nuova dello stato la consegna alla scheda: se la scheda resta indietro di
-  // uno, il salvataggio dopo — fatto da LEI — si sente rispondere «un'altra
-  // scheda ha salvato dopo di te», e l'utente va a cercare una scheda che non
-  // esiste. Andava già fatto per il salvataggio e la compilazione, ma erano
-  // elencati a mano: l'abbinamento, il rifiuto e lo sconto avanzavano la
-  // versione e nessuno la raccoglieva (difetto del 26 agosto 2026). Raccolta
-  // qui, un gestore nuovo non può più dimenticarsene.
+  // Applied here, centrally, not in individual handlers. Every response
+  // carrying a new state version updates this tab's copy: if a version bump
+  // isn't collected somewhere, this tab's own next save gets rejected as
+  // stale by a version it never even saw. Listing call sites by hand was
+  // fragile — match, reject and discount all advance the version and any one
+  // of them could be missed. Centralizing here means a new handler can't
+  // forget it.
   //
-  // ⚠ Dopo il controllo di `response.ok`, non prima: una risposta d'errore
-  // porta la versione di chi ha scritto per davvero, e raccoglierla vorrebbe
-  // dire che il tentativo successivo passa il controllo e cancella quello che
-  // l'altro ha appena scritto. Il rifiuto deve restare un rifiuto.
+  // Applied after the `response.ok` check, not before: an error response
+  // carries the version of whoever actually wrote successfully, and applying
+  // it here would let the next save attempt pass the staleness check and
+  // overwrite what that other write just saved. A rejection must stay a
+  // rejection.
   applyStateVersion(body);
 
   return body;
@@ -1700,8 +1679,8 @@ async function loadReview() {
     updateSaveStatus(mode === "demo" ? "Dati dimostrativi, nessun salvataggio" : "Tutto salvato");
     render();
     if (state.currentStep <= 2) loadPendingOrders();
-    // Chi riapre la pagina direttamente sul riepilogo deve vedere lo storico
-    // senza dover uscire e rientrare dal passo.
+    // A page reload landing directly on the summary must show the
+    // compilation history without leaving and re-entering that step.
     if (state.currentStep === 3) loadCompilazioni();
     caricaColonneDeiDocumenti();
   } catch (error) {
@@ -1712,11 +1691,11 @@ async function loadReview() {
   }
 }
 
-// Quali colonne il confronto vivo ha letto in ogni documento. Si ricarica quando
-// cambia il ricalcolo di provenienza — è l'unica cosa che le fa cambiare — e mai
-// durante il polling della catena, che ridisegna la pagina ogni secondo.
-// Se la chiamata non riesce, le schede dei documenti restano come prima: è un
-// riquadro che spiega, non un requisito per lavorare.
+// Which columns the current comparison actually read from each document.
+// Reloaded only when the source recompute changes — the only thing that can
+// change them — never on the pipeline's per-second polling redraw. If the
+// call fails, the document cards just stay as they were: this panel explains,
+// it isn't a requirement to keep working.
 async function caricaColonneDeiDocumenti() {
   if (mode === "demo" || state.colonneDocumenti.caricando) return;
   const runId = String(state.review?.run?.pipelineRunId || "");
@@ -1748,16 +1727,15 @@ async function caricaColonneDeiDocumenti() {
   render();
 }
 
-// Ordini della settimana scorsa non ancora confermati come ricevuti.
-// Svuota documenti e confronto e riporta alla pagina 1, per cominciare la
-// settimana da capo.
+// Starts a new comparison: clears documents and the current comparison and
+// goes back to step 1.
 //
-// ⚠ Quello che **non** manda via lo decide il servizio (`nuova_comparazione`),
-// non questa funzione: conferme, schemi imparati, ordini in attesa e
-// compilazioni già fatte restano. Qui si azzera solo quello che vive nella
-// pagina — filtri, riepilogo, esito della compilazione, barre di annullamento —
-// perché `loadReview()` quella roba non la tocca, e senza azzerarla la
-// comparazione nuova nascerebbe con i filtri della settimana prima addosso.
+// What is NOT cleared is decided by the backend (`nuova_comparazione`), not
+// this function: confirmations, learned schemas, pending orders and past
+// compilations all survive. This function only resets what lives in the page
+// itself — filters, summary, compile result, undo banners — since
+// `loadReview()` doesn't touch any of that, and without resetting it the new
+// comparison would start with the previous week's filters still applied.
 async function cominciaNuovaComparazione() {
   if (state.nuovaComparazione.inCorso) return;
   if (mode === "demo") {
@@ -1766,19 +1744,19 @@ async function cominciaNuovaComparazione() {
     render();
     return;
   }
-  // La stessa guardia che ha il servizio. Qui serve lo stesso: la risposta
-  // arriva dopo, e nel frattempo il pulsante avrebbe detto di aver fatto.
+  // Same guard as the backend. Needed here too: the response arrives later,
+  // and until then the button would already look like it succeeded.
   if (pipelineInCorso()) {
     showToast("Il confronto è in corso: la comparazione nuova si comincia quando ha finito.", "error");
     return;
   }
   state.nuovaComparazione.inCorso = true;
-  // ⚠ Il salvataggio in coda va spento PRIMA di chiedere lo svuotamento.  La
-  // pagina salva 450 ms dopo l'ultima modifica: un salvataggio partito dopo lo
-  // svuotamento parla di un confronto che non c'e' piu', il servizio lo rifiuta
-  // — giustamente, non ricrea le quantita' della settimana scorsa — e in faccia
-  // a chi ha appena cominciato la settimana nuova esce un riquadro rosso
-  // «Salvataggio non riuscito» per una cosa che ha fatto lui apposta.
+  // The queued autosave must be cancelled BEFORE requesting the reset. The
+  // page autosaves 450ms after the last edit; a save that fires after the
+  // reset targets a comparison that no longer exists, gets correctly
+  // rejected by the service (it must not recreate last week's quantities),
+  // and shows the user a "save failed" error for an action they took
+  // deliberately.
   window.clearTimeout(state.saveTimer);
   const c_eranoModificheDaSalvare = state.dirty;
   state.dirty = false;
@@ -1787,9 +1765,9 @@ async function cominciaNuovaComparazione() {
   try {
     const esito = await requestJson(API.comparazioneNuova, { method: "POST", body: JSON.stringify({}) });
     state.nuovaComparazione = { chiedendo: false, inCorso: false };
-    // Sul disco `state.json` non c'e' piu': se la scheda continuasse a
-    // dichiarare la versione di prima, il primo salvataggio dopo lo svuotamento
-    // si sentirebbe rispondere «un'altra scheda ha salvato dopo di te».
+    // `state.json` no longer exists on disk: if this tab kept declaring the
+    // old version, the first save after the reset would get rejected as
+    // stale.
     state.stateVersion = 0;
     state.saveVersion = 0;
     state.savedVersion = 0;
@@ -1809,26 +1787,26 @@ async function cominciaNuovaComparazione() {
     state.fileScartati = [];
     state.uploadMessage = "";
     state.compilazioni = { ...state.compilazioni, aperta: false };
-    // Lo stato della catena torna quello che manda il servizio — «in attesa»,
-    // senza la fascia dei documenti cambiati: non c'è nessun confronto di
-    // prima di cui dire che i prezzi sono ancora quelli.
+    // The pipeline state is reset to whatever the service sends back —
+    // "idle", with no "documents changed" banner: there's no previous
+    // comparison left for prices to be stale against.
     state.pipeline = { ...state.pipeline, stato: esito?.pipeline || null, chiesto: false, errore: "", contattoPerso: "", controlliPersi: 0 };
     await loadReview();
-    // E la domanda della settimana scorsa, che adesso ha il suo momento.
+    // And the pending-orders question, whose moment is now.
     loadPendingOrders();
     showToast(esito?.message || "Comparazione nuova.");
   } catch (error) {
     state.nuovaComparazione.inCorso = false;
-    // Non e' cominciata niente: i documenti e le scelte sono ancora al loro
-    // posto, quindi quello che c'era da salvare va ancora salvato.
+    // Nothing started: documents and choices are still in place, so
+    // whatever needed saving still needs saving.
     if (c_eranoModificheDaSalvare) scheduleSave();
     showToast(error.message || "La comparazione nuova non è cominciata.", "error");
     render();
   }
 }
 
-// L'elenco è un aiuto, non un requisito: se la chiamata non riesce si resta senza
-// domande in cima alla pagina e tutto il resto continua a funzionare.
+// The list is a convenience, not a requirement: if the call fails, the page
+// just has no reminders at the top, and everything else still works.
 async function loadPendingOrders() {
   if (mode === "demo" || state.history.loading) return;
   state.history.loading = true;
@@ -1837,29 +1815,29 @@ async function loadPendingOrders() {
     const payload = await requestJson(API.historyPending);
     state.history.pending = normalizePendingOrders(payload?.pending);
   } catch (error) {
-    // Un elenco vuoto e una richiesta fallita davano la stessa immagine: il
-    // riquadro non compariva. Sono due cose opposte — «non c'è niente in
-    // sospeso» e «non sono riuscito a saperlo» — e confonderle fa riordinare
-    // merce già ordinata che deve ancora arrivare.
+    // An empty list and a failed request must stay distinguishable, not
+    // both silently show an empty panel: they're opposites — "nothing
+    // pending" vs. "failed to find out" — and conflating them risks
+    // reordering stock that's already on its way.
     state.history.pending = [];
     state.history.errore = `Non sono riuscito a leggere gli ordini già fatti: ${error.message}`;
   } finally {
     state.history.loading = false;
-    // La risposta arriva a pagina già disegnata: si ridisegna solo dove serve e
-    // senza rubare il cursore a chi nel frattempo sta scrivendo nella ricerca.
-    // Anche la pagina 1: da quando c'è «Inizia nuova comparazione», la
-    // domanda «è arrivata la merce?» compare lì — è il momento in cui la si
-    // fa davvero, cioè quando si comincia la settimana nuova.
+    // The response arrives after the page is already rendered: redraws only
+    // where needed, without stealing focus from someone typing in search.
+    // Also runs on step 1: since "start new comparison" was added, that's
+    // the actual moment to ask "did the stock arrive?" — right when a new
+    // week begins.
     if (state.currentStep <= 2) rerenderPreservingFocus();
   }
 }
 
-// Lo storico delle compilazioni: si chiede entrando nel passo 3 e di nuovo dopo
-// ogni compilazione riuscita, perché quella appena fatta ne è la prima voce.
-// Un errore qui resta dentro il riquadro (state.compilazioni.errore) e non tocca
-// state.runtimeError: lo storico è un aiuto per ritrovare i listini di prima,
-// non una condizione per compilare, e un passo 3 rotto sarebbe un danno più
-// grande dell'elenco mancante.
+// Compilation history: fetched on entering step 3, and again after every
+// successful compile, since the one just made becomes its first entry.
+// A failure here stays inside its own panel (state.compilazioni.errore) and
+// never touches state.runtimeError: history is a convenience for finding
+// past price lists, not a precondition for compiling, and breaking step 3
+// over it would be worse than just missing the list.
 async function loadCompilazioni() {
   if (mode === "demo" || state.compilazioni.inCorso) return;
   state.compilazioni.inCorso = true;
@@ -1871,32 +1849,33 @@ async function loadCompilazioni() {
     state.compilazioni.elenco = asArray(payload?.compilazioni);
     state.compilazioni.caricate = true;
   } catch (error) {
-    // L'elenco vecchio non si tiene: mostrerebbe come presenti compilazioni che
-    // nessuno ha appena riletto sul disco.
+    // Discards the stale list rather than keeping it: showing compilations
+    // that weren't just re-read from disk would be misleading.
     state.compilazioni.elenco = [];
     state.compilazioni.errore = `Storico delle compilazioni non letto: ${error.message}`;
   } finally {
     state.compilazioni.inCorso = false;
-    // La risposta arriva a pagina già disegnata: si ridisegna senza rubare il
-    // cursore a chi nel frattempo sta usando i filtri del riepilogo.
+    // The response arrives after the page is already rendered: redraws
+    // without stealing focus from someone using the summary filters.
     rerenderPreservingFocus();
   }
 }
 
-// Lo sconto lo applica il servizio: i prezzi scontati e le assegnazioni nuove
-// arrivano dalla rilettura del confronto, non da un conto rifatto qui. Un
-// secondo motore di prezzi nel browser vorrebbe dire due verità sulla stessa
-// riga, e la seconda sarebbe quella scritta accanto al totale.
+// The discount is applied by the service: discounted prices and new
+// assignments come from re-fetching the comparison, never from a
+// recalculation done here. A second pricing engine in the browser would
+// mean two different truths for the same row, and the second one would be
+// the one shown next to the total.
 async function applicaScontoFornitore(supplierId, valore) {
   if (!supplierId || mode === "demo") return;
   const percent = Math.min(99, Math.max(0, finiteNumber(valore, 0)));
   try {
-    // ⚠ Il salvataggio PRIMA della richiesta, per la ragione scritta per
-    // esteso in `abbinaLaRiga`: qui sotto `loadReview()` rilegge il confronto
-    // e SOSTITUISCE quello in pagina, e una quantità scritta meno di 450 ms fa
-    // — o rimasta indietro dopo un salvataggio fallito — se ne andrebbe con
-    // lui, cioè un ordine sbagliato senza che niente lo dica (6 settembre
-    // 2026). Con lo stato pulito `saveState()` torna vero subito.
+    // Saves BEFORE the request, for the same reason spelled out in full in
+    // `abbinaLaRiga`: `loadReview()` below re-fetches the comparison and
+    // REPLACES the one in the page, so a quantity typed less than 450ms
+    // ago — or one still unsaved after a failed save — would be silently
+    // lost with it, producing a wrong order with no indication anything
+    // went wrong. With a clean state, `saveState()` resolves immediately.
     const saved = await saveState();
     if (!saved) throw new Error("Le modifiche correnti non sono ancora state salvate.");
     const esito = await requestJson(API.supplierDiscount, {
@@ -1904,11 +1883,10 @@ async function applicaScontoFornitore(supplierId, valore) {
       body: JSON.stringify({ supplierId, percent }),
     });
     await loadReview();
-    // Il servizio conta quanti prodotti lo sconto ha spostato su questo
-    // fornitore, e finora quel numero non arrivava da nessuna parte: chi
-    // scriveva la percentuale non aveva modo di sapere se aveva spostato
-    // qualcosa o niente. Il nome si legge DOPO `loadReview`, che è il momento
-    // in cui il confronto aggiornato è in mano.
+    // The service counts how many products the discount reassigned to this
+    // supplier, the only feedback that entering a percentage actually moved
+    // something. Read AFTER `loadReview`, so the toast's supplier name
+    // reflects the just-updated comparison.
     const spostati = Math.max(0, Math.trunc(finiteNumber(esito?.reassigned, 0)));
     if (spostati) {
       showToast(spostati === 1
@@ -1928,12 +1906,13 @@ async function deleteCompilation(cartella) {
   state.compilazioni.errore = "";
   render();
   try {
-    // ⚠ Il salvataggio PRIMA della richiesta, per la ragione scritta per
-    // esteso in `abbinaLaRiga`: eliminata la compilazione la pagina rilegge
-    // il confronto e SOSTITUISCE quello in pagina, e una quantità scritta meno
-    // di 450 ms fa — o rimasta indietro dopo un salvataggio fallito — se ne
-    // andrebbe con lui, cioè un ordine sbagliato senza che niente lo dica (6
-    // settembre 2026). Con lo stato pulito `saveState()` torna vero subito.
+    // Saves BEFORE the request, for the same reason spelled out in full in
+    // `abbinaLaRiga`: once the compilation is deleted, the page re-fetches
+    // the comparison and REPLACES the one in the page, so a quantity typed
+    // less than 450ms ago — or one still unsaved after a failed save —
+    // would be silently lost with it, producing a wrong order with no
+    // indication anything went wrong. With a clean state, `saveState()`
+    // resolves immediately.
     const saved = await saveState();
     if (!saved) throw new Error("Le modifiche correnti non sono ancora state salvate.");
     const result = await requestJson(API.ordiniDelete, {
@@ -1968,20 +1947,20 @@ function applyPipelineAfterInputChange(pipeline) {
   state.pipeline.errore = "";
   state.pipeline.stato = pipeline && typeof pipeline === "object" ? pipeline : null;
   const stato = String(state.pipeline.stato?.stato || "");
-  // ⚠ IN_ATTESA adesso vuol dire due cose: «non è mai partito niente» e
-  // «confronto vecchio, i documenti sono cambiati». Nessuna delle due merita la
-  // barra delle fasi — quella la spegne renderAvanzamentoPipeline() guardando
-  // lo stato — e la seconda la dice la fascia di renderCambiamentoDocumenti(),
-  // che legge `state.pipeline.stato`: qui lo stato si conserva in ogni caso, ed
-  // è quello che permette alla fascia di comparire.
+  // IN_ATTESA now covers two cases: "nothing has ever run" and "stale
+  // comparison, documents have changed". Neither deserves the progress bar
+  // — turned off by renderAvanzamentoPipeline() based on this status — while
+  // the second is what renderCambiamentoDocumenti() reports by reading
+  // `state.pipeline.stato`, which is why the status is kept either way.
   state.pipeline.chiesto = Boolean(stato && stato !== "IN_ATTESA");
   if (stato === "IN_CORSO") pianificaControlloPipeline();
 }
 
 async function deleteUploadedList(name) {
   if (!name || state.uploadDeletion.deleting) return;
-  // Togliere un listino mentre la catena gira cambierebbe il risultato che si
-  // sta calcolando: il comando è già spento in pagina, qui non si passa.
+  // Removing a price list while the pipeline is running would change the
+  // result it's computing: the action is already disabled in the UI, and
+  // this is the backstop.
   if (pipelineInCorso()) {
     showToast("Il confronto è in corso: i listini si eliminano appena ha finito.", "error");
     return;
@@ -1990,12 +1969,13 @@ async function deleteUploadedList(name) {
   state.runtimeError = "";
   render();
   try {
-    // ⚠ Il salvataggio PRIMA della richiesta, per la ragione scritta per
-    // esteso in `abbinaLaRiga`: eliminato il listino la pagina rilegge il
-    // confronto e SOSTITUISCE quello in pagina, e una quantità scritta meno di
-    // 450 ms fa — o rimasta indietro dopo un salvataggio fallito — se ne
-    // andrebbe con lui, cioè un ordine sbagliato senza che niente lo dica (6
-    // settembre 2026). Con lo stato pulito `saveState()` torna vero subito.
+    // Saves BEFORE the request, for the same reason spelled out in full in
+    // `abbinaLaRiga`: once the price list is deleted, the page re-fetches
+    // the comparison and REPLACES the one in the page, so a quantity typed
+    // less than 450ms ago — or one still unsaved after a failed save —
+    // would be silently lost with it, producing a wrong order with no
+    // indication anything went wrong. With a clean state, `saveState()`
+    // resolves immediately.
     const saved = await saveState();
     if (!saved) throw new Error("Le modifiche correnti non sono ancora state salvate.");
     const result = await requestJson(API.uploadDelete, {
@@ -2018,30 +1998,30 @@ async function deleteUploadedList(name) {
   }
 }
 
-// «Non è lo stesso articolo», e il ritorno indietro. È il gemello negativo
-// della spunta di conferma, e passa dalla stessa memoria: il magazzino delle
-// conferme (`app/conferme.py`), riga con `accettata` falsa. Per questo non tocca
-// nessuna chiave nuova di `state.json` e non ha bisogno di sopravvivere al
-// ricalcolo: sopravvive perché è legata all'ARTICOLO, non alla riga.
+// "Not the same item", and the way back. The negative counterpart of the
+// confirmation checkbox, sharing the same store: the confirmations database
+// (`app/conferme.py`), as a row with `accettata` false. It doesn't touch any
+// new `state.json` key and doesn't need to survive a recompute on its own —
+// it survives because it's tied to the ITEM, not the row.
 //
-// ⚠ Il salvataggio viene PRIMA della risposta, come per il candidato: questo
-// pulsante ricarica il confronto, e quello che l'utente ha scritto finora non
-// deve perdersi per averlo premuto. Il salvataggio passa anche con la conferma
-// mancante — `save_state` la esclude dai bloccanti — quindi non c'è il rischio
-// che il pulsante si rifiuti di funzionare proprio nel caso per cui esiste.
-// Il «sì» alla stessa domanda, e si dà nello stesso modo.
+// Saves BEFORE the response, like the candidate answer: this button reloads
+// the comparison, and whatever the user typed so far must not be lost by
+// pressing it. The save succeeds even with confirmation still missing —
+// `save_state` doesn't treat it as blocking — so the button can't refuse to
+// work in exactly the case it exists for. The "yes" to the same question is
+// given the same way.
 //
-// ⚠ Fino al 22 agosto 2026 il sì era una **casella** e il no un **pulsante**:
-// una domanda sola, due meccaniche. La casella metteva il valore nello stato e
-// aspettava il salvataggio differito — nessun riscontro, nessuna attesa
-// dichiarata, e se il salvataggio falliva la spunta restava lì a dire che la
-// risposta era data. Il pulsante invece agisce, aspetta e lo dice.
+// "Yes" to the same question is a button too, not a checkbox with a
+// deferred autosave: a checkbox would write the value into state and wait
+// for the delayed save, giving no feedback and no explicit wait, and if the
+// save failed it would stay checked claiming an answer that never made it.
+// The button acts, waits, and reports the outcome, reverting on failure
+// instead of staying drawn.
 //
-// Qui **non cambia dove la risposta finisce**: resta `product.confirmed` nello
-// snapshot, che `_ricorda_le_conferme` scrive nel magazzino al salvataggio, e
-// resta la chiave che la compilazione controlla. Cambia che il salvataggio è
-// immediato e atteso, come per il no — e che se non riesce, il sì torna
-// indietro invece di restare disegnato.
+// The answer itself lands in `product.confirmed` in the snapshot, written
+// to the store by `_ricorda_le_conferme` on save, and read by compilation
+// as the key it checks — the save is immediate and awaited, same as the
+// "no" path above.
 async function confermaLAbbinamento(productId, confermato) {
   const answerKey = `${productId}:conferma`;
   if (!productId || state.matches.answering) return;
@@ -2051,19 +2031,19 @@ async function confermaLAbbinamento(productId, confermato) {
   if (prima === Boolean(confermato)) return;
   state.matches.answering = answerKey;
   product.confirmed = Boolean(confermato);
-  // Marcato «da salvare» e salvato subito. ⚠ Il timer che `scheduleSave()`
-  // lascia va annullato: aspetta 450 ms, e se il salvataggio qui sotto fallisce
-  // e il ramo d'errore riporta indietro il flag, quel timer rispedirebbe il
-  // valore appena annullato — cioè registrerebbe una risposta che l'utente ha
-  // visto fallire.
+  // Marks "needs saving" and saves immediately. The timer `scheduleSave()`
+  // leaves behind must be cancelled: it fires after 450ms, and if the save
+  // below fails and the error branch reverts the flag, that timer would
+  // still resend the just-reverted value — recording an answer the user saw
+  // fail.
   scheduleSave();
   window.clearTimeout(state.saveTimer);
   rerenderPreservingFocus();
   try {
     const saved = await saveState();
     if (!saved) throw new Error(state.runtimeError || "Le modifiche non sono state salvate.");
-    // Il confronto riletto: la conferma appena scritta torna con la sua data,
-    // che è quello che il riquadro mostra al posto della domanda.
+    // Re-fetches the comparison: the confirmation just written comes back
+    // with its date, which the card then shows in place of the question.
     const refreshed = await requestJson(API.review);
     state.review = normalizeReview(refreshed);
     restoreExcludedProducts();
@@ -2071,26 +2051,26 @@ async function confermaLAbbinamento(productId, confermato) {
       ? "Conferma registrata: vale per l’articolo, anche con il listino della settimana prossima."
       : "Conferma tolta: la domanda è di nuovo aperta.");
   } catch (error) {
-    // ⚠ Si torna indietro sul flag. Lasciarlo com'è vorrebbe dire una spunta
-    // che dice «risposto» sopra una risposta che non è arrivata da nessuna
-    // parte — esattamente il difetto della casella.
+    // Reverts the flag. Leaving it as-is would mean a checkbox claiming
+    // "answered" over an answer that never actually landed — exactly the
+    // old checkbox's failure mode.
     //
-    // Sul prodotto che si ha già in mano, non su uno ricercato adesso: fra
-    // l'inizio e qui il confronto può essere stato riletto — succede a ogni
-    // ricalcolo che finisce — e `findProduct` risponderebbe su un altro
-    // oggetto, o su niente. Se il confronto è cambiato questo ripristino non
-    // serve più a nessuno, ed è innocuo; se non è cambiato, è l'unico che
-    // funziona.
+    // Reverted on the product reference already held, not one looked up
+    // again: between the start of this call and here, the comparison may
+    // have been re-fetched (happens on every finished recompute), and
+    // `findProduct` would then resolve to a different object, or nothing.
+    // If the comparison changed, this revert is moot and harmless; if it
+    // didn't, this is the only reference that still works.
     product.confirmed = prima;
     showToast(`Risposta non registrata: ${error.message}`, "error");
   } finally {
     state.matches.answering = "";
-    // ⚠ `rerenderPreservingFocus` e non `render`: questa risposta lascia la
-    // scheda dov'è — il pulsante diventa «Cambio idea» e tiene la stessa
-    // `focus-key` — quindi il fuoco si può rimettere dov'era. È il rilievo [15]
-    // dell'onda 5: premere non deve buttare via il fuoco. I due gemelli che
-    // rispondono col no usano `render()` per la ragione opposta: quelli
-    // ricaricano il confronto e il pulsante premuto sparisce.
+    // `rerenderPreservingFocus`, not `render`: this answer leaves the card
+    // where it is — the button becomes "change my mind" and keeps the same
+    // `focus-key` — so focus can be restored to it. Pressing this button
+    // must not throw away keyboard focus. The two counterparts that answer
+    // "no" use `render()` for the opposite reason: those reload the
+    // comparison and the pressed button disappears.
     rerenderPreservingFocus();
   }
 }
@@ -2125,19 +2105,18 @@ async function rifiutaLAbbinamento(productId, supplierId, rifiutata) {
   }
 }
 
-// ⚠ Detto l'ultimo no, il prodotto SPARISCE da sotto il dito: l'elenco «Da
-// confermare» è il posto da cui si risponde alle domande, e un prodotto senza
-// più nessun fornitore non è più una domanda, quindi esce dal filtro. Provato
-// il 22 agosto 2026 su SUPERMICIONE: due no, la scheda non c'era più, e in
-// pagina nessuna parola diceva dove fosse andata. Il conto dei filtri si era
-// mosso — «Da confermare» da 2 a 1, «Nessuno ce l'ha» da 78 a 79 — e basta.
+// After the last rejection, the product's card DISAPPEARS: the "to confirm"
+// list is where questions get answered, and a product left with no
+// remaining supplier is no longer a question, so it drops out of that
+// filter. With nothing pointing to where it went, only the filter counts
+// shift and the card is simply gone.
 //
-// Si dice dove sta adesso, e si dice qui: quando il posto cambia sotto gli
-// occhi, la frase che lo spiega deve arrivare col cambiamento, non stare
-// scritta prima da qualche parte nella scheda.
+// This function names the product's new location right here, at the moment
+// the location changes — not as static text placed somewhere else on the
+// card ahead of time.
 //
-// ⚠ E il posto adesso è «Hai risposto no», non «Nessuno ce l’ha»: mandare a
-// cercarlo nel filtro sbagliato è peggio che non dire niente.
+// The new location is "you answered no", not "no supplier has it": pointing
+// to the wrong filter is worse than saying nothing.
 function doveFinisceIlProdotto(productId, rifiutata) {
   if (!rifiutata) return "";
   const prodotto = asArray(state.review?.products).find((item) => item.id === productId);
@@ -2177,11 +2156,11 @@ async function answerRejectedCandidate(productId, supplierId, candidateKey, acce
   }
 }
 
-// La risposta è unica per l'intero ordine di quel fornitore: le consegne
-// parziali non esistono. Le risposte possibili sono tre — è arrivata, non
-// ancora (e la domanda torna la settimana prossima), non arriverà più (e la
-// domanda si chiude senza dire che la merce è arrivata). Sono informative: non
-// toccano quantità, prezzi né fornitore scelto.
+// The answer applies to the whole order from that supplier: partial
+// deliveries aren't modeled. Three possible answers — received, not yet
+// (the question comes back next week), or will never arrive (closed without
+// claiming the stock arrived). All purely informational: none touch
+// quantity, prices or the selected supplier.
 async function answerPendingOrder(orderId, received, { closed = false } = {}) {
   if (!orderId || state.history.answering) return;
   const entry = asArray(state.history.pending).find((candidate) => candidate.orderId === orderId);
@@ -2197,7 +2176,7 @@ async function answerPendingOrder(orderId, received, { closed = false } = {}) {
       if (result?.ok === false) throw new Error(result.message || "La risposta non è stata registrata.");
       if (Array.isArray(result?.pending)) state.history.pending = normalizePendingOrders(result.pending);
     }
-    // In tutti i casi la domanda non viene riproposta in questa sessione.
+    // In every case, the question isn't asked again in this session.
     state.history.answered.add(orderId);
     if (closed) {
       forgetPendingOrder(orderId);
@@ -2216,7 +2195,7 @@ async function answerPendingOrder(orderId, received, { closed = false } = {}) {
   }
 }
 
-// La merce è arrivata: gli avvisi "già ordinato" di quell'ordine non servono più.
+// Stock arrived: "already ordered" notices for that order no longer apply.
 function forgetPendingOrder(orderId) {
   for (const product of asArray(state.review?.products)) {
     if (!Array.isArray(product.pendingOrders) || !product.pendingOrders.length) continue;
@@ -2242,9 +2221,9 @@ function applyPromotionUpdate(result) {
   if (result.promotionSummary && typeof result.promotionSummary === "object") {
     state.review.promotionSummary = result.promotionSummary;
   }
-  // I totali del Riepilogo — e lo scarto di arrotondamento fra testata e righe —
-  // li rifà il servizio locale a ogni salvataggio: il browser non è autorevole
-  // sui prezzi e qui si limita a tenere quello che gli arriva.
+  // Summary totals — and the rounding difference between header and line
+  // items — are recomputed by the local service on every save: the browser
+  // isn't authoritative on prices and just keeps whatever it's sent.
   if (result.orderSummary && typeof result.orderSummary === "object") {
     state.review.orderSummary = normalizeOrderSummary(result.orderSummary);
   }
@@ -2265,10 +2244,11 @@ function applyPromotionUpdate(result) {
   return Boolean(result.promotionSummary || result.orderSummary || Object.keys(promotionStates).length);
 }
 
-// La versione nuova dello stato, presa da qualunque risposta la porti. La
-// chiama `requestJson` su ogni risposta riuscita, una volta sola per tutti:
-// l'elenco a mano di chi «riscrive tutto lo stato» ne dimenticava tre su cinque.
-// Sale e basta — mai indietro — così l'ordine in cui arrivano non conta.
+// Adopts the new state version from whichever response carries it. Called by
+// `requestJson` on every successful response, from one place: a hand-picked
+// list of "which endpoints rewrite state" was too easy to miss entries in.
+// Only moves forward, never back, so the order responses arrive in doesn't
+// matter.
 function applyStateVersion(result) {
   const versione = finiteNumber(result?.stateVersion, NaN);
   if (Number.isFinite(versione) && versione > state.stateVersion) {
@@ -2321,9 +2301,10 @@ async function saveState() {
       state.dirty = true;
       state.runtimeError = `Salvataggio non riuscito: ${error.message}`;
       updateSaveStatus("Salvataggio non riuscito");
-      // Tre tentativi e poi basta: un servizio spento non si convince
-      // riprovando all'infinito, e una pagina che chiama ogni cinque secondi
-      // per sempre e' un guasto suo. Dopo il terzo resta il comando in cima.
+      // Three attempts, then stop: an offline service won't come back
+      // because of infinite retries, and a page that keeps polling every
+      // five seconds forever is a bug of its own. After the third failure,
+      // the retry action stays at the top instead.
       state.tentativiDiSalvataggio += 1;
       if (state.tentativiDiSalvataggio <= 3) {
         window.clearTimeout(state.saveTimer);
@@ -2360,18 +2341,20 @@ function fileStatus(file) {
 function issueTone(issue) {
   if (issue.blocking || issue.severity === "error") return "danger";
   if (issue.severity === "info") return "info";
-  // renderAlert disegna già la spunta per il tono "success" e il foglio di
-  // stile ha già .alert--success: mancava solo il modo di arrivarci. Serve alla
-  // pagina Impostazioni, dove "la chiave funziona" è la sola risposta verde.
+  // renderAlert already draws the checkmark for the "success" tone and the
+  // stylesheet already has .alert--success: only a way to reach it was
+  // missing. Used on the Settings page, where "the API key works" is the
+  // one green response.
   if (issue.severity === "success") return "success";
   return "warning";
 }
 
-// collectIssues() scorre tutti i prodotti ed è invocata fino a 40 volte per pagina:
-// il risultato viene calcolato una sola volta per ciclo di render.
-// INVARIANTE: chi modifica quantità, fornitore, conferme o esclusioni deve invalidare
-// la cache, direttamente o passando da render(). Un consumatore che legge gli avvisi
-// fuori dal ciclo di render deve chiamare invalidateIssues() prima.
+// collectIssues() scans every product and is called up to ~40 times per page
+// render: the result is computed once per render cycle and cached.
+// INVARIANT: any code that changes quantity, supplier, confirmations or
+// exclusions must invalidate this cache, either directly or via render().
+// A caller reading issues outside the render cycle must call
+// invalidateIssues() first.
 let issuesCache = null;
 let issuesByProductCache = null;
 
@@ -2390,15 +2373,14 @@ function collectIssues() {
     issues.push(...product.warnings);
 
     const offer = selectedOffer(product);
-    // ⚠ «Non hai ancora scelto» e «non c'è niente da scegliere» sono due cose
-    // diverse, e questo riquadro le trattava come una sola: un prodotto che
-    // nessun listino sa servire fermava la compilazione e chiedeva di mettere
-    // a zero la quantità — cioè di cancellare proprio il numero che serve a
-    // reperirlo altrove. Il servizio locale lo accetta dal 16 agosto 2026
-    // (`nessuna_offerta_utilizzabile`, server.py): la quantità resta, il
-    // prodotto non entra nei listini dei fornitori ed esce nell'elenco
-    // «Prodotti da reperire». Sulla sua scheda lo dice già l'avviso
-    // SENZA_OFFERTA_UTILIZZABILE, che porta il perché.
+    // "You haven't chosen yet" and "there's nothing to choose from" are
+    // different states. A product no supplier can fulfill must not block
+    // compilation or force the quantity to zero — that quantity is exactly
+    // what's needed to source the item elsewhere. The local service accepts
+    // this case (`nessuna_offerta_utilizzabile`, server.py): the quantity
+    // stays, the product is left out of every supplier's list, and it
+    // appears in the "to be sourced" list instead. Its own card already
+    // shows the SENZA_OFFERTA_UTILIZZABILE warning explaining why.
     if (!offer && !nessunaOffertaUtilizzabile(product)) {
       issues.push(normalizeIssue({
         id: `${product.id}-no-selection`,
@@ -2496,19 +2478,17 @@ function renderBadge(label, tone = "neutral") {
   return `<span class="badge badge--${escapeHtml(tone)}">${escapeHtml(label)}</span>`;
 }
 
-// ⚠ «Proposte da controllare — 9 prodotti hanno una proposta di un fornitore
-// da confermare o rifiutare. Li trovi con il filtro "Da confermare".» Daniele,
-// 20 agosto 2026: «sarebbe carino poter cliccare su "Vai al filtro" e essere
-// rimandati nella sezione di controllo». L'avviso diceva dove andare e poi
-// lasciava andarci a mano — cercare la voce giusta in un elenco a tendina,
-// dopo aver cambiato pagina. Sulla pagina 3 pesa di piu': «Conferma richiesta ·
-// bloccante» dice che la compilazione non parte e non da' la strada per
-// sbloccarla.
+// Warnings that name a product-level filter (e.g. "9 products have a
+// supplier proposal to confirm or reject") carry an action that jumps
+// straight to that filter, instead of naming it and leaving the user to
+// find the right entry in a dropdown after switching pages. This matters
+// most on the summary page: "Confirmation required · blocking" explains why
+// compilation won't start, and the action gives a path to unblock it.
 //
-// Il comando si decide dal `code`, che il servizio manda gia' e che i due
-// avvisi nati nel browser adesso hanno anche loro: nessuna tabella di titoli da
-// tenere allineata alle frasi. Un avviso senza codice noto non ha comando, e
-// resta come prima.
+// The action is picked from `code`, which the service already sends and
+// which the two warnings created in the browser also carry: no separate
+// table of titles to keep in sync with wording. A warning with an unknown
+// code just has no action.
 const COMANDI_DEGLI_AVVISI = {
   RIFIUTI_CON_CANDIDATO_FORTE: { etichetta: "Vai ai prodotti da confermare", filtro: "to-confirm" },
   CONFERMA_RICHIESTA: { etichetta: "Vai alle conferme", filtro: "to-confirm" },
@@ -2526,10 +2506,10 @@ function renderComandoDellAvviso(issue) {
   return `<button type="button" class="button button--secondary button--small alert__comando" data-action="vai-al-filtro" data-filtro="${escapeHtml(comando.filtro)}">${escapeHtml(comando.etichetta)}</button>`;
 }
 
-// `conComando` e' esplicito e parte spento: gli stessi avvisi compaiono anche
-// sulla scheda del singolo prodotto in pagina 2, dove il comando porterebbe
-// dove si e' gia' — e dove il pulsante per rispondere sta due centimetri sotto.
-// Lo accendono solo i riquadri di pagina, in `renderAvvisi`.
+// `conComando` defaults to off: the same warnings also appear on a single
+// product's own card in step 2, where the action would just navigate to
+// where the user already is, next to the actual answer button. Only the
+// page-level panels in `renderAvvisi` turn it on.
 function renderAlert(issue, { conComando = false } = {}) {
   const tone = issueTone(issue);
   const icon = tone === "danger" ? "!" : tone === "success" ? "✓" : tone === "info" ? "i" : "!";
@@ -2544,19 +2524,20 @@ function renderAlert(issue, { conComando = false } = {}) {
     </div>`;
 }
 
-// Quanti avvisi uguali servono perché valga la pena contarli invece di
-// stamparli. Due sono due righe; tre in su sono un muro.
+// How many identical warnings it takes before grouping them is worth it
+// instead of printing each one. Two are two lines; three or more become a
+// wall of text.
 const AVVISI_DA_RAGGRUPPARE = 3;
 
-// ⚠ La pagina 3 stampava 8 riquadri bloccanti e 45 avvisi, uno per uno, prima
-// del riepilogo: cinquantatré scatole da leggere per arrivare ai numeri
-// dell'ordine. Ma i titoli erano quattro — «Conferma richiesta» otto volte,
-// «Possibile prodotto CIPRESSO» trentanove — e a ripetersi era solo quello: il
-// messaggio di ciascuno è diverso e serve.
+// With dozens of warnings before the summary, printing each one individually
+// meant reading through all of them just to reach the order numbers, even
+// though most shared the same title and differed only in which product they
+// were about.
 //
-// Si raggruppa per titolo, che è quello che il servizio ha già scritto: niente
-// tabella di codici da tenere allineata, e un titolo nuovo si raggruppa da
-// solo. Non si toglie niente: i messaggi stanno tutti dentro il gruppo.
+// Grouped by title, which the service already writes: no separate table of
+// codes to keep aligned with wording, and a new title groups itself
+// automatically. Nothing is dropped: every message still appears, inside its
+// group.
 function raggruppaAvvisi(issues) {
   const perTitolo = new Map();
   for (const issue of issues) {
@@ -2582,8 +2563,8 @@ function renderGruppoDiAvvisi(gruppo, chiave) {
     </span>`;
   const comando = renderComandoDellAvviso(primo);
   const elenco = `<ul class="alert__elenco">${gruppo.voci.map((issue) => `<li>${escapeHtml(issue.message)}</li>`).join("")}</ul>${comando ? `<div class="alert__comandi">${comando}</div>` : ""}`;
-  // Un gruppo bloccante non si chiude: è il motivo per cui la compilazione non
-  // parte, e chiuderlo vorrebbe dire nascondere l'unica cosa da fare.
+  // A blocking group can't be collapsed: it's the reason compilation won't
+  // start, and hiding it would hide the one thing left to fix.
   if (primo.blocking) {
     return `<div class="alert alert--${tono} alert--gruppo" role="alert">${intestazione}${elenco}</div>`;
   }
@@ -2598,28 +2579,28 @@ function renderAvvisi(issues, chiave) {
   return raggruppaAvvisi(issues)
     .map((gruppo) => (gruppo.raggruppato
       ? renderGruppoDiAvvisi(gruppo, chiave)
-      // Due avvisi con lo stesso titolo sono due riquadri, ma il comando che
-      // porta al filtro e' lo stesso: si scrive sul primo, non su tutti.
+      // Two warnings sharing a title are two separate panels, but the
+      // filter action is the same: shown only on the first one, not both.
       : gruppo.voci.map((issue, indice) => renderAlert(issue, { conComando: indice === 0 })).join("")))
     .join("");
 }
 
-// Gli avvisi che riguardano i documenti di partenza — un listino non letto, un
-// fornitore rimasto fuori dal confronto — devono arrivare prima che l'utente
-// scelga. Fino alla Fase 9b comparivano solo nel riquadro del passo 3, cioè a
-// prodotti e fornitori già scelti: un fornitore poteva mancare per un intero
-// passo senza che niente lo dicesse.
+// Warnings about the source documents — an unread price list, a supplier
+// left out of the comparison — must surface before the user starts choosing,
+// not only in the step-3 panel after products and suppliers are already
+// picked: a supplier could otherwise be missing for a whole step with
+// nothing saying so.
 function avvisiDelConfronto() {
   return (state.review?.warnings || []).filter((issue) => !issue.productId);
 }
 
-// Gli avvisi che riassumono i PRODOTTI, non i documenti: si rispondono in
-// pagina 2, sull'elenco, ed e' li' che devono stare. Tutti gli altri parlano
-// dei file caricati e stanno in pagina 1, dove i file si cambiano.
+// Warnings about PRODUCTS, not documents: answered from the step-2 list, so
+// that's where they belong. Everything else is about uploaded files and
+// belongs on step 1, where files are managed.
 //
-// ⚠ Un codice che questo elenco non conosce finisce fra quelli dei documenti,
-// cioe' in pagina 1: e' la pagina che si vede sempre, quindi un avviso nuovo
-// non sparisce mentre nessuno se ne accorge.
+// A code this set doesn't know falls back to the document group on step 1:
+// that page is always visible, so a new warning code doesn't silently
+// disappear before anyone notices it.
 const AVVISI_DEI_PRODOTTI = new Set([
   "RIFIUTI_CON_CANDIDATO_FORTE",
   "PRODOTTI_SENZA_OFFERTA",
@@ -2627,23 +2608,22 @@ const AVVISI_DEI_PRODOTTI = new Set([
   "ORDINI_SCADUTI_SENZA_RISPOSTA",
 ]);
 
-// ⚠ Lo stesso riquadro, con lo stesso titolo «Da sapere prima di continuare»,
-// stava in cima alla pagina 1 e alla pagina 2 con dentro le stesse frasi, e in
-// pagina 3 ricompariva come «Avvisi». Daniele, 20 agosto 2026: ripetuti
-// perdono peso, chi li vede tre volte smette di leggerli.
+// Showing the identical warning panel, with the identical title, on every
+// step made repeated warnings lose weight: seeing the same thing three times
+// trains a user to stop reading it.
 //
-// Adesso ogni avviso sta dove si puo' fare qualcosa: i documenti in pagina 1,
-// i prodotti in pagina 2 — dove ora c'e' anche il comando che porta al filtro
-// giusto — e la pagina 3 li rivede tutti, perche' e' l'ultimo momento prima di
-// scrivere i listini. I titoli sono tre, diversi, e ognuno dice di che cosa
-// parla il riquadro che apre.
+// Each warning now lives where something can be done about it: documents on
+// step 1, products on step 2 — which also carries the action linking to the
+// right filter — and step 3 shows all of them again, since it's the last
+// point before the order is written. Three distinct titles, each naming
+// what its panel covers.
 //
-// Un avviso **bloccante** fa eccezione e resta su tutt'e due le pagine: ferma
-// la compilazione, e non lo si nasconde per ordine.
-// Gli avvisi del confronto che il riquadro in cima alla pagina 1 sta davvero
-// stampando adesso. È l'insieme che serve a chi deve evitare di ripeterli, e
-// non coincide con «tutti quelli del confronto»: mentre la procedura guidata è
-// aperta restano solo i bloccanti.
+// A BLOCKING warning is the exception and stays on both pages: it stops
+// compilation and must not be hidden by this grouping.
+// The comparison-level warnings the panel at the top of step 1 is actually
+// printing right now. This is the set relevant to someone trying not to
+// repeat them, and it isn't "every warning in the comparison": while the
+// guided column mapping is open, only blocking ones remain.
 function avvisiVisibiliInCima() {
   const soloBloccanti = schemaMappingRequired();
   return avvisiDelConfronto().filter(
@@ -2653,11 +2633,11 @@ function avvisiVisibiliInCima() {
 
 function renderSourceWarnings(pagina) {
   const deiProdotti = pagina === 2;
-  // ⚠ Mentre la procedura guidata è aperta la pagina ha una domanda sola — dove
-  // sono le colonne — e questi avvisi parlano del confronto PRECEDENTE, che non
-  // è quello che si sta rifacendo. Restano i bloccanti, che fermano la
-  // compilazione e non si nascondono per ordine; gli altri tornano da soli
-  // appena il ricalcolo riparte e riscrive `review_data.json`.
+  // While the guided column mapping is open, the page has one question —
+  // where are the columns — and these warnings describe the PREVIOUS
+  // comparison, not the one being rebuilt. Blocking ones stay, since they
+  // stop compilation and can't be hidden; the rest reappear on their own
+  // once the recompute finishes and rewrites `review_data.json`.
   const soloBloccanti = !deiProdotti && schemaMappingRequired();
   const warnings = avvisiDelConfronto().filter(
     (issue) => issue.blocking || (!soloBloccanti && AVVISI_DEI_PRODOTTI.has(issue.code) === deiProdotti),
@@ -2680,9 +2660,10 @@ function renderHeader() {
     modeBadgeElement.className = "badge badge--warning";
     modeBadgeElement.textContent = "Esempio";
   } else if (state.review) {
-    // ⚠ run.status vale "ready" già al primo avvio, con zero documenti caricati:
-    // il badge verde «Dati pronti» diceva quindi che era tutto pronto a chi non
-    // aveva ancora fatto niente. Verde solo quando un confronto esiste davvero.
+    // run.status is already "ready" on first launch, with zero documents
+    // uploaded: showing the green "data ready" badge then would tell a user
+    // who hasn't done anything yet that everything is set. Green only once
+    // a comparison genuinely exists.
     if (!confrontoDisponibile()) {
       modeBadgeElement.className = "badge badge--neutral";
       modeBadgeElement.textContent = "Da preparare";
@@ -2696,21 +2677,20 @@ function renderHeader() {
   }
 }
 
-// ⚠ La spunta verde diceva «fatto» e voleva dire «ci sei passato»: era
-// `state.currentStep > step.id`, cioe' un fatto di sola posizione. Bastava
-// premere «2. Scegli» — premibile appena il servizio risponde, anche con zero
-// listini caricati — perche' il passo 1 si dipingesse di verde con la spunta
-// senza che fosse stato importato niente. All'inverso, tornando dalla pagina 3
-// alla 1 i passi 2 e 3 perdevano la spunta pur avendo quantita' e fornitori
-// scelti. Per una persona non tecnica il verde con la spunta E' l'affermazione
-// che quel passo e' a posto.
+// The green checkmark must mean "this step is actually done", not merely
+// "you've been past this position" — a check based only on the current step
+// number would mark step 1 done as soon as step 2 becomes reachable, even
+// with nothing imported, and would lose the check on steps 2 and 3 when
+// navigating back to step 1 despite quantities and suppliers already being
+// set. For a non-technical user, the green check IS the claim that the step
+// is in order.
 //
-// Adesso lo stato di ogni passo lo dicono i fatti che il programma conosce
-// gia': il passo 1 e' fatto quando un confronto esiste, il passo 2 quando c'e'
-// almeno un prodotto con una quantita'. Il passo 3 non ha un «fatto» da
-// dichiarare — quello che si fa li' e' compilare, e la compilazione ha il suo
-// riquadro — quindi resta senza. Lo stesso mestiere lo fa gia' il distintivo in
-// alto, che non diventa verde finche' un confronto non esiste davvero.
+// Each step's status is instead derived from facts the app already knows:
+// step 1 is done once a comparison exists, step 2 once at least one product
+// has a quantity. Step 3 has no equivalent "done" fact to declare — what
+// happens there is compiling, and compilation has its own status panel — so
+// it stays unchecked. The header badge already does the same job, staying
+// non-green until a comparison genuinely exists.
 function passoCompletato(id) {
   if (id === 1) return confrontoDisponibile();
   if (id === 2) return orderedProducts().length > 0;
@@ -2718,14 +2698,14 @@ function passoCompletato(id) {
 }
 
 function renderStepper() {
-  // ⚠ Le Impostazioni sono una quarta pagina lunga cinque riquadri, e la barra
-  // dei passi — che sta fuori da `#app` e non viene ridisegnata da chi la apre —
-  // continuava a dichiarare attiva la pagina da cui si era entrati. Appena si
-  // scorre, l'unica cosa ferma sullo schermo diceva «Importa i dati» mentre si
-  // stava guardando l'elenco delle uguaglianze dichiarate. Chi non e' tecnico
-  // legge che si trova dove non e'. Adesso, mentre sono aperte, la barra ha una
-  // quarta voce ed e' quella marcata: i tre passi restano premibili, e premerne
-  // uno chiude le impostazioni, che e' quello che `goToStep()` fa gia'.
+  // Settings is effectively a fourth page, but the step bar lives outside
+  // `#app` and isn't redrawn by the code that opens Settings, so it kept
+  // showing whichever of the three steps was active before. Scrolling down,
+  // the one fixed element on screen would say "Import data" while the user
+  // is actually looking at declared item-equality rules — misleading for a
+  // non-technical user. While Settings is open, the bar now gets a fourth
+  // entry marked active instead; the three steps stay clickable, and
+  // clicking one closes Settings, which is what `goToStep()` already does.
   const impostazioni = Boolean(state.impostazioni.aperta);
   const voci = STEPS.map((step) => {
     const active = !impostazioni && state.currentStep === step.id;
@@ -2754,11 +2734,12 @@ function renderGlobalMessage() {
     globalMessageElement.innerHTML = "";
     return;
   }
-  // ⚠ Un salvataggio fallito lasciava l'avviso e nessun comando: `state.dirty`
-  // restava vero, nessun altro tentativo veniva pianificato, e per ritentare
-  // bisognava sapere che serviva toccare qualcos'altro. Chi chiudeva la pagina
-  // in quel momento perdeva tutto il lavoro da li' in poi. Adesso il programma
-  // riprova da solo per tre volte, e se non ce la fa lascia qui il comando.
+  // The app retries a failed save automatically up to three times, and
+  // shows this retry action only if that still fails. Without a manual
+  // retry here, `state.dirty` would stay true with no further attempt
+  // scheduled, leaving no way forward short of touching something else by
+  // chance — and closing the page at that point would lose every edit made
+  // since.
   const comando = state.dirty && !state.saving
     ? '<button type="button" class="button button--primary button--small" data-action="riprova-salvataggio">Riprova a salvare</button>'
     : "";
@@ -2785,15 +2766,15 @@ function render() {
     return;
   }
 
-  // Prima del controllo sulla revisione: le impostazioni non dipendono dai
-  // prodotti, e il momento in cui servono davvero è proprio quello in cui la
-  // fase AI non ha funzionato.
+  // Checked before the review state: Settings doesn't depend on having
+  // products loaded, and the moment it's actually needed is exactly when
+  // the AI stage has failed.
   if (state.impostazioni.aperta) {
     appElement.innerHTML = renderSettingsPage();
-    // Il campo della chiave non ha mai il valore nell'HTML. Rimetterlo come
-    // proprietà del nodo lo fa sopravvivere a un ridisegno — dopo la prova di
-    // connessione si preme "Salva" senza reincollare — senza che il valore
-    // compaia nel sorgente della pagina.
+    // The key field's value never lives in the HTML. Setting it as a DOM
+    // property instead lets it survive a redraw — so after a successful
+    // connection test, "Save" works without re-pasting the key — without
+    // the value ever appearing in the page source.
     const campoChiave = appElement.querySelector("[data-chiave-openrouter]");
     if (campoChiave) campoChiave.value = state.impostazioni.nuovaChiave;
     return;
@@ -2812,18 +2793,19 @@ function render() {
   }
 
   const renderers = [renderUploadStep, renderQuantityStep, renderCompileStep];
-  // ⚠ La finestra della colonna d'ordine si apre dalla pagina 1, non dalla 2:
-  // sta qui e non dentro un `renderX Step` perché le tre pagine hanno tre
-  // radici diverse, e una finestra montata dentro una sola sparirebbe appena
-  // si cambia passo — con lo stato ancora aperto e nessun modo di chiuderla.
+  // The order-column dialog can be opened from step 1, not only step 2: it's
+  // rendered here rather than inside a single `renderX Step`, since the
+  // three steps mount three different DOM roots, and a dialog mounted inside
+  // just one would vanish when the step changes — while still open, with no
+  // way to close it.
   appElement.innerHTML = renderers[state.currentStep - 1]() + renderColonnaOrdineDialog();
 }
 
-// `extra` è per i comandi che non fanno parte del percorso — oggi solo
-// «Impostazioni». Stavano in fondo, in fila con «Continua»: quattro comandi
-// uno accanto all'altro e nessuno che dicesse quale fosse il passo successivo.
-// La configurazione non è un passo del lavoro e sta dove si guarda una volta:
-// in testa alla pagina, accanto alla data del confronto.
+// `extra` is for actions outside the step flow — today just "Settings",
+// placed in the page header, next to the comparison date. Grouped at the
+// bottom next to "Continue" instead, it would be one of four actions in a
+// row with nothing indicating which one is the actual next step. Settings
+// isn't a step of the workflow and belongs where it's checked once.
 function pageHeading(title, description, extra = "") {
   const run = state.review.run;
   const metadata = [run.label, run.createdAt ? formatDateTime(run.createdAt) : ""].filter(Boolean).join(" · ");
@@ -2840,9 +2822,9 @@ function pageHeading(title, description, extra = "") {
     </div>`;
 }
 
-// Che cosa dire di un documento, senza dirlo due volte. ⚠ Il gestionale
-// arriva con `kind` e `supplier` uguali («Gestionale» e «Gestionale») e la
-// scheda scriveva la stessa parola due volte di fila.
+// What to show for a document, without repeating it. The management-software
+// export has `kind` and `supplier` set to the same value, and the card used
+// to print that word twice in a row.
 function etichetteDelDocumento(file) {
   const voci = [];
   for (const voce of [file.kind, file.supplier]) {
@@ -2861,20 +2843,20 @@ function renderFileCard(file) {
   const nomeDocumento = gestionale ? "elenco" : "listino";
   const confirming = file.deletable && state.uploadDeletion.confirming === uploadName;
   const deleting = state.uploadDeletion.deleting === uploadName;
-  // Durante il ricalcolo togliere un listino cambierebbe il risultato che si sta
-  // calcolando: il comando resta visibile, spento, e dice perché.
+  // Removing a price list during a recompute would change the result being
+  // computed: the action stays visible but disabled, and says why.
   const bloccato = pipelineInCorso();
-  // ⚠ Il messaggio del documento è la motivazione tecnica con cui la catena ha
-  // riconosciuto lo schema («Schema riconosciuto dal registro (larice_v1,
-  // confidenza 0.97): nessuna chiamata AI»), identica su tutti e cinque i
-  // documenti quando è andato tutto bene. Che il file sia a posto lo dice già
-  // il badge «Pronto»: la motivazione serve solo quando qualcosa non torna, ed
-  // è lì che va letta. Quello che di quel documento si vuole sapere sempre —
-  // da quale colonna arriva il prezzo — sta nella tabella qui sotto.
-  // ⚠ E nemmeno sui documenti che la procedura guidata sta chiedendo qui sotto:
-  // «Letto. Le colonne verranno riconosciute al prossimo confronto; se non le
-  // riconosce, te le chiede» dice il contrario di quello che sta succedendo —
-  // te le sta chiedendo adesso, in fondo a questa stessa pagina.
+  // The document's message is the technical reason the pipeline matched a
+  // given schema (e.g. "schema recognized from the registry (larice_v1,
+  // confidence 0.97): no AI call needed"), identical across all documents
+  // when everything went fine. That the file is fine is already shown by the
+  // "ready" badge; this message is only useful when something's off, and
+  // that's where it belongs. What matters about a document at all times —
+  // which column the price comes from — is in the table below instead.
+  // Also suppressed for documents the guided mapping below is currently
+  // asking about: showing a generic "columns will be recognized on the next
+  // comparison" message there would contradict what's actually happening —
+  // it's asking for them right now, further down this same page.
   const inMappatura = documentiDellaFermata().has(String(file.name || "").toLocaleLowerCase("it"));
   const motivo = status.tone === "success" || inMappatura ? "" : String(file.message || "");
   return `
@@ -2902,26 +2884,28 @@ function renderFileCard(file) {
 }
 
 // --------------------------------------------------------------------------
-// «Quali colonne legge» — su ogni documento, sempre
+// "Which columns it reads" — shown for every document, always
 // --------------------------------------------------------------------------
-// Finché questa tabella non c'era, l'assegnazione delle colonne si poteva
-// vedere in un caso solo: quando il programma NON riconosceva un file e apriva
-// la mappatura guidata. Sui documenti riconosciuti — cioè tutti, nella
-// settimana normale — la pagina diceva «Schema riconosciuto dal registro» e
-// nient'altro, e per sapere da quale colonna veniva il prezzo bisognava aprire
-// il listino e contare le colonne a mano.
+// Before this table existed, the column mapping was only visible in one
+// case: when the app failed to recognize a file and opened the guided
+// mapping. For recognized documents — which is most of them, most weeks —
+// the page just said "schema recognized from the registry" and nothing
+// else; finding out which column the price came from meant opening the
+// price list and counting columns by hand.
 //
-// I numeri arrivano dal servizio già risolti (`GET /api/schemas/columns`): qui
-// non si indovina niente e non si rilegge nessun file. La colonna in cui il
-// programma **scrive** l'ordine sta a parte, perché è l'unica che non legge.
+// Values come from the service already resolved (`GET /api/schemas/columns`):
+// nothing is guessed here and no file is re-read. The column the app
+// writes the order into is handled separately, since it's the only one
+// that isn't read from the source.
 function renderColonneDelDocumento(file) {
   const nome = String(file.name || "");
   const voce = state.colonneDocumenti.perNome[nome];
   const chiave = `colonne-documento:${nome}`;
   if (!voce) {
     if (state.colonneDocumenti.caricando || !state.colonneDocumenti.caricate) return "";
-    // Un documento senza risposta non si nasconde: «non lo so» è
-    // l'informazione, e tacere la farebbe sembrare una tabella dimenticata.
+    // A document with no answer isn't hidden: "I don't know" is itself the
+    // information, and staying silent would make it look like a forgotten
+    // table instead.
     const motivo = state.colonneDocumenti.motivo || state.colonneDocumenti.errore;
     if (!motivo) return "";
     return `
@@ -2969,18 +2953,17 @@ function renderColonneDelDocumento(file) {
     </details>`;
 }
 
-// Rivedere TUTTE le colonne, non solo quella d'ordine.
+// Reviews ALL columns, not only the order column.
 //
-// ⚠ Il selettore delle colonne esiste dal primo giorno, ma si apre soltanto
-// quando la catena si ferma su uno schema che il registro non conosce — e con i
-// fornitori riconosciuti non si ferma mai. «Prima avevo il selettore manuale
-// dove potevo confermare quale colonna contenesse quale dato, con anteprima,
-// mentre ora non lo vedo più» (Daniele, 15 agosto 2026). Non era sparito: non
-// c'era più nessuna porta per arrivarci.
+// The column selector has existed since day one, but only opens when the
+// pipeline stalls on a schema the registry doesn't recognize — and with a
+// recognized supplier it never stalls. The manual selector with a preview
+// was effectively unreachable once a supplier's schema was learned: it
+// hadn't disappeared, there was simply no path left to open it.
 //
-// Sta qui, e non accanto a «Elimina», perché questo è il riquadro in cui si
-// stanno già guardando le colonne: chi vede una riga sbagliata la corregge da
-// dove l'ha vista.
+// Placed here, not next to "Delete", because this is the panel where the
+// user is already looking at the columns: a wrong row gets corrected from
+// where it was spotted.
 function renderComandoRivediColonne(file) {
   const nome = String(file.name || "");
   if (!nome || mode === "demo") return "";
@@ -2991,18 +2974,18 @@ function renderComandoRivediColonne(file) {
     title="${bloccato ? "Non ora: il confronto è in corso." : "Correggi dove stanno prezzo, codice, descrizione e pezzi per collo"}">Rivedi le colonne</button>`;
 }
 
-// La colonna che il programma **scrive**, non una di quelle che legge — e il
-// modo di spostarla.
+// The column the app writes the order into, not one it reads — and the
+// way to change it.
 //
-// ⚠ Fino al 18 agosto 2026 questa riga diceva soltanto dov'è. La colonna si
-// sceglieva una volta sola, dentro la mappatura guidata, che si apre solo
-// quando il programma non riconosce le colonne di un documento: per i quattro
-// fornitori conosciuti restava quella scritta nel registro, e per spostarla
-// bisognava aprire un file JSON.
+// The guided mapping that otherwise sets this column only opens when the
+// app fails to recognize a document's columns, not for a supplier it
+// already knows. For an already-known supplier, this button is the only
+// way to change it without editing the registry's JSON file by hand.
 //
-// Il pulsante non compare quando il registro non dichiara nessuna colonna: lì
-// non c'è una colonna da spostare, c'è una configurazione di scrittura da
-// creare, e quella nasce dalla mappatura guidata insieme a tutto il resto.
+// The button is hidden when the registry declares no order column at all:
+// there's nothing to move in that case, only a write configuration still to
+// be created, and that's created by the guided mapping along with everything
+// else.
 function renderColonnaDellOrdine(file, voce) {
   if (!voce.orderColumn) return "";
   const fornitore = String(file.supplierId || "").trim();
@@ -3017,14 +3000,15 @@ function renderColonnaDellOrdine(file, voce) {
     </p>`;
 }
 
-// Dove il fornitore scrive le sue offerte — la stessa domanda delle altre
-// colonne, e per questo sta qui dentro e non in un riquadro nuovo.
+// Where the supplier writes its promotional offers — the same kind of
+// question as the other columns, hence shown here instead of in a separate
+// panel.
 //
-// ⚠ È il buco misurato su QUERCIA il 17 agosto 2026: un fornitore nuovo si legge
-// e si compila, ma le sue offerte no, e in pagina non c'era una sola riga che
-// lo dicesse. `commercialConditions: null` non è un vuoto da nascondere: è la
-// differenza fra «questo fornitore non fa offerte» e «le fa e non gliele
-// stiamo leggendo», e la seconda è una cosa da fare.
+// Covers a gap where a supplier's price list could be read and compiled
+// while its offers silently weren't, with nothing on the page saying so.
+// `commercialConditions: null` isn't a blank to hide: it's the difference
+// between "this supplier makes no offers" and "it does, and we're not
+// reading them", and the second one is something to act on.
 function renderOffertePerDocumento(file, voce) {
   if (isManagementFile(file)) return "";
   const condizioni = voce.commercialConditions;
@@ -3035,15 +3019,16 @@ function renderOffertePerDocumento(file, voce) {
   return `<p class="doc-columns__note">Le offerte del fornitore si leggono nella colonna <strong>${escapeHtml(String(colonna.lettera))}</strong>.</p>`;
 }
 
-// Il riquadro degli scarti: quante righe di ogni listino non sono entrate nel
-// confronto e perché. Sta nella pagina dove l'utente guarda i suoi documenti,
-// perché è lì che si chiede "il listino è entrato tutto?". I numeri arrivano
-// dall'audit della run: qui non se ne calcola nessuno.
-// I motivi arrivano dal servizio come etichette da programma («senza_prezzo»,
-// «DISPLAY_COMPONENT»): qui diventano italiano. Un'etichetta che non è in
-// tabella si mostra com'è — le etichette degli scarti dichiarati dal registro
-// le scrive chi configura il listino, e inventarne una traduzione le
-// nasconderebbe.
+// The discards panel: how many rows from each price list didn't make it into
+// the comparison, and why. Placed on the page where the user reviews their
+// documents, since that's where "did the whole price list come through?" is
+// actually asked. Numbers come from the run's audit trail; nothing here is
+// computed.
+// Reasons arrive from the service as machine labels (e.g. "senza_prezzo",
+// "DISPLAY_COMPONENT") and are translated here into Italian for the user. A
+// label not in this table is shown as-is: discard labels declared by the
+// supplier registry are written by whoever configures that price list, and
+// inventing a translation for them would hide the original.
 const MOTIVI_DI_SCARTO = {
   senza_descrizione: "senza descrizione",
   senza_prezzo: "senza prezzo",
@@ -3082,9 +3067,9 @@ function renderDiscardedRowsPanel() {
   if (!righe.length) return "";
   const totale = righe.reduce((sum, entry) => sum + entry.notOrderableCount + entry.excludedCount, 0);
   const doppioniTotali = righe.reduce((sum, entry) => sum + entry.duplicateEans, 0);
-  // Il badge dice quello che c'è: «0 righe» sotto un titolo sugli scarti,
-  // quando dentro ci sono solo codici ripetuti, erano tre notizie che non
-  // stavano insieme (revisione avversariale R4).
+  // The badge reports whichever count is actually nonzero: showing "0 rows"
+  // under a "discards" title when the panel only contains duplicate
+  // barcodes would say two contradictory things at once.
   const badge = totale
     ? renderBadge(`${formatInteger(totale)} ${totale === 1 ? "riga scartata" : "righe scartate"}`, "warning")
     : renderBadge(`${formatInteger(doppioniTotali)} ${doppioniTotali === 1 ? "codice ripetuto" : "codici ripetuti"}`, "neutral");
@@ -3102,9 +3087,9 @@ function renderDiscardedRowsPanel() {
             const doppioni = entry.duplicateEans
               ? `<span class="discarded-rows__duplicates">${formatInteger(entry.duplicateEans)} ${entry.duplicateEans === 1 ? "codice a barre ripetuto" : "codici a barre ripetuti"} nel listino: articoli diversi con lo stesso codice restano righe diverse.</span>`
               : "";
-            // «righe lette», non «entrate nel confronto»: le scartate stanno
-            // DENTRO quel conteggio, e i due numeri messi in fila non si
-            // sommerebbero (revisione avversariale R4).
+            // Says "rows read", not "rows included in the comparison":
+            // discarded rows are already INSIDE that count, so showing both
+            // numbers side by side would look additive when it isn't.
             return `
               <li>
                 <strong>${escapeHtml(entry.supplierName)}</strong>
@@ -3118,9 +3103,9 @@ function renderDiscardedRowsPanel() {
     </details>`;
 }
 
-// I documenti rimasti fuori, con il nome e il motivo. Ha un comando di
-// rimozione tutto suo: `remove-file` passa l'indice dentro `state.pendingFiles`,
-// e riusarlo qui toglierebbe un documento buono al posto di uno scartato.
+// Documents that were rejected, with name and reason. Has its own removal
+// action: `remove-file` passes an index into `state.pendingFiles`, and
+// reusing it here would remove a valid document instead of a rejected one.
 function renderFileScartati(role) {
   const scartati = state.fileScartati
     .map((voce, indice) => ({ ...voce, indice }))
@@ -3158,9 +3143,9 @@ function renderPendingFiles(role) {
     ${pipelineInCorso() ? '<p class="import-locked">Il confronto è in corso: i documenti si caricano appena ha finito, altrimenti cambierebbero il risultato mentre lo si sta calcolando.</p>' : ""}`;
 }
 
-// Il riquadro del ricalcolo: un pulsante, e poi le nove fasi che scorrono.
-// Non decide niente da solo — stato, fasi, numeri e avvisi arrivano tutti dal
-// servizio locale, che è l'unico che sa a che punto è la catena.
+// The recompute panel: one button, then the phases as they progress. It
+// decides nothing on its own — state, phases, numbers and warnings all come
+// from the local service, the only side that knows where the pipeline is.
 const TONO_FASE = {
   COMPLETATO: "success",
   IN_CORSO: "info",
@@ -3172,16 +3157,15 @@ function pipelineInCorso() {
   return String(state.pipeline.stato?.stato || "") === "IN_CORSO";
 }
 
-// ⚠ «IN_ATTESA» ha due significati e per un po' la pagina ne ha visto uno solo.
-// Senza `cambiamento` vuol dire che non è mai partito niente: una barra a zero
-// sarebbe rumore e non si disegna — quell'assunto resta giusto. Con
-// `cambiamento` vuol dire invece che i documenti sono cambiati DOPO l'ultimo
-// confronto: i prezzi delle pagine 2 e 3 sono vecchi, e va detto. Lo stato lo
-// tiene il servizio locale, quindi la fascia torna anche dopo un ricaricamento
-// e sparisce da sola quando il confronto è stato rifatto.
+// `IN_ATTESA` has two meanings. Without `cambiamento`, nothing has run yet: a
+// bar at zero would be noise, so nothing is drawn. With `cambiamento`, the
+// documents changed after the last comparison: the prices on pages 2 and 3
+// are stale, and that needs to be said. The local service owns this state, so
+// the banner survives a reload and disappears on its own once the comparison
+// is redone.
 //
-// Il campo può non esserci (servizio più vecchio della pagina): in quel caso si
-// fa come prima e non si mostra niente.
+// The field may be absent (service older than the page): fall back to
+// showing nothing.
 function cambiamentoDocumenti(stato = state.pipeline.stato) {
   const cambiamento = stato?.cambiamento;
   if (!cambiamento || typeof cambiamento !== "object") return null;
@@ -3191,8 +3175,8 @@ function cambiamentoDocumenti(stato = state.pipeline.stato) {
   return { tipo, documenti: nomi(cambiamento.documenti), fornitori: nomi(cambiamento.fornitori) };
 }
 
-// La data del confronto che si sta ancora guardando: è la sola cosa che rende
-// concreta la frase «i prezzi sono vecchi».
+// The date of the comparison still on screen: it's what makes "the prices
+// are stale" concrete.
 function dataUltimoConfronto() {
   return formatWeekdayDayMonth(state.review?.run?.createdAt);
 }
@@ -3203,15 +3187,15 @@ function elencoNomi(nomi) {
   return `${nomi.slice(0, -1).join(", ")} e ${nomi[nomi.length - 1]}`;
 }
 
-// Le due frasi della fascia: che cosa è cambiato, e che cosa vedi adesso.
-// Si nominano i fornitori quando ci sono — «CIPRESSO» dice più di «LISTINO
-// CIPRESSO VALIDO FINO AL 01-09-26.xlsx» — e i nomi dei file altrimenti.
+// The banner's two sentences: what changed, and what you're looking at now.
+// Suppliers are named when known — "CIPRESSO" says more than the file name —
+// and file names otherwise.
 function frasiCambiamentoDocumenti(cambiamento = cambiamentoDocumenti()) {
   if (!cambiamento) return null;
   const perNome = cambiamento.fornitori.length ? cambiamento.fornitori : cambiamento.documenti;
   const uno = perNome.length <= 1;
-  // ⚠ «Hai caricato» su una mappatura corretta a mano sarebbe una bugia: il
-  // documento è lo stesso, a cambiare è come lo si legge.
+  // "You uploaded" would be wrong for a manually-corrected column mapping:
+  // the document is the same, only how it's read has changed.
   const FRASI = {
     eliminato: { verbo: "Hai eliminato", uno: "il listino", molti: "i listini" },
     caricato: { verbo: "Hai caricato", uno: "il listino", molti: "i listini" },
@@ -3229,8 +3213,8 @@ function frasiCambiamentoDocumenti(cambiamento = cambiamentoDocumenti()) {
   return { titolo, prezzi };
 }
 
-// La fascia non impedisce niente: dice che cosa è cambiato e lascia lavorare.
-// Fuori dalla pagina 1 porta anche il comando per tornare dov'è il pulsante.
+// The banner blocks nothing: it states what changed and lets work continue.
+// Outside page 1 it also carries a link back to the recompute button.
 function renderCambiamentoDocumenti() {
   const frasi = frasiCambiamentoDocumenti();
   if (!frasi) return "";
@@ -3247,28 +3231,26 @@ function renderCambiamentoDocumenti() {
 }
 
 // --------------------------------------------------------------------------
-// Un solo pulsante primario per volta (pagina 1)
+// One primary button at a time (page 1)
 // --------------------------------------------------------------------------
-// Prima erano tre — «Carica e controlla N documenti», «Ricalcola il confronto»,
-// «Continua con N prodotti» — tutti blu e tutti attivi insieme, e nessuno
-// diceva se toccasse a lui. Adesso lo stato dei documenti sceglie il primario;
-// gli altri restano al loro posto, in secondario, e nessuno viene tolto di
-// mano all'utente se non perché è davvero impossibile in quel momento.
+// Document state picks which action is primary; the others stay visible as
+// secondary. Nothing is taken out of the user's hands except when it's truly
+// impossible at that moment.
 
 function documentiCaricati() {
   return asArray(state.review?.files).length > 0;
 }
 
-// «Esiste un confronto» vuol dire che nelle pagine 2 e 3 c'è qualcosa da
-// guardare. ⚠ run.status vale "ready" anche al primo avvio, con zero documenti:
-// non distingue «pronto» da «non ancora fatto», e per un po' il badge in alto
-// diceva «Dati pronti» a chi non aveva caricato niente.
+// "A comparison exists" means there's something to look at on pages 2 and 3.
+// `run.status` is "ready" even on first launch with zero documents, so it
+// can't distinguish "ready" from "not done yet"; checking the product count
+// avoids that false positive.
 function confrontoDisponibile() {
   return asArray(state.review?.products).length > 0;
 }
 
-// Che cosa manca per poter confrontare: la frase nomina il documento assente
-// invece di limitarsi a spegnere il pulsante.
+// What's missing before a comparison is possible: names the missing document
+// instead of just disabling the button.
 function documentiMancantiText() {
   const files = asArray(state.review?.files);
   const elenco = files.some(isManagementFile);
@@ -3279,12 +3261,11 @@ function documentiMancantiText() {
   return "Manca almeno un listino fornitore: caricalo qui sopra.";
 }
 
-// Le otto situazioni della pagina 1, dalla più specifica alla più ordinaria.
-// Il nome è quello che si legge nella tabella del piano.
+// The eight states of page 1, most specific first.
 function statoPaginaImporta() {
-  // Il ricalcolo in corso viene prima di tutto, anche di documenti scelti e non
-  // ancora inviati: quelli non si possono caricare finché la catena gira, e
-  // dire «carica» mentre il caricamento è spento sarebbe una presa in giro.
+  // A running recompute takes priority over everything, including files
+  // already picked but not uploaded: uploads are locked while the pipeline
+  // runs, so an active "upload" prompt would be a lie.
   if (pipelineInCorso()) return "RICALCOLO_IN_CORSO";
   if (state.pendingFiles.length) return "FILE_SCELTI";
   if (schemaMappingRequired()) return "COLONNE_SCONOSCIUTE";
@@ -3295,15 +3276,15 @@ function statoPaginaImporta() {
   return "PRONTI_MAI_CONFRONTATI";
 }
 
-// Il pulsante del ricalcolo. ⚠ «Ricalcola» la prima volta è una bugia: non c'è
-// niente da ri-calcolare. Il testo dipende dallo stato, non è fisso.
+// The recompute button. "Recompute" on the first run would be a lie — there's
+// nothing to recompute yet — so the label depends on state instead of being fixed.
 function comandoConfronto(situazione = statoPaginaImporta()) {
   if (state.pipeline.avviando) {
     return { etichetta: "Avvio del confronto…", tono: "secondary", disabilitato: true, nota: "" };
   }
   if (situazione === "RICALCOLO_IN_CORSO") {
-    // Nessun primario mentre la catena gira: la barra e le fasi dicono già a
-    // che punto è, e un pulsante blu spento chiederebbe di premere e basta.
+    // No primary action while the pipeline runs: the progress bar and phases
+    // already say where it is.
     return { etichetta: "Confronto in corso…", tono: "secondary", disabilitato: true, nota: "" };
   }
   if (situazione === "NIENTE_CARICATO") {
@@ -3321,14 +3302,10 @@ function comandoConfronto(situazione = statoPaginaImporta()) {
     return { etichetta: "Aggiorna il confronto", tono: "primary", disabilitato: false, nota: "" };
   }
   if (situazione === "FILE_SCELTI") {
-    // ⚠ Spento, non solo declassato.  Era premibile con una nota accanto, ed e'
-    // il tranello del lunedi': si scelgono i listini nuovi, ci si dimentica di
-    // premere «Carica», si confronta, e il confronto esce con i listini della
-    // settimana prima senza che niente sembri andato storto — i prezzi vecchi
-    // arrivano fino all'ordine.  La nota diceva la cosa giusta ed era testo
-    // piccolo accanto a un pulsante che si poteva premere.  Chi ha scelto per
-    // sbaglio non resta chiuso fuori: i documenti scelti si tolgono dall'elenco
-    // qui sopra, e il comando torna.
+    // Disabled, not just secondary: picking new files and forgetting to press
+    // "Upload" would silently run the comparison against last week's price
+    // lists. Removing the picked files from the list above re-enables the
+    // command.
     return {
       etichetta: confrontoDisponibile() ? "Rifai il confronto" : "Confronta i listini",
       tono: "secondary",
@@ -3345,16 +3322,16 @@ function comandoConfronto(situazione = statoPaginaImporta()) {
   return { etichetta: "Confronta i listini", tono: "primary", disabilitato: false, nota: "" };
 }
 
-// Il pulsante «Continua». ⚠ Non deve mai mentire: quando il confronto è più
-// vecchio dei documenti resta cliccabile — bloccare il lavoro sarebbe peggio —
-// ma dice su quale confronto sta per portarti.
-// Quanti prodotti del confronto vengono dall'elenco del gestionale.
-// ⚠ È il numero che deve tornare con quello scritto sulla scheda del
-// gestionale («451 righe»): è così che si vede, senza aprire niente, che il
-// documento caricato è quello giusto. Il totale dell'elenco è un altro numero —
-// ci sono dentro gli espositori dei listini e i prodotti aggiunti a mano — e
-// metterlo qui faceva sembrare sbagliato un documento che era giusto.
-// La scomposizione completa sta in cima alla pagina 2.
+// The "Continue" button. Must never lie: when the comparison is older than
+// the documents it stays clickable — blocking the work would be worse — but
+// says which comparison it leads to.
+
+// How many products in the comparison come from the management-software
+// export. Must match the row count shown on that document's card, so a
+// correct upload is visible without opening anything. The full product count
+// also includes price-list displays and manually added items, which would
+// make a correct document look wrong. The full breakdown is at the top of
+// page 2.
 function prodottiDelGestionale() {
   return asArray(state.review?.products).filter(
     (prodotto) => !prodotto.addedManually && prodotto.itemType !== "display",
@@ -3398,21 +3375,19 @@ function renderNumeriPipeline(numeri) {
   const voci = [];
   if (numeri.documenti) voci.push(`${formatInteger(numeri.documenti)} documenti`);
   if (numeri.fornitori) voci.push(`${formatInteger(numeri.fornitori)} fornitori`);
-  // ⚠ Due numeri, non uno: «457 prodotti» è quanto è grande il confronto,
-  // «451 dal gestionale» è quello che deve tornare con le righe scritte sulla
-  // scheda del documento. Finché c'era solo il primo, pagina 1 mostrava 451
-  // sulla scheda e 457 qui sotto senza spiegare la differenza, e sembrava che
-  // il programma avesse letto un elenco diverso da quello caricato.
+  // Two numbers, not one: the total product count is the comparison's size,
+  // the management-file count is what must match the document card's row
+  // count. Showing only the total made it look like a different list had
+  // been read than the one uploaded.
   if (numeri.prodotti) {
     const dalGestionale = Number(numeri.prodottiGestionale) || 0;
     voci.push(dalGestionale && dalGestionale !== Number(numeri.prodotti)
       ? `${formatInteger(numeri.prodotti)} prodotti, di cui ${formatInteger(dalGestionale)} dal gestionale`
       : `${formatInteger(numeri.prodotti)} prodotti`);
   }
-  // ⚠ «casi da valutare» e «decisi» stanno già, con più contesto, dentro le
-  // fasi di «Dettagli del confronto»: qui erano due numeri in più su una riga
-  // che si legge di sfuggita. «prodotti» invece resta, ed è voluto: è il
-  // numero che deve tornare con le righe scritte sulla scheda del documento.
+  // "Cases to review" and "decided" already live, with more context, inside
+  // the pipeline phases; repeating them here would just add noise to a line
+  // read at a glance.
   if (numeri.spesaUsd) voci.push(`${Number(numeri.spesaUsd).toFixed(3)} $`);
   if (!voci.length) return "";
   return `<p class="file-card__meta">${voci.map((voce) => `<span>${escapeHtml(voce)}</span>`).join("")}</p>`;
@@ -3422,7 +3397,7 @@ function schemaMappingRequired(stato = state.pipeline.stato) {
   return String(stato?.fermata?.code || "") === "SCHEMA_SCONOSCIUTO";
 }
 
-// I documenti che la fermata degli schemi sta chiedendo di configurare adesso.
+// The documents the schema-mapping stop is currently asking to configure.
 function documentiDellaFermata(stato = state.pipeline.stato) {
   if (!schemaMappingRequired(stato)) return new Set();
   return new Set(
@@ -3465,13 +3440,11 @@ function schemaColumnLetter(indice) {
   return risultato;
 }
 
-// L'id di un campo della procedura guidata, costruito con i due valori che nel
-// markup ci sono gia': quale documento e quale campo. Serve al `for` della sua
-// etichetta — senza, per un lettore di schermo quelle tendine non hanno nome, e
-// si perde anche col mouse, perché cliccare l'etichetta non porta al campo.
-// ⚠ Il prefisso «c-» non è decorazione: `profileId` può cominciare per una
-// cifra, e un id che comincia per cifra è valido in HTML5 ma rompe i selettori
-// CSS non scappati.
+// A wizard field's id, built from the document and field it belongs to. Feeds
+// the label's `for` attribute — without it, screen readers get unnamed
+// dropdowns and clicking the label doesn't focus the field. The `c-` prefix
+// isn't decoration: `profileId` can start with a digit, which is valid as an
+// HTML5 id but breaks unescaped CSS selectors.
 function idCampoSchema(profileId, campo) {
   return `c-${profileId}-${campo}`;
 }
@@ -3497,11 +3470,11 @@ function renderSchemaColumnSelect(documento, campo, etichetta, { optional = fals
     </div>`;
 }
 
-// I separatori di sezione che il profilo ha trovato in testa al documento, e
-// quello scelto dall'utente. Su QUERCIA il listino vero comincia dopo l'unico
-// `A68 = "LISTINO"`, dopo 56 righe che sono valorizzazioni di omaggi: scrivere
-// 69 in «Prima riga dei prodotti» sarebbe un numero che la settimana prossima
-// e' un altro numero, e nessuno se ne accorgerebbe.
+// The section breaks the profile found at the top of the document, and the
+// one the user picked. A fixed row number is fragile: on some suppliers the
+// product list starts after a marker cell that moves from file to file
+// (e.g. free-goods valuation rows before it), so a hardcoded row would
+// silently point at the wrong place the next week.
 function schemaSectionBreaks(foglio) {
   return (foglio.sectionBreaks || []).filter((voce) => Number(voce.row) > 0);
 }
@@ -3511,10 +3484,10 @@ function schemaSelectedBreak(foglio, valore) {
   return schemaSectionBreaks(foglio).find((voce) => Number(voce.row) === Number(valore.dataStartBreak)) || null;
 }
 
-// Scegliere un separatore detta anche il numero: la riga dei prodotti smette
-// di essere una cosa da digitare. Sta qui, e non dentro il gestore dell'evento,
-// perche' il gestore non e' raggiungibile dalle prove eseguite — e questa e'
-// esattamente la parte che si puo' sbagliare.
+// Picking a section break also derives the start row, so it stops being
+// something to type by hand. Lives here rather than in the event handler so
+// it's reachable from tests — this is exactly the part that's easy to get
+// wrong.
 function schemaApplicaSeparatore(valore, foglio) {
   const separatore = schemaSelectedBreak(foglio, valore);
   if (!separatore) {
@@ -3526,25 +3499,25 @@ function schemaApplicaSeparatore(valore, foglio) {
   return valore;
 }
 
-// Il testo del separatore senza i puntini con cui il profilo lo accorcia: e'
-// quello che si puo' cercare davvero nella cella, ed e' quello che l'utente
-// deve poter accorciare ancora.
+// The section break text without the ellipsis the profile uses to shorten it:
+// this is what can actually be searched for in the cell, and what the user
+// can shorten further.
 function schemaTestoSeparatore(separatore) {
   const testo = String(separatore.text ?? "").trim();
   return testo.endsWith("…") ? testo.slice(0, -1).trim() : testo;
 }
 
-// La regola che la pagina rimanda al servizio al posto del numero di riga.
-// `offset` si ricava dalle due righe che l'utente vede — il separatore e il
-// primo prodotto — quindi non puo' descrivere una riga diversa da quella
-// mostrata nell'anteprima.
+// The rule the page sends to the service instead of a raw row number.
+// `offset` is derived from the two rows the user sees — the break and the
+// first product — so it can't describe a row other than the one shown in the
+// preview.
 function schemaDataStartMarker(foglio, valore) {
   const separatore = schemaSelectedBreak(foglio, valore);
   if (!separatore) return undefined;
-  // ⚠ Il profilo accorcia a 80 caratteri il testo del separatore, e ci mette i
-  // puntini: sul QUERCIA vero cinque separatori su sei sono righe promozionali
-  // lunghe. Chiedere al servizio «e' uguale a» un testo mozzato lo farebbe
-  // rifiutare, perche' lui confronta con la cella intera.
+  // The profile truncates long break text to 80 characters with an ellipsis;
+  // many real section markers are long promotional lines. Asking the service
+  // for an exact match on truncated text would fail, since it compares
+  // against the full cell.
   const mozzato = String(separatore.text ?? "").trim().endsWith("…");
   const intero = schemaTestoSeparatore(separatore);
   const testo = String(valore.markerText ?? intero).trim();
@@ -3553,9 +3526,9 @@ function schemaDataStartMarker(foglio, valore) {
   if (!Number.isFinite(scarto) || scarto < 0) return undefined;
   return {
     column: Number(separatore.column),
-    // Un testo accorciato — dai puntini del profilo o dall'utente — e' un pezzo
-    // di una scritta piu' lunga, e spesso e' il pezzo stabile di una che cambia
-    // ogni settimana («PROMO DAL 30/07 AL 27/08»): li' vale «contiene».
+    // A truncated text — whether by the profile or the user — is a fragment
+    // of a longer string, often the stable part of one that changes weekly
+    // (a date range in a promo header): there, "contains" is the right match.
     match: !mozzato && testo === intero ? "equals" : "contains",
     text: testo,
     offset: scarto,
@@ -3626,13 +3599,12 @@ function renderSchemaValidation(documento) {
     </div>`;
 }
 
-// ⚠ Due notizie diverse, che la pagina diceva con la stessa frase. «Questo non
-// lo conosco» chiede di configurare un fornitore nuovo. «Questo lo conosco e il
-// suo listino è cambiato» chiede solo di ricontrollare: le tendine sono già
-// compilate con quello che il registro dichiara. Misurato il 21 agosto 2026 su
-// «3listino_Cipresso.xlsx»: riconosciuto come cipresso_v1 con confidenza 0,98,
-// tutte le colonne al loro posto, e cambiati soltanto il nome del foglio — che
-// porta la data, quindi cambia ogni settimana — e la riga delle intestazioni.
+// Two different situations, kept distinct instead of sharing one message.
+// "I don't recognize this" asks to configure a new supplier. "I recognize
+// this and its layout changed" only asks to double-check: the dropdowns are
+// already filled with what the adapter registry declares. The second case is
+// common when only the sheet name (which carries a date) or the header row
+// shifts week to week, while the columns stay in place.
 function renderPercheEQui(documento) {
   const motivo = documento.reason || {};
   if (String(motivo.state || "") === "RUOLO_SBAGLIATO") {
@@ -3641,13 +3613,12 @@ function renderPercheEQui(documento) {
       ? `Questo documento lo riconosco: è il listino di ${chi}, ed è stato caricato con il tipo sbagliato. Cambia «Tipo di documento» qui sotto.`
       : "Questo documento lo riconosco, ma è stato caricato con il tipo sbagliato. Cambia «Tipo di documento» qui sotto.")}</p>`;
   }
-  // ⚠ «Questo non lo conosco» era anche la frase di un documento a cui manca
-  // UNA intestazione su cinque, con tutte le altre al posto giusto. Il 21
-  // agosto 2026 è costato un adattatore imparato sopra quello spedito di
-  // BETULLA: il listino era stato aperto in Excel e risalvato con la cella C1
-  // svuotata, e chi ha letto «non riconosco» ha configurato un fornitore
-  // nuovo. Le parole le decide il registro, che è l'unico a sapere quale
-  // cella manca e dove stava.
+  // "I don't recognize this" was also shown for a document missing one
+  // header out of five, with all the others in place — e.g. a price list
+  // re-saved from Excel with one header cell emptied by accident, which used
+  // to get misconfigured as a brand-new supplier. The adapter registry is the
+  // only side that knows which cell is missing and where it stood, so it
+  // decides the wording here.
   if (String(motivo.state || "") === "QUASI") {
     const chi = String(motivo.supplierName || "").trim();
     const mancanti = asArray(motivo.missing)
@@ -3675,9 +3646,9 @@ function renderPercheEQui(documento) {
       )}</p>`;
     }
   }
-  // Le colonne riviste a mano su un listino che il programma riconosce: qui non
-  // c'è niente che non vada, e dirlo serve — chi apre questa schermata deve
-  // sapere che sta guardando il listino giusto prima di cambiarne le colonne.
+  // Manually reviewing the columns of a recognized price list: nothing is
+  // wrong here, and saying so matters — the user needs to know they're
+  // looking at the right document before changing its columns.
   if (String(motivo.state || "") === "NOTO") {
     const chi = String(motivo.supplierName || "").trim();
     return `<p>${escapeHtml(chi
@@ -3687,16 +3658,14 @@ function renderPercheEQui(documento) {
   if (String(motivo.state || "") !== "VARIATO") return "";
   const fornitore = String(motivo.supplierName || "").trim();
   const cambiato = asArray(motivo.changed).map((voce) => String(voce || "")).filter(Boolean);
-  // Se il programma non ha proposto nessun fornitore, le tendine sono vuote:
-  // «le colonne qui sotto sono già quelle che usavo» sarebbe falso. Succede sui
-  // fornitori che si riconoscono dalla forma delle colonne — LARICE, OFFERTE —
-  // che non hanno intestazioni da proporre.
+  // If nothing pre-filled the dropdowns, "these are already the columns I
+  // used" would be false. That happens for suppliers recognized from column
+  // shape rather than headers, which have nothing to propose.
   const compilate = Boolean(schemaDocumentValue(documento).supplierChoice);
   const chi = fornitore ? `Questo listino è di ${fornitore} e lo conosco` : "Questo listino lo conosco";
-  // ⚠ «Quello che è cambiato:» e non «è cambiato X»: le voci sono di genere e
-  // numero diversi — «la riga delle intestazioni», «il nome del foglio», «una
-  // colonna dichiarata non c'è più» — e qualunque verbo concordato ne sbaglia
-  // almeno una.
+  // "What changed:" rather than a conjugated sentence: the listed items have
+  // different grammatical gender and number in Italian, so any single verb
+  // agreement would be wrong for at least one of them.
   const cosa = cambiato.length ? cambiato.join(", ") : "qualcosa nella sua disposizione";
   const coda = compilate
     ? "Le colonne qui sotto sono già quelle che usavo: controllale e conferma."
@@ -3704,10 +3673,10 @@ function renderPercheEQui(documento) {
   return `<p>${escapeHtml(`${chi}. Quello che è cambiato: ${cosa}. ${coda}`)}</p>`;
 }
 
-// Lo scontro con un listino già caricato, detto **mentre si sceglie** e non
-// dopo la conferma. La regola è quella della catena
-// (`_piu_recente_per_ruolo`): entra il file copiato per ultimo nella cartella
-// dei caricamenti. A parità di data non si indovina: si dice che non si sa.
+// A conflict with an already-loaded price list, surfaced while choosing, not
+// after confirming. The rule matches the pipeline's own (`_piu_recente_per_ruolo`):
+// the file copied to the uploads folder most recently wins. On a tie, no
+// guess is made — the page says it can't tell.
 function schemaOccupatoDa(valore) {
   const occupati = state.schemaMapping.data?.occupied || [];
   if (valore.role === "master") return occupati.find((voce) => voce.role === "master") || null;
@@ -3767,11 +3736,9 @@ function renderSchemaDocument(documento) {
           </div>
           ${nuovo ? `<div class="field"><label for="${escapeHtml(idCampoSchema(documento.profileId, "supplierName"))}">Nome del nuovo fornitore</label><input id="${escapeHtml(idCampoSchema(documento.profileId, "supplierName"))}" class="input" value="${escapeHtml(valore.supplierName || "")}" data-schema-document="${escapeHtml(documento.profileId)}" data-schema-field="supplierName" autocomplete="off"></div>` : ""}
         ` : ""}
-        ${/* ⚠ Fuori dal ramo dei soli fornitori: `schemaOccupatoDa` ha una riga
-             dedicata al gestionale — «l'elenco del gestionale» — e
-             `ruoli_gia_occupati` la produce apposta, ma finché la chiamata
-             stava là dentro quel ramo era codice morto e il gestionale vero
-             usciva dal confronto senza una parola. */ ""}
+        ${/* Outside the supplier-only branch: `schemaOccupatoDa` also covers a
+             conflict on the management file, which `ruoli_gia_occupati` reports
+             for too. */ ""}
         ${renderSostituzione(documento, valore)}
         <div class="field">
           <label for="${escapeHtml(idCampoSchema(documento.profileId, "sheet"))}">Foglio</label>
@@ -3815,16 +3782,14 @@ function renderSchemaDocument(documento) {
     </article>`;
 }
 
-// La colonna «Disponibilità» da sola non dice niente. Chi legge il listino
-// parte da «disponibile» e guarda la cella solo se sa QUALI valori significano
-// disponibile: senza quell'elenco la colonna scelta non ha nessun effetto, e le
-// righe con NO restano ordinabili e possono vincere il confronto (6 settembre
-// 2026). L'elenco lo scrive l'utente, che il suo listino ce l'ha davanti:
-// inventarlo nel codice — «SI», «S», «X», «DISP» — sarebbe la convenzione di un
-// fornitore cablata addosso a tutti gli altri.
+// The "Availability" column alone says nothing: without a list of which
+// values mean "available", picking the column has no effect and unavailable
+// rows can still win the comparison. That list is written by the user, who
+// has the price list in front of them — hardcoding it ("SI", "S", "X",
+// "DISP"...) would wire one supplier's convention onto every other.
 //
-// Il campo compare solo con la colonna scelta, come «come sono scritte» qui
-// sotto: senza colonna non c'è niente da dichiarare.
+// The field only appears once a column is chosen: without a column there's
+// nothing to declare.
 function renderDisponibilita(documento, valore) {
   const colonna = renderSchemaColumnSelect(documento, "availability", "Disponibilità", { optional: true });
   if (!valore.columns?.availability) return colonna;
@@ -3838,19 +3803,17 @@ function renderDisponibilita(documento, valore) {
     </div>`;
 }
 
-// Le condizioni commerciali sono una colonna come le altre — «dove scrive le
-// sue offerte» — e per questo stanno dentro «Altre colonne» e non in un
-// riquadro nuovo: è lo stesso gesto delle righe qui sopra.
+// Commercial conditions are a column like any other — "where it writes its
+// offers" — so they live under "Other columns" rather than a new panel: same
+// gesture as the fields above it. This lets a new supplier be fully
+// configured from this page, promotions included, instead of leaving them to
+// be set by hand in the adapter registry.
 //
-// ⚠ Il buco misurato su QUERCIA il 17 agosto 2026: un fornitore nuovo si legge e
-// si compila dalla pagina, ma le sue offerte no, perché `commercial_conditions`
-// si scriveva a mano nel registro e ce l'aveva solo LARICE.
-//
-// Le altre due domande compaiono solo quando servono davvero. La forma si
-// chiede dopo che la colonna c'è (senza colonna non c'è niente da leggere), e
-// le due colonne in fondo solo per «un blocco di righe», che è l'unica forma
-// che le pretende — il servizio rifiuta la dichiarazione senza, e chiederle
-// sempre vorrebbe dire mostrarne quattro dove ne basta una.
+// The extra two questions only appear when actually needed: the layout is
+// asked once the column exists, and the two trailing columns only for the
+// "block of rows" layout, the only one that requires them — the service
+// rejects the declaration without them, and asking always would show four
+// fields where one suffices.
 const FORME_DELLE_OFFERTE = [
   ["", "Ogni riga porta la sua offerta"],
   ["blocchi", "Un blocco di righe per ogni offerta"],
@@ -3874,9 +3837,9 @@ function renderCondizioniCommerciali(documento, valore) {
     ` : ""}`;
 }
 
-// Il titolo dice quale delle due cose sta succedendo, e quando succedono
-// tutt'e due le dice tutt'e due. «Non riconosco le colonne di 2 documenti» su un
-// file nuovo più il listino di CIPRESSO era falso per metà.
+// The title says which of the two situations is happening, and both when
+// both apply — a generic "unrecognized columns" count would be half wrong
+// when some documents are new and others just changed.
 function titoloDellaMappatura(nuovi, cambiati) {
   const nome = (elenco) => `«${String(elenco[0].fileName || "")}»`;
   if (!cambiati.length) {
@@ -3892,9 +3855,9 @@ function titoloDellaMappatura(nuovi, cambiati) {
   return `${contati(nuovi.length, "listino nuovo", "listini nuovi")} e ${contati(cambiati.length, "listino cambiato", "listini cambiati")}: dimmi dove sono le colonne`;
 }
 
-// Lo stesso selettore, aperto dalla scheda di un listino invece che da una
-// catena ferma. Cambiano il titolo — qui non c'è niente che non si riconosca —
-// e i comandi: si salva e basta, il confronto lo rifà l'utente quando vuole.
+// The same column picker, opened from a document card instead of a stopped
+// pipeline. Title and actions differ: nothing here is unrecognized, so it
+// just saves, and the user reruns the comparison whenever they choose.
 function renderColonneDocumento() {
   const mappatura = state.schemaMapping;
   const nome = String(mappatura.documento || "");
@@ -3921,9 +3884,8 @@ function renderColonneDocumento() {
         <button class="button button--danger-soft" type="button" data-action="esci-dalle-colonne">Esci senza salvare</button>
         <button class="button button--ghost" type="button" data-action="resta-nelle-colonne">Resta qui</button>
       </div>` : ""}
-    ${/* Niente intestazione qui: il nome del file è già nel titolo della
-         pagina e in cima alla scheda del documento, e lo stato («da
-         controllare» / «controllato») lo dichiara la scheda stessa. */ ""}
+    ${/* No heading here: the file name is already in the page title and at
+         the top of the document card, and the card itself states its status. */ ""}
     <section class="schema-mapping" aria-label="Colonne del documento">
       ${corpo}
       ${pronto ? `
@@ -3939,12 +3901,8 @@ function renderColonneDocumento() {
 function renderSchemaMappingWizard() {
   const mappatura = state.schemaMapping;
   if (mappatura.loading) return '<div class="loading-card loading-card--small"><span class="spinner" aria-hidden="true"></span><strong>Preparo l’anteprima dei file…</strong></div>';
-  // ⚠ L'errore NON porta più via il modulo. Fino al 21 agosto 2026 un «Prova le
-  // colonne» non superato faceva sparire tutte le tendine e lasciava un
-  // riquadro rosso: i valori restavano in memoria, ma non c'era più nessun campo
-  // da cambiare che potesse azzerare l'errore. L'unica uscita era ricaricare la
-  // pagina e ricominciare da capo. Adesso l'errore sta accanto al pulsante che
-  // l'ha prodotto, e il lavoro resta dov'è.
+  // A failed "Prova le colonne" keeps the wizard on screen, error and retry
+  // button next to the fields, instead of forcing a reload to start over.
   const documenti = mappatura.data?.documents || [];
   if (!documenti.length) {
     return renderAlert({
@@ -3981,16 +3939,15 @@ function renderSchemaMappingWizard() {
     </section>`;
 }
 
-// «in corso da 2 minuti», detto in italiano e senza secondi: chi guarda una
-// barra ferma vuole sapere se e' un'attesa normale, non cronometrarla. Sotto il
-// minuto non si dice niente: a quel punto la barra si muove ancora da sola.
+// "Running for N minutes", rounded to the minute: whoever watches a stalled
+// bar wants to know if the wait is normal, not to time it precisely.
 function daQuantoGira(iniziatoIl) {
   const inizio = Date.parse(String(iniziatoIl || ""));
   if (!Number.isFinite(inizio)) return "";
   const minuti = Math.floor((Date.now() - inizio) / 60000);
-  // Sotto il minuto non si dice niente: fin lì la barra si muove ancora da
-  // sola. Sopra non c'è nessun tetto, ed è voluto: «in corso da 47 minuti» è
-  // esattamente la frase che serve quando qualcosa non va.
+  // No message under a minute — the bar still moves on its own by then.
+  // No upper cap either: "running for 47 minutes" is exactly what's needed
+  // when something is actually stuck.
   if (minuti < 1) return "";
   return `In corso da ${contati(minuti, "minuto", "minuti")}.`;
 }
@@ -3998,51 +3955,46 @@ function daQuantoGira(iniziatoIl) {
 function renderAvanzamentoPipeline() {
   const stato = state.pipeline.stato;
   if (!stato || !state.pipeline.chiesto) return "";
-  // ⚠ La barra è per un ricalcolo che esiste. IN_ATTESA non ne ha uno — né
-  // quando non è mai partito niente, né quando i documenti sono cambiati dopo
-  // l'ultimo confronto — e una barra a zero con nove fasi «in attesa» sarebbe
-  // rumore. Quello che c'è da dire in quel caso lo dice la fascia di
-  // renderCambiamentoDocumenti(), che non dipende da `chiesto`.
+  // The progress bar is for a recompute that exists. `IN_ATTESA` has none —
+  // neither when nothing has run yet, nor when documents changed since the
+  // last comparison — and a bar at zero with every phase "pending" would be
+  // noise. `renderCambiamentoDocumenti()` covers that case instead.
   if (String(stato.stato || "") === "IN_ATTESA") return "";
   const fasi = Array.isArray(stato.fasi) ? stato.fasi : [];
   const percento = Number(stato.avanzamento?.percento || 0);
   const fermata = stato.fermata;
   const richiedeMappatura = schemaMappingRequired(stato);
   const numeri = renderNumeriPipeline(stato.numeri || {});
-  // ⚠ «Confronto aggiornato: 457 prodotti, 4 fornitori.» è l'avviso che dice
-  // che il programma ha funzionato, e i suoi numeri sono già nella riga qui
-  // sotto. Quando la catena è finita bene e i numeri ci sono, il messaggio non
-  // si scrive. Resta dov'è utile: mentre gira, quando si è fermata, e quando i
-  // numeri mancano — lì è l'unica cosa che dice come è andata.
+  // The "comparison updated" message duplicates the numbers already shown in
+  // the row below it, so it's suppressed once the pipeline finished
+  // successfully with numbers to show. It stays where it's useful: while
+  // running, when stopped, and when the numbers are missing — there it's the
+  // only thing that says how it went.
   const messaggio = String(stato.messaggio || "");
   const diciIlMessaggio = Boolean(messaggio) && !richiedeMappatura
     && !(String(stato.stato || "") === "COMPLETATO" && numeri && !fermata);
-  // Gli avvisi della catena arrivano anche dentro il confronto, e il riquadro
-  // in cima alla pagina li mostra già: stampati anche qui erano lo stesso
-  // avviso due volte nella stessa schermata (15 agosto 2026).
-  // ⚠ …ma solo quelli che quel riquadro sta DAVVERO stampando. Mentre la
-  // mappatura guidata è aperta `renderSourceWarnings` tiene su solo i
-  // bloccanti, e togliere di qui anche gli altri li faceva sparire da tutte e
-  // due le parti: il riquadro in cima non li mostrava più, e questo li toglieva
-  // perché «li mostra già il riquadro in cima».
+  // Pipeline warnings also surface inside the comparison, and the panel at
+  // the top of the page already shows them — printing them again here would
+  // duplicate the same warning. Only warnings that panel is actually
+  // rendering are deduplicated: while the mapping wizard is open,
+  // `renderSourceWarnings` only shows blocking ones, so filtering out the
+  // rest here too would make them vanish from both places at once.
   const gia = new Set(avvisiVisibiliInCima().map((avviso) => avviso.code).filter(Boolean));
   const avvisi = asArray(stato.avvisi)
     .map((avviso) => normalizeIssue(avviso, `pipeline-${avviso?.code || ""}`))
     .filter((avviso) => !avviso.code || !gia.has(avviso.code));
-  // ⚠ A ricalcolo finito la barra resta piena da un capo all'altro, e una
-  // barra piena è l'avviso «ha funzionato» disegnato invece che scritto. Serve
-  // mentre la catena gira, e quando si è fermata — lì dice a che punto era.
+  // Once done, a full bar just draws "it worked" instead of stating it, so
+  // it's hidden. It's needed while the pipeline runs, and when it has
+  // stopped — there it says how far it got.
   const barra = String(stato.stato || "") === "COMPLETATO" && !fermata
     ? ""
     : `<div class="pipeline-progress__bar"><div class="pipeline-progress__fill" style="width: ${percento}%"></div></div>`;
-  // Da quanto sta girando. La sesta fase costa due minuti per dichiarazione del
-  // codice stesso: la barra ci arriva al 55,6 % e poi resta immobile per il
-  // tempo più lungo dell'intero ricalcolo. Una barra ferma senza una parola si
-  // legge come «si è piantato», e la reazione naturale è chiudere il programma
-  // proprio mentre la catena lavora.
-  // ⚠ Il tempo si conta dal timbro del servizio, `iniziatoIl`, non da un
-  // `Date.now()` fissato in pagina: altrimenti un ricaricamento del browser a
-  // metà ricalcolo farebbe ripartire il contatore da zero e direbbe il falso.
+  // Elapsed running time. One phase is by far the longest in the pipeline and
+  // holds the bar at a fixed percentage for most of that time; a stalled bar
+  // with no message reads as "it's stuck", inviting the user to close the app
+  // mid-run. The elapsed time is computed from the service's own timestamp
+  // (`iniziatoIl`), not a `Date.now()` fixed on page load — otherwise a
+  // browser reload mid-run would reset the counter to zero.
   const daQuanto = String(stato.stato || "") === "IN_CORSO" ? daQuantoGira(stato.iniziatoIl) : "";
   return `
     <div class="pipeline-progress">
@@ -4070,26 +4022,20 @@ function renderAvanzamentoPipeline() {
             </li>`).join("")}
         </ol>
       </details>
-      ${/* ⚠ Qui c'era un renderAlert «Un listino ha colonne che non conosco /
-           Indicamele qui sotto e riparto»: il doppione esatto del titolo della
-           procedura guidata, che sta due centimetri sotto e adesso dice anche
-           QUALE dei due casi è. Due scatole per la stessa notizia. */ ""}
+      ${/* No separate alert here: it would duplicate the wizard's own title
+           just below, which already states which of the two cases applies. */ ""}
       ${!richiedeMappatura && fermata ? renderAlert({
         title: "Il confronto si è fermato",
-        // La frase «se qualcosa non torna, il confronto di prima resta al suo
-        // posto» stava sotto il pulsante, sempre, anche quando non era
-        // successo niente. Serve qui: è il momento in cui uno si chiede se ha
-        // perso il lavoro.
+        // "The previous comparison is still there" is said here, at the
+        // moment the user wonders if the run's work is lost, rather than
+        // permanently under the button.
         message: `${String(fermata.message || "")}${confrontoDisponibile() ? " Il confronto di prima è ancora al suo posto." : ""}`,
         severity: "error",
         blocking: true,
       }) : ""}
-      ${/* ⚠ Gli avvisi della catena venivano stampati uno per uno, e stavano in
-           fondo, fra l'ultima tendina e «Continua». Dieci avvisi con lo stesso
-           titolo diventavano dieci riquadri se arrivavano di qui e un gruppo
-           solo se arrivavano dal confronto: sono le stesse dieci frasi.
-           `renderAvvisi` è il raggruppamento che il resto del programma usa da
-           sempre. */ ""}
+      ${/* `renderAvvisi` groups warnings that share a title into one panel,
+           the same grouping used everywhere else in the app — printing them
+           one by one here would turn ten identical warnings into ten boxes. */ ""}
       ${renderAvvisi(avvisi, "catena")}
       ${richiedeMappatura ? renderSchemaMappingWizard() : ""}
     </div>`;
@@ -4100,20 +4046,18 @@ function renderPipelinePanel() {
   const inCorso = situazione === "RICALCOLO_IN_CORSO";
   const richiedeMappatura = schemaMappingRequired();
   const comando = comandoConfronto(situazione);
-  // ⚠ Il titolo era «Rifai il confronto», cioè la stessa frase del pulsante
-  // qui sotto: sembravano due comandi. Il titolo dice di che cosa parla il
-  // riquadro, il pulsante dice che cosa fa.
+  // The panel title states what the panel is about; the button states what
+  // it does — using the same wording for both read as two separate commands.
   //
-  // La spiegazione serve a chi non ha ancora un confronto: dice che cosa
-  // succede premendo e quanto dura. A confronto fatto la stessa frase è la
-  // didascalia di un pulsante che si preme ogni settimana, e la promessa «gli
-  // originali non si toccano» è già scritta sotto il titolo della pagina.
+  // The explanation is only shown before a first comparison exists: what
+  // pressing the button does and how long it takes. Once a comparison
+  // exists, the same sentence would just be a caption on a button pressed
+  // weekly, and the "originals are untouched" promise is already stated
+  // under the page title.
   const spiegazione = confrontoDisponibile()
     ? ""
     : "Legge i documenti caricati, li confronta e prepara le offerte: ci vogliono alcuni minuti. Nessun ordine viene inviato.";
-  // Il comando sta nell'intestazione del riquadro, dove sta l'azione di quel
-  // riquadro: da solo in fondo lasciava in mezzo una fascia vuota, e sembrava
-  // il pulsante della pagina invece che del ricalcolo.
+  // The action button sits in the panel header, next to what it acts on.
   return `
     <section class="panel import-panel pipeline-panel">
       <div class="panel__header">
@@ -4134,19 +4078,17 @@ function renderPipelinePanel() {
     </section>`;
 }
 
-// «Inizia nuova comparazione» — chiesto da Daniele il 22 agosto 2026.
-// Il giro di ogni lunedì era togliere l'elenco del gestionale e poi i listini
-// uno per uno; con cinque fornitori sono sei cancellazioni prima di poter
-// caricare i nuovi. E chi saltava il giro non se ne accorgeva subito: due
-// listini dello stesso fornitore ne fanno entrare in confronto **uno solo**,
-// scelto sulla data di modifica del file.
+// "Start a new comparison": clears the management file and every price list
+// in one action, instead of the operator removing each of them by hand before
+// uploading the new ones. Skipping that reset isn't obvious either — two
+// price lists from the same supplier only let one into the comparison,
+// picked by file modification date, so a leftover old file can silently win.
 //
-// Sta in alto, accanto a «Impostazioni», e non fra i comandi di caricamento:
-// non è un modo di caricare un documento, è il gesto con cui si apre la
-// settimana.
+// Placed near "Settings", not among the upload commands: it isn't a way to
+// upload a document, it's the gesture that starts a new week's run.
 function renderComandoNuovaComparazione(bloccato) {
-  // Niente da svuotare: nessun documento e nessun confronto. Un comando che
-  // non farebbe niente si spegne invece di rispondere «fatto» al vuoto.
+  // Nothing to clear: no documents and no comparison. A command that would
+  // do nothing is disabled rather than reporting "done" on an empty state.
   const c_e_qualcosa = state.review.files.length > 0 || state.review.products.length > 0;
   const spento = bloccato || !c_e_qualcosa || state.nuovaComparazione.inCorso || state.nuovaComparazione.chiedendo;
   return `<button class="button button--ghost button--small" type="button" data-action="nuova-comparazione" ${spento ? "disabled" : ""}>${
@@ -4154,21 +4096,19 @@ function renderComandoNuovaComparazione(bloccato) {
   }</button>`;
 }
 
-// La conferma è **una riga**, non una finestra: quello che sparisce sono copie
-// — i documenti in ingresso sono di sola lettura e il programma se ne fa una
-// sua (regola 1) — quindi il gesto non merita il peso di una domanda a tutto
-// schermo. Ma le due cose che la riga dice servono tutte e due: la prima
-// perché il comando cancella davvero qualcosa, la seconda perché la paura di
-// chi legge non è quello che il comando toglie, è quello che **non sa** se
-// toglie. Conferme e ordini in attesa restano, e va detto qui.
+// The confirmation is one line, not a modal: uploaded documents are never
+// modified in place, so what disappears is only the app's own working copies,
+// and the gesture doesn't need a full-screen dialog. Both parts of the line
+// matter though: the count, because the command does delete something real,
+// and the reassurance, because the real worry isn't what gets removed but
+// what the user doesn't know is safe. Confirmations and pending orders
+// survive, and that has to be said here.
 function renderConfermaNuovaComparazione() {
   if (!state.nuovaComparazione.chiedendo) return "";
-  // ⚠ Non si filtra per `role`: `normalizeReview` non lo copia — la pagina
-  // riconosce l'elenco del gestionale dalle parole di `kind`/`supplier`
-  // (`isManagementFile`), non da un ruolo. Filtrando per ruolo il conto usciva
-  // **zero** con quattro documenti in pagina. `files` è già esattamente
-  // l'elenco delle schede che si vedono qui sopra, ed è quello il numero che
-  // chi legge può verificare a occhio.
+  // Not filtered by `role`: `normalizeReview` doesn't copy it — the page
+  // recognizes the management file by `kind`/`supplier` (`isManagementFile`),
+  // not by a role field. `files` is already exactly the list of cards shown
+  // above, so this count matches what the user can verify by eye.
   const documenti = state.review.files.length;
   const quanti = documenti
     ? `e tolgo ${escapeHtml(contati(documenti, "documento caricato", "documenti caricati"))}`
@@ -4184,17 +4124,17 @@ function renderConfermaNuovaComparazione() {
 }
 
 function renderUploadStep() {
-  // Rivedere le colonne di un listino è un lavoro a sé: prende la pagina, e si
-  // esce da dove si è entrati. Mescolarlo all'elenco dei documenti vorrebbe
-  // dire una tabella di anteprima in mezzo alle schede dei file.
+  // Reviewing a price list's columns is its own task: it takes over the
+  // page, and exits back where it was entered from, instead of mixing a
+  // preview table into the document list.
   if (colonneAperteAMano()) return renderColonneDocumento();
   const blockingFiles = state.review.files.filter((file) => fileStatus(file).tone === "danger").length;
   const managementFiles = state.review.files.filter(isManagementFile);
   const supplierFiles = state.review.files.filter((file) => !isManagementFile(file));
   const situazione = statoPaginaImporta();
   const continua = comandoContinua(situazione);
-  // Durante il ricalcolo i comandi di caricamento non restano attivi come se
-  // niente fosse: cambierebbero i documenti sotto il confronto che sta girando.
+  // Upload commands are locked during a running recompute: changing the
+  // documents underneath it would invalidate the comparison in progress.
   const bloccato = situazione === "RICALCOLO_IN_CORSO";
   return `
     ${pageHeading(
@@ -4203,12 +4143,12 @@ function renderUploadStep() {
       `${renderComandoNuovaComparazione(bloccato)}<button class="button button--ghost button--small" type="button" data-action="apri-impostazioni">Impostazioni</button>`,
     )}
     ${renderConfermaNuovaComparazione()}
-    ${/* La domanda sugli ordini della settimana scorsa sta anche qui, e non
-         solo in pagina 2: il momento in cui ci si chiede «è arrivata?» è
-         quello in cui si comincia la comparazione nuova. La condizione è che
-         non ci sia un confronto da guardare — subito dopo il comando, o al
-         primo avvio — perché a confronto pieno la pagina 1 è quella dei
-         documenti e la domanda resta dov'era. */ ""}
+    ${/* The pending-orders question also appears here, not only on page 2:
+         "did it arrive?" is exactly the question that comes up when starting
+         a new comparison. Shown only when there's no comparison to look at
+         yet — right after the reset, or on first launch — since once a
+         comparison exists, page 1 is about documents and the question stays
+         where it was. */ ""}
     ${state.review.products.length ? "" : renderPendingOrdersPanel()}
     ${renderCambiamentoDocumenti()}
     ${state.uploadMessage ? renderAlert({ title: "Documenti caricati", message: state.uploadMessage, severity: "info", blocking: false }) : ""}
@@ -4280,47 +4220,42 @@ function orderUnitSingular(label) {
   return known[normalized] || String(label || "unità");
 }
 
-// L'ordine alfabetico è quello italiano, con i numeri contati come numeri:
-// "NEVAL 10ML" prima di "NEVAL 100ML". `sensitivity: "base"` mette accenti e
-// maiuscole dove uno se li aspetta invece che in fondo all'elenco.
+// Italian alphabetical order, with digit runs compared numerically: "NEVAL
+// 10ML" before "NEVAL 100ML". `sensitivity: "base"` treats accented and
+// uppercase letters like their plain lowercase form instead of sorting them
+// after everything else.
 const CONFRONTO_ALFABETICO = { sensitivity: "base", numeric: true };
 
 function sortedProducts(products) {
   const verso = state.filters.sort === "nome-desc" ? -1 : 1;
   if (state.filters.sort !== "nome" && state.filters.sort !== "nome-desc") return products;
-  // Copia: `sort` ordina sul posto, e questa lista è la stessa di `state.review`.
+  // Copy first: `sort` mutates in place, and this array is the same one held in `state.review`.
   return products.slice().sort((a, b) => {
     const nome = String(a.name || "").localeCompare(String(b.name || ""), "it", CONFRONTO_ALFABETICO);
-    // A parità di nome decide il codice a barre: due righe con lo stesso nome
-    // sono due articoli diversi, e l'ordine non deve ballare da un ridisegno
-    // all'altro.
+    // Barcode breaks ties on name: two rows with the same name are two
+    // different items, and the order must stay stable across re-renders.
     if (nome !== 0) return nome * verso;
     return String(a.ean || "").localeCompare(String(b.ean || ""), "it", CONFRONTO_ALFABETICO) * verso;
   });
 }
 
-// Le voci di «Mostra», ognuna con la domanda che fa. Un posto solo: lo stesso
-// predicato conta le righe nell'etichetta e le filtra nell'elenco, e due
-// definizioni della stessa voce si sarebbero separate al primo ritocco.
+// The "Show" filter entries, each with the question it answers. One place
+// only: the same predicate both counts rows in the label and filters the
+// list, so the two never drift apart.
 //
-// ⚠ Erano sette e si sovrapponevano. «Da verificare» prendeva qualunque avviso
-// — quindi anche i 32 prodotti che nessuno ha, che stavano già in «Senza
-// offerta» — e «Senza quantità» era il complemento di «Da ordinare», cioè lo
-// stesso elenco letto al contrario. Restano le quattro domande che si fanno
-// davvero davanti a cinquecento righe: che cosa ordino, che cosa devo
-// confermare, che cosa nessuno ha, che cosa ho messo da parte.
+// Kept to the four questions actually asked in front of five hundred rows:
+// what to order, what needs confirming, what nobody has, what was set aside.
 const FILTRI_PRODOTTO = {
   all: { etichetta: "Tutti i prodotti", tieni: () => true, sempre: true },
   ordered: { etichetta: "Da ordinare", tieni: (product) => orderQuantity(product) > 0, sempre: true },
   "to-confirm": { etichetta: "Da confermare", tieni: (product) => orderQuantity(product) > 0 && daConfermare(product) },
-  // ⚠ «Nessuno ce l’ha» diceva il falso su una parte dei suoi prodotti.
-  // `nessunaOffertaUtilizzabile` risponde alla domanda giusta — «si può
-  // ordinare?» — e per quella i rifiutati contano: se hai detto «non è lo
-  // stesso articolo» a tutti i fornitori, non c’è più niente da scegliere.
-  // Ma il NOME di quell’elenco è un’altra cosa, e su quei prodotti i listini
-  // la riga ce l’avevano: a toglierla sei stato tu. Restano due elenchi
-  // disgiunti, perché la mossa da fare è diversa: uno si cerca altrove, per
-  // l’altro può bastare rivedere una risposta.
+  // "Nobody has it" would be wrong for part of its own products.
+  // `nessunaOffertaUtilizzabile` answers the real question — "can this be
+  // ordered?" — where rejected offers count too: saying no to every supplier
+  // leaves nothing to choose from either. But the products' price-list rows
+  // did exist; the user removed them. These stay as two separate filters,
+  // because the fix differs: one is sourced elsewhere, the other just needs
+  // an answer revisited.
   missing: {
     etichetta: "Nessuno ce l’ha",
     tieni: (product) => orderQuantity(product) > 0
@@ -4333,25 +4268,25 @@ const FILTRI_PRODOTTO = {
   },
   excluded: { etichetta: "Esclusi", tieni: isExcluded },
   pending: { etichetta: "Già ordinati", tieni: (product) => pendingOrdersFor(product).length > 0 },
-  // ⚠ Gli espositori NON hanno una voce qui: ce l'hanno già in «Tipo di
-  // prodotto», e due strade per lo stesso elenco sono la sovrapposizione che
-  // questo filtro è appena stato rifatto per togliere. Gli aggiunti a mano
-  // invece non si trovavano da nessuna parte.
+  // Displays have no entry here: they're already covered by "Product type",
+  // and two paths to the same list is the overlap this filter set was
+  // trimmed to avoid. Manually added items had no way to find them, so they
+  // get one.
   manual: { etichetta: "Aggiunti a mano", tieni: (product) => Boolean(product.addedManually) },
 };
 
-// Gli esclusi si vedono soltanto nel loro filtro: sono i prodotti che si è
-// deciso di non ordinare, e comparire in mezzo agli altri li rimetterebbe in
-// mezzo alle decisioni da prendere.
+// Excluded products only show up under their own filter: they're products
+// the user chose not to order, and mixing them back into the others would
+// put them back among the decisions to make.
 function passaIlFiltro(product, stato) {
   const voce = FILTRI_PRODOTTO[stato] || FILTRI_PRODOTTO.all;
   if (stato !== "excluded" && isExcluded(product)) return false;
   return voce.tieni(product);
 }
 
-// Quanti prodotti mostrerebbe ogni voce. Si contano su tutto l'elenco, non su
-// quello già filtrato da ricerca e tipo: un numero che balla mentre si scrive
-// nella casella di ricerca non dice più quanto lavoro resta.
+// How many products each filter entry would show. Counted over the full
+// list, not the one already narrowed by search and type: a count that shifts
+// while typing in the search box would stop telling how much work is left.
 function conteggiDelFiltro() {
   const conteggi = {};
   for (const stato of Object.keys(FILTRI_PRODOTTO)) conteggi[stato] = 0;
@@ -4380,9 +4315,8 @@ function filteredProducts() {
 
 const NOMI_DEI_TIPI = { product: "Prodotti singoli", display: "Espositori", kit: "Kit" };
 
-// Il tipo di prodotto si sceglie soltanto se ce n'è più d'uno da scegliere: sul
-// confronto di oggi i «Kit» sono zero e quella voce era una riga da leggere e
-// scartare. Con un tipo solo il campo non si disegna affatto.
+// The product-type field only appears when there's more than one type to
+// choose from; with a single type, it's a control with nothing to decide.
 function renderTypeFilter() {
   const presenti = [...new Set((state.review?.products || []).map((product) => String(product.itemType || "product")))];
   if (presenti.length < 2 && state.filters.type === "all") return "";
@@ -4398,12 +4332,12 @@ function renderTypeFilter() {
       </div>`;
 }
 
-// ⚠ Una voce che non mostrerebbe niente non si disegna: «Esclusi» ha senso
-// quando qualcosa è escluso, «Già ordinati» quando c'è un ordine in sospeso, e
-// prima di allora sono due righe che si leggono per scoprire che sono vuote.
-// «Tutti i prodotti» e «Da ordinare» restano sempre — sono i due modi di
-// guardare l'elenco intero — e la voce scelta resta in ogni caso, anche a zero:
-// un menù che perde la voce selezionata mentirebbe su che cosa si sta guardando.
+// An entry that would show nothing isn't drawn: "Excluded" only makes sense
+// once something is excluded, "Already ordered" once an order is pending.
+// "All products" and "To order" always stay — they're the two ways of
+// viewing the whole list — and the currently selected entry always stays too,
+// even at zero: a menu that drops the selected filter would misstate what's
+// being shown.
 function renderStatusFilter() {
   const conteggi = conteggiDelFiltro();
   const voci = Object.entries(FILTRI_PRODOTTO)
@@ -4437,11 +4371,10 @@ function renderToolbar() {
       </div>
       ${hasManagementQuantities ? `
       <div class="toolbar__reset">
-        ${/* ⚠ «Azzera le quantità predefinite» non diceva che cosa tocca. Il
-             codice azzera SOLO i prodotti con `quantitySource === "gestionale"`,
-             cioè quelli mai toccati a mano: chi modifica una quantità la fa
-             diventare «utente». Ma chi legge ha davanti un pulsante che, per
-             quanto ne sa, gli cancella il lavoro di mezz'ora. */ ""}
+        ${/* This only clears products with `quantitySource === "gestionale"`
+             — quantities never touched by hand, since editing one marks it
+             "user" — but the button alone doesn't say that, so the label
+             below spells out what stays untouched. */ ""}
         <button type="button" class="button button--ghost" data-action="reset-suggested-quantities">Azzera le quantità proposte dal gestionale</button>
         <span class="toolbar__reset-nota">Le quantità che hai scritto tu restano.</span>
       </div>` : ""}
@@ -4468,11 +4401,11 @@ function renderComponents(product) {
     </details>`;
 }
 
-// Che cosa manca alla riga proposta perché la si possa accettare. Le due
-// condizioni sono quelle del servizio locale (`available` in
-// `build_review_data.offer_from_match`): un prezzo maggiore di zero e il numero
-// di pezzi in un collo. Si dice quale delle due manca, perché sono due difetti
-// diversi del listino e si correggono in due modi diversi.
+// What's missing from a proposed row before it can be accepted. Matches the
+// two conditions the local service checks for `available` (in
+// `build_review_data.offer_from_match`): a price above zero and a
+// pieces-per-carton figure. Naming which one is missing matters — they're two
+// different defects in the price list and are fixed in two different ways.
 function percheNonSiPuoAccettare(candidate, issue) {
   const fornitore = candidate.supplierName || supplierName(issue.supplierId) || "il fornitore";
   const manca = [
@@ -4484,8 +4417,8 @@ function percheNonSiPuoAccettare(candidate, issue) {
 }
 
 function renderProductIssues(product) {
-  // La conferma ha già il suo controllo subito sotto le offerte: ripeterla
-  // anche come errore rosso qui sopra aggiunge testo senza aggiungere un'azione.
+  // The confirmation question already has its own control right under the
+  // offers; repeating it as a red error above adds text without adding an action.
   const issues = issuesForProduct(product).filter((issue) => issue.id !== `${product.id}-confirmation`);
   if (!issues.length) return "";
   return `<div class="product-issues">${issues.map((issue) => {
@@ -4501,11 +4434,11 @@ function renderProductIssues(product) {
       candidate.supplierCode ? `codice ${candidate.supplierCode}` : "",
       candidate.quantityFactor > 0 ? contati(candidate.quantityFactor, "pezzo per collo", "pezzi per collo") : "",
     ].filter(Boolean).join(" · ");
-    // ⚠ Il «Sì» c'era sempre, e sul confronto vero non ha mai potuto funzionare:
-    // il servizio locale rifiuta una riga senza prezzo e confezione
-    // utilizzabili, e rispondeva «Risposta non registrata». Un pulsante che dà
-    // errore ogni volta che lo si preme non è una domanda: si dice che cosa
-    // manca, e il «No» resta — quello si può sempre dare.
+    // "Yes" only renders when the row is actually acceptable: the local
+    // service rejects one without a usable price and packaging, so a button
+    // that errors on every press isn't a real question. When it's missing,
+    // the page instead says what's missing, and "No" — always answerable —
+    // stays available.
     return `
       <section class="candidate-check" role="status">
         <div class="candidate-check__body">
@@ -4526,12 +4459,10 @@ function renderProductIssues(product) {
   }).join("")}</div>`;
 }
 
-// ⚠ Un «No» alla proposta del fornitore era irreversibile. L'avviso spariva per
-// entrambe le risposte, e la decisione registrata — offer.candidateDecision, che
-// il servizio locale conserva insieme alla riga proposta — non veniva letta da
-// nessuna funzione di render: chi cliccava «Non è lo stesso» per sbaglio tornava
-// esattamente nello stato che quella domanda doveva eliminare, senza rimedio.
-// La decisione si vede e si cambia, per tutta la durata di questo confronto.
+// A "No" answer to a candidate match must stay reversible: the decision
+// (`offer.candidateDecision`, kept by the local service alongside the
+// proposed row) needs to be both visible and changeable for the rest of this
+// comparison, or a mistaken click has no way back.
 function renderCandidateDecisions(product) {
   const decise = product.offers.filter((offer) => {
     const decisione = String(offer.candidateDecision || "");
@@ -4550,9 +4481,9 @@ function renderCandidateDecisions(product) {
         const frase = accettata
           ? `Hai detto che «${nome}» di ${offer.supplierName} è lo stesso articolo: l’offerta è entrata nel confronto.`
           : `Hai detto che «${nome}» di ${offer.supplierName} NON è lo stesso articolo: quel fornitore resta fuori da questo prodotto.`;
-        // Tornare al «Sì» ha senso solo se la riga proposta ha ancora prezzo e
-        // confezione utilizzabili: senza, il servizio locale rifiuterebbe la
-        // risposta e il pulsante sarebbe una promessa vuota.
+        // Reverting to "Yes" only makes sense if the proposed row still has a
+        // usable price and packaging: otherwise the local service would
+        // reject the answer and the button would be an empty promise.
         const puoAccettare = accettata || candidate.available;
         return `
           <div class="candidate-decision${accettata ? " is-accepted" : " is-rejected"}">
@@ -4590,14 +4521,14 @@ function renderQuantityControl(product) {
     </div>`;
 }
 
-// --- Ordini non ancora ricevuti, in cima alla pagina 2 ---------------------
-// Domanda esplicita con due pulsanti grandi: niente window.confirm. Se non c'è
-// nulla in sospeso non viene disegnato nulla, nemmeno un riquadro vuoto.
+// --- Orders not yet received, at the top of page 2 ------------------------
+// An explicit question with two large buttons, not a `window.confirm`. Draws
+// nothing, not even an empty panel, when nothing is pending.
 
-// Un "non ancora arrivata" non archivia la domanda: la rimanda. Il momento in
-// cui torna lo dice il servizio locale (askAgainAt, una settimana dopo la
-// risposta), perché è lui a tenere lo storico; qui si guarda solo l'orologio.
-// Un ordine senza quella data non è mai stato risposto e la domanda è dovuta.
+// "Not received yet" doesn't dismiss the question, it defers it. When it
+// comes back is decided by the local service (`askAgainAt`, a week after the
+// answer), since it owns the order history; this only checks the clock. An
+// order with no such date has never been answered and is due now.
 function domandaRimandata(entry) {
   if (!entry.askAgainAt) return false;
   const ritorno = new Date(entry.askAgainAt);
@@ -4675,18 +4606,18 @@ function pendingOrdersFor(product) {
 
 function pendingOrderNoticeText(product, entry) {
   const quantity = Math.max(0, Math.trunc(finiteNumber(entry.quantity, 0)));
-  // L'unità è quella con cui si era ordinato allora, non quella di oggi: lo stesso
-  // codice può essere un espositore una settimana e un prodotto normale quella dopo.
+  // Uses the unit the order was placed in, not today's: the same barcode can
+  // be a display one week and a regular product the next.
   const label = String(entry.unit || product.orderUnitLabel || "colli");
   const unit = quantity === 1 ? orderUnitSingular(label) : label;
   const supplier = pendingOrderSupplierLabel(entry);
   const day = formatDayMonth(entry.orderedAt);
   const quantityText = quantity > 0 ? `${formatInteger(quantity)} ${unit} da ${supplier}` : `merce da ${supplier}`;
   const closing = quantity === 1 ? "non ancora ricevuto" : "non ancora ricevuti";
-  // Un codice a barre condiviso da più articoli: attribuire la quantità a
-  // QUESTO articolo regalava «20 colli già ordinati» anche a chi ne aveva
-  // zero (revisione avversariale R4). La quantità è dell'ordine sul codice,
-  // non dell'articolo, e la frase lo dice.
+  // A barcode shared by several items: attributing the pending quantity to
+  // THIS item would show "20 already ordered" even for one that has none.
+  // The quantity belongs to the order on that barcode, not to any one item,
+  // and the sentence says so.
   if (entry.sharedWith > 1) {
     const base = day ? `${quantityText} il ${day}, ${closing}` : `${quantityText}, ${closing}`;
     return `Già ordinato sullo stesso codice a barre: ${base}. Il codice è condiviso da ${formatInteger(entry.sharedWith)} articoli del confronto: la quantità non è attribuibile a questo soltanto.`;
@@ -4696,7 +4627,7 @@ function pendingOrderNoticeText(product, entry) {
     : `Già ordinato: ${quantityText}, ${closing}.`;
 }
 
-// Avviso informativo: non blocca la compilazione e non cambia nulla dell'ordine.
+// Informational only: doesn't block compilation and doesn't change the order.
 function renderPendingOrderNotice(product) {
   const entries = pendingOrdersFor(product);
   if (!entries.length) return "";
@@ -4706,28 +4637,31 @@ function renderPendingOrderNotice(product) {
     </div>`;
 }
 
-// --- Pannello offerte in cima alla pagina 2 -------------------------------
-// Puramente informativo: non tocca prezzi, totali né fornitore selezionato.
-// Riusa promotionText()/renderBadge() già usati da renderPromotionSummary()
-// (pagina 3) invece di duplicarne la logica di formattazione.
+// --- Promotions panel at the top of page 2 ---------------------------------
+// Purely informational: doesn't touch prices, totals or the selected
+// supplier. Reuses `promotionText()`/`renderBadge()`, already used by
+// `renderPromotionSummary()` on page 3, instead of duplicating their
+// formatting logic.
 
 const PROMOTION_HIGHLIGHT_STATUSES = ["vicina", "ottenuta"];
 const PROMOTION_HIGHLIGHT_LIMIT = 6;
 const PROMOTION_STATUS_ORDER = { vicina: 0, ottenuta: 1, non_raggiunta: 2, da_verificare: 3 };
 
-// --- Fase 8: da elenco a decisione ----------------------------------------
-// Su questi listini le condizioni riconosciute sono 188, ma 175 sono sconti già
-// compresi nel prezzo al pezzo su cui si sceglie il fornitore: non sono offerte
-// da leggere, sono il prezzo. Mostrarle insieme alle poche che cambiano una
-// decisione è il motivo per cui il pannello risultava ingestibile.
+// --- Phase 8: from a list to a decision -------------------------------------
+// On a real set of price lists, out of 188 recognized promotions 175 turn out
+// to be discounts already folded into the per-piece price that decides which
+// supplier wins: there's nothing to read, they already are the price. Mixing
+// those in with the few that actually change a decision would make this panel
+// unmanageable, so it's split into "actionable" and "already in price" instead.
 
 function promotionIsAlreadyInPrice(promotion) {
   return Boolean(promotion?.economic_effect?.already_applied);
 }
 
-// Azionabile: non è già nel prezzo E si sa a quali prodotti si applica. Una
-// condizione senza prodotti abbinati non dice quanto manca né a cosa serve:
-// resta leggibile, ma non va contata fra quelle che cambiano l'ordine.
+// Actionable: not already in the price, AND matched to at least one product.
+// A promotion with no matched products doesn't say what it needs or what it
+// applies to — it stays visible, but doesn't count among the ones that can
+// change the order.
 function promotionIsActionable(promotion) {
   return !promotionIsAlreadyInPrice(promotion) && promotionMatchedProductIds(promotion).length > 0;
 }
@@ -4749,8 +4683,8 @@ function promotionMatchesQuery(promotion, query) {
   return parole.every((parola) => testo.includes(parola));
 }
 
-// Prima quelle a cui manca meno: è l'ordine in cui servono, perché una soglia
-// lontanissima non cambia nessuna decisione di oggi.
+// Closest-to-reach first: that's the order they're needed in, since a
+// distant threshold doesn't change any decision made today.
 function sortPromotionsByReach(items) {
   return items.slice().sort((a, b) => {
     const stato = (PROMOTION_STATUS_ORDER[a.state?.status] ?? 4) - (PROMOTION_STATUS_ORDER[b.state?.status] ?? 4);
@@ -4768,9 +4702,9 @@ function promotionSupplierCounts(items) {
   return { lette, nelPrezzo, azionabili, scollegate: lette - nelPrezzo - azionabili };
 }
 
-// La riga di conteggio deve dire la verità: quante ne sono state lette e quante
-// possono davvero cambiare questo ordine. "LARICE 185" da solo comunica un
-// carico di lavoro che non esiste.
+// The count line has to tell the truth: how many were read, and how many can
+// actually change this order. A raw total by itself overstates the amount of
+// work there is to review.
 function promotionCountsLabel(grouped, supplierIds) {
   return supplierIds.map((id) => {
     const c = promotionSupplierCounts(grouped.get(id) || []);
@@ -4856,8 +4790,8 @@ function renderPromotionSupplierGroup(supplierId, items, titolo) {
 }
 
 function renderPromotionSearch(totale) {
-  // Sotto una certa quantità l'elenco si legge: il campo comparirebbe solo per
-  // farsi guardare.
+  // Below a certain count the list is short enough to just read; the search
+  // field would only be there to be looked at.
   if (totale < 12) return "";
   return `
     <div class="promotion-catalog__search">
@@ -4953,40 +4887,36 @@ function renderCompactProduct(product) {
           <div class="product-main__title">
             <h3 title="${escapeHtml(product.name)}">${escapeHtml(product.name)}</h3>
             ${renderBadge(productTypeLabel(product), productTypeTone(product))}
-            ${/* ⚠ La riga «459 prodotti trovati (451 dall'elenco, 6 espositori,
-                 2 aggiunti a mano)» diceva QUANTI ma non QUALI: i due aggiunti
-                 a mano non si distinguevano da nessuna parte, e per ritrovarli
-                 bisognava ricordarsi che cosa si era aggiunto. Un'etichetta
-                 sulla scheda e una voce nel filtro «Mostra», e solo quando ce
-                 n'è almeno uno. */ ""}
+            ${/* The breakdown line says how many came from where, but not which ones:
+                 manually added items had no marker anywhere on the card, so
+                 finding them again meant remembering what had been added. A
+                 badge here, and a "Show" filter entry, shown only when at
+                 least one exists. */ ""}
             ${product.addedManually ? renderBadge("Aggiunto a mano", "info") : ""}
             ${excluded ? renderBadge("Escluso", "neutral") : ""}
-            ${/* Il rosso e l'ambra erano una striscia di 4 px sul fianco della
-                 scheda, e fra loro correvano 1,33:1: per chiunque abbia una
-                 carenza sul rosso-verde, o su un monitor da negozio, erano la
-                 stessa striscia. Scorrendo venti schede non si trovava quella
-                 che ferma il lavoro. La riga dei metadati contava già i
-                 controlli, ma «3 controlli» si legge uguale che uno dei tre
-                 blocchi la compilazione o no: la distinzione va detta, non
-                 colorata. Un prodotto escluso non ha controlli — collectIssues
-                 salta chi ha quantità zero — quindi questa etichetta e
-                 «Escluso» non compaiono mai insieme. */ ""}
+            ${/* Blocking vs. warning is stated in words, not just a thin color strip
+                 on the card's edge, which would be close to indistinguishable
+                 for red-green color blindness or on a low-quality monitor,
+                 and slow to spot when scanning many cards. A count of issues
+                 doesn't say whether one of them is blocking either. An
+                 excluded product has no issues — `collectIssues` skips
+                 zero-quantity items — so this badge and "Excluded" never
+                 appear together. */ ""}
             ${blocker ? renderBadge("Da sistemare", "danger") : issues.length ? renderBadge("Da controllare", "warning") : ""}
           </div>
           <div class="product-main__meta">
             <span>${product.ean ? `EAN ${escapeHtml(product.ean)}` : "Senza EAN padre"}</span>
-            ${/* Diceva «3 offerte», e «offerta» in un negozio vuol dire sconto:
-                 chi legge conta gli sconti, non i fornitori che hanno il
-                 prodotto. Si contano i fornitori distinti, non le righe, cosi'
-                 il numero resta vero anche se un listino porta due volte lo
-                 stesso articolo. */ ""}
+            ${/* "offerta" in Italian retail means a discount, so a count of
+                 "offers" would read as a count of promotions, not suppliers.
+                 Counts distinct suppliers, not rows, so the number stays
+                 correct even if one price list lists the same item twice. */ ""}
             <span>${escapeHtml(contati(new Set(product.offers.filter((candidate) => candidate.available).map((candidate) => candidate.supplierId)).size, "fornitore ce l’ha", "fornitori ce l’hanno"))}</span>
-            ${/* ⚠ «0 fornitori ce l'hanno» su un prodotto rifiutato a tutti è la
-                 stessa bugia che il riquadro delle offerte ha già smesso di
-                 dire: quei fornitori la riga ce l'hanno, sei stato tu a dire che
-                 è un altro articolo. Il conteggio dei disponibili resta quello
-                 che è — serve a sapere chi si può ordinare — e accanto si dice
-                 chi manca perché l'hai escluso tu. */ ""}
+            ${/* "0 suppliers have it" on a product rejected everywhere would
+                 be the same false claim the offers panel avoids elsewhere:
+                 those suppliers do have the row, the user said it's a
+                 different item. The "available" count stays about what can be
+                 ordered; this count separately says how many were excluded by
+                 the user's own answers. */ ""}
             ${rifiutatiDaTe(product) ? `<span>${escapeHtml(contati(rifiutatiDaTe(product), "rifiutato da te", "rifiutati da te"))}</span>` : ""}
             ${issues.length ? `<span>${escapeHtml(contati(issues.length, "controllo", "controlli"))}</span>` : ""}
             ${product.lastUnitPrice != null ? `<span>Ultimo pagato: ${formatEuro(product.lastUnitPrice)}/pz</span>` : ""}
@@ -5016,9 +4946,9 @@ function renderCompactProduct(product) {
           </div>
         </div>
         <div class="product-comparison">
-          ${/* Il titolo «Confronto dei fornitori» stava su ogni scheda, venti
-               volte per pagina, sopra una tabella la cui prima colonna si
-               chiama «Fornitore». */ ""}
+          ${/* No "Supplier comparison" heading here: it would repeat on every
+               card, above a table whose first column is already labeled
+               "Supplier". */ ""}
           ${renderProductIssues(product)}
           ${renderCandidateDecisions(product)}
           ${renderOfferGrid(product)}
@@ -5029,18 +4959,16 @@ function renderCompactProduct(product) {
     </article>`;
 }
 
-// Da dove vengono i prodotti che si stanno guardando. ⚠ «Continua a dirmi 459
-// prodotti» (15 agosto 2026): il numero era giusto — 451 righe dell'elenco, 6
-// espositori, 2 aggiunti a mano — ma da solo somigliava al totale di un elenco
-// vecchio, e nessuna riga della pagina lo scomponeva.
+// Where the products being viewed come from. The total alone looks like a
+// stale count from an old list unless something breaks it down.
 function composizioneDellElenco() {
   const prodotti = state.review.products;
   const aggiunti = prodotti.filter((prodotto) => prodotto.addedManually).length;
   const espositori = prodotti.filter((prodotto) => prodotto.itemType === "display").length;
   const dallElenco = prodotti.length - aggiunti - espositori;
   const pezzi = [`${formatInteger(dallElenco)} dall’elenco del gestionale`];
-  // ⚠ Dove si trovano, non solo quanti sono: «6 espositori dei listini, 2
-  // aggiunti a mano» diceva che c'erano e lasciava cercarli a memoria.
+  // Says where to find them, not just how many: naming a count without a
+  // location left the user to remember what they'd added.
   if (espositori) {
     pezzi.push(`${formatInteger(espositori)} ${espositori === 1 ? "espositore dei listini" : "espositori dei listini"} (filtro «Tipo di prodotto»)`);
   }
@@ -5050,10 +4978,9 @@ function composizioneDellElenco() {
   return pezzi.join(", ");
 }
 
-// Un prodotto escluso non compare in nessun filtro tranne «Esclusi»: se lo si
-// cerca per nome, la pagina risponde «Nessun prodotto trovato» e chi cerca
-// conclude che nell'elenco non c'è. ⚠ È successo il 15 agosto 2026 con
-// KALIDERMA, che era nell'elenco, aveva la sua quantità, ed era escluso.
+// An excluded product doesn't appear under any filter except "Excluded": a
+// search by name would otherwise report "no product found" and the user
+// would conclude it isn't in the list, when it's simply excluded.
 function esclusiCheCorrispondono() {
   const search = state.filters.search.trim().toLocaleLowerCase("it");
   if (!search || state.filters.status === "excluded") return [];
@@ -5084,9 +5011,8 @@ function renderQuantityStep() {
   const products = matchingProducts.slice(start, start + state.filters.pageSize);
   const ordered = orderedProducts().length;
   return `
-    ${/* La frase sull'ordine dei fornitori sta qui, una volta per pagina, e non
-         sotto ogni griglia: il titolo «Confronto dei fornitori» era su ogni
-         scheda, venti volte per pagina, ed è stato tolto per questo. */ ""}
+    ${/* The note about supplier ordering lives here, once per page, instead
+         of under every grid. */ ""}
     ${pageHeading("2. Scegli prodotti e fornitori", "Indica i colli da ordinare per ogni prodotto o kit. Per gli espositori indica il numero di espositori completi. I fornitori di ogni prodotto sono in ordine, dal più conveniente al pezzo.")}
     ${renderStickySupplierTotals()}
     ${renderCambiamentoDocumenti()}
@@ -5154,19 +5080,17 @@ function demoCatalogProducts(query) {
   return needle ? products.filter((product) => `${product.name} ${product.ean}`.toLocaleLowerCase("it").includes(needle)) : products;
 }
 
-// --- Il visualizzatore dei listini ------------------------------------------
+// --- The price-list viewer --------------------------------------------------
 //
-// A che cosa serve, con il caso da cui è nato. `LUXA SAPONE LIQ. EROG.250ML` sta
-// nel gestionale col codice 4009428623194, che solo CIPRESSO usa (1,28 €/pz); lo
-// stesso articolo sta su NOCE, LARICE e BETULLA sotto 8729721830575, a 1,15,
-// 1,1625 e 1,19. Nessun punteggio può dedurlo — nel nome del gestionale la
-// variante (`ORIGINAL` contro `SETA`) non c'è affatto, `EROG.` sta per
-// erogatore — mentre una persona col listino davanti la vede in un secondo.
+// Why it exists: the same item can sit under different barcodes on different
+// suppliers' price lists, with a variant detail the management export's
+// product name doesn't carry at all. No matching heuristic can infer that;
+// a person with the price list open sees it in a second.
 //
-// Mostra il listino **come il programma l'ha letto**, non il foglio Excel: se
-// una colonna è letta storta, qui si vede storta, ed è l'informazione che serve.
-// Le righe che il programma ha scartato si contano sempre, anche quando la
-// pagina non ne mostra nessuna.
+// Shows the price list as the app read it, not the original spreadsheet:
+// if a column was parsed wrong, it shows wrong here too, which is exactly the
+// information needed to diagnose it. Rows the app discarded are always
+// counted, even when none are shown.
 
 function apriIlListino(prodottoId, fornitore = "", riga = null) {
   ricordaChiApreLaFinestra();
@@ -5175,9 +5099,9 @@ function apriIlListino(prodottoId, fornitore = "", riga = null) {
     aperto: true,
     prodottoId: String(prodottoId || ""),
     fornitore: String(fornitore || ""),
-    // ⚠ `fornitori` resta fuori dall'azzeramento, ed è voluto: un elenco già
-    // visto sopravvive anche se la chiamata nuova non arriva affatto (servizio
-    // spento, rete caduta), e la tendina resta usabile.
+    // `fornitori` is deliberately not reset here: an already-loaded
+    // supplier list survives even if the next request never comes back
+    // (service down, network drop), keeping the dropdown usable.
     nome: "",
     query: "",
     da: 0,
@@ -5199,9 +5123,9 @@ function chiudiIlListino() {
   restituisciIlFuoco();
 }
 
-// --- In quale colonna si scrive l'ordine ----------------------------------
-// La domanda si può fare in qualunque momento, e la risposta vale da subito:
-// il servizio locale rifà la configurazione di scrittura appena l'ha accettata.
+// --- Which column the order gets written to --------------------------------
+// This can be changed at any time, and takes effect immediately: the local
+// service rebuilds the write configuration as soon as it accepts the choice.
 
 async function apriLaColonnaDOrdine(fornitore) {
   ricordaChiApreLaFinestra();
@@ -5218,20 +5142,19 @@ async function apriLaColonnaDOrdine(fornitore) {
     scelta: "",
   };
   render();
-  // Una volta sola, adesso: le colonne arrivano fra un attimo e la tendina non
-  // c'è ancora, quindi il fuoco cade sul «×» della finestra. Spostarlo di nuovo
-  // quando la risposta arriva lo toglierebbe di sotto le dita a chi nel
-  // frattempo ha già tabulato.
+  // Focus is moved once, now: the column dropdown doesn't exist yet, so focus
+  // lands on the dialog's close button. Moving it again once the response
+  // arrives would yank it away from a user who has already tabbed elsewhere.
   portaIlFuocoDentro(["#colonna-ordine-scelta", ".colonna-dialog .dialog-close"]);
   const richiesto = String(fornitore || "");
   try {
     const payload = await requestJson(`${API.colonnaOrdine}?fornitore=${encodeURIComponent(fornitore)}`);
-    // ⚠ Non basta che una finestra sia aperta: dev'essere ancora la SUA. Si
-    // apre «Cambia colonna» su BETULLA, si chiude prima della risposta e si apre
-    // quella di LARICE: la risposta di BETULLA arrivava dopo e metteva le sue
-    // colonne dentro uno stato che dichiara LARICE. Da li' «Scrivi l'ordine
-    // qui» manderebbe al servizio LARICE con il numero di una colonna scelta
-    // sul documento di BETULLA.
+    // It's not enough that a dialog is open: it must still be open for THIS
+    // supplier. Opening the dialog for one supplier, closing it before the
+    // response arrives, then opening it for another would let the first
+    // response land in state that now describes the second supplier, and
+    // "Write the order here" would then save the second supplier's column
+    // number against the first supplier's document.
     if (!state.colonnaOrdine.aperta || state.colonnaOrdine.fornitore !== richiesto) return;
     const colonne = asArray(payload.colonne);
     const attuale = payload.attuale || null;
@@ -5242,8 +5165,9 @@ async function apriLaColonnaDOrdine(fornitore) {
       foglio: String(payload.sheet || ""),
       colonne,
       attuale,
-      // Si parte da quella in uso: la finestra si apre su dove si è, non su
-      // una scelta già cambiata che basterebbe confermare per sbaglio.
+      // Starts from the column already in use: the dialog opens on the
+      // current state, not on an already-changed choice a user could confirm
+      // by mistake.
       scelta: attuale && attuale.colonna ? String(attuale.colonna) : "",
       caricando: false,
     };
@@ -5276,16 +5200,16 @@ async function salvaLaColonnaDOrdine() {
       body: JSON.stringify({ supplierId: finestra.fornitore, colonna: scelta.colonna }),
     });
     state.colonnaOrdine = { ...state.colonnaOrdine, aperta: false, salvando: false, colonne: [] };
-    // La finestra si chiude scrivendo lo stato, non passando da
-    // `chiudiLaColonnaDOrdine()`: il fuoco va restituito qui, altrimenti chi
-    // salva con la tastiera resta senza segno.
+    // The dialog closes by writing state directly rather than through
+    // `chiudiLaColonnaDOrdine()`, so focus is restored here explicitly —
+    // otherwise a keyboard user saving with Enter would lose their focus.
     restituisciIlFuoco();
-    // Una riuscita a metà non si racconta come una riuscita: la colonna è
-    // cambiata, ma se la configurazione di scrittura non si è rifatta va detto
-    // con il tono di un avviso, non con quello di un successo.
+    // A partial success isn't reported as a success: the column changed, but
+    // if the write configuration wasn't rebuilt, that needs a warning tone,
+    // not a success one.
     showToast(esito?.message || "Colonna cambiata.", esito?.avviso ? "error" : "success");
-    // Le colonne del documento le tiene la pagina per tutta la durata della
-    // run: senza questo la scheda continuerebbe a dire la colonna di prima.
+    // The page caches the documents' columns for the run; without
+    // invalidating them here, the card would keep showing the old column.
     state.colonneDocumenti.caricate = false;
     state.colonneDocumenti.runId = "";
     await caricaColonneDeiDocumenti();
@@ -5302,14 +5226,13 @@ async function salvaLaColonnaDOrdine() {
 
 async function caricaIlListino({ riga = null } = {}) {
   if (mode === "demo") return;
-  // ⚠ Chi arriva ultimo non ha ragione. Le letture partono anche in fretta —
-  // doppio clic su «Righe successive», o una parola scritta nella ricerca
-  // mentre la prima lettura e' in volo — e senza un numero di richiesta la
-  // pagina applicava QUALUNQUE risposta arrivasse: la prima poteva finire dopo
-  // la seconda e rimettere in tabella le righe di una ricerca che non si vede
-  // piu'. Da quella tabella si preme «E' questo», che scrive un abbinamento
-  // permanente in `conferme.db`: e' il posto del programma in cui una riga
-  // sbagliata costa di piu'.
+  // The last response to arrive isn't necessarily the right one: fast
+  // repeated reads (double-clicking "next", typing while a read is in
+  // flight) can complete out of order. Without a request number, the page
+  // would apply whatever came back last, potentially showing rows from a
+  // search the user has already moved past. This table is where "It's this
+  // one" writes a permanent match to `conferme.db`, so a stale row here is
+  // the costliest place in the app to get it wrong.
   const mia = (state.listino.richiesta || 0) + 1;
   state.listino.richiesta = mia;
   state.listino.caricando = true;
@@ -5330,9 +5253,10 @@ async function caricaIlListino({ riga = null } = {}) {
       ...state.listino,
       caricando: false,
       fornitore: String(payload.supplier || state.listino.fornitore),
-      // Il nome viene dal registro, che il servizio ha già letto: quando il
-      // listino chiesto non è sfogliabile non c'è nessuna voce in `fornitori`
-      // da cui prenderlo, e nel titolo finiva l'identificativo.
+      // The name comes from the adapter registry, already read by the
+      // service: when the requested price list can't be browsed, there's no
+      // entry in `fornitori` to take it from, and the raw id would otherwise
+      // end up in the title.
       nome: String(payload.supplierName || state.listino.nome || ""),
       fornitori: asArray(payload.fornitori),
       righe: asArray(payload.righe),
@@ -5351,37 +5275,38 @@ async function caricaIlListino({ riga = null } = {}) {
   rerenderPreservingFocus();
 }
 
-// L'abbinamento fatto a mano: l'offerta entra subito nel confronto, e i due
-// codici a barre restano dichiarati uguali per i ricalcoli futuri. La frase che
-// torna dal servizio dice quale dei due effetti è avvenuto: quando il prodotto
-// o la riga non hanno un codice, il secondo non è possibile, e dirlo è l'unico
-// modo di non promettere una cosa che salta al primo ricalcolo.
+// A manual match: the offer enters the comparison immediately, and the two
+// barcodes are declared equivalent for future comparisons. The message
+// returned by the service says which of the two effects actually happened —
+// when either side has no barcode, the second isn't possible, and saying so
+// is the only way not to promise something that would silently not survive
+// the next comparison.
 async function abbinaLaRiga(riga) {
   if (mode === "demo" || state.listino.abbinando) return;
   state.listino.abbinando = String(riga);
   state.listino.esito = "";
   rerenderPreservingFocus();
   try {
-    // ⚠ PRIMA il salvataggio, poi la richiesta — la stessa ragione di
-    // `addCatalogProduct` e delle due rotte sorelle: qui sotto `loadReview()`
-    // rilegge il confronto dal servizio e SOSTITUISCE quello in pagina, e una
-    // quantità scritta meno di 450 ms fa — o rimasta indietro perché un
-    // salvataggio è fallito e sta per riprovare — non è ancora sul disco. La
-    // rilettura se la porta via e il salvataggio dopo consolida il numero
-    // vecchio, cioè un ordine sbagliato, senza che niente lo dica (6 settembre
-    // 2026). Con lo stato pulito `saveState()` torna vero subito.
+    // Save BEFORE the request, not after — same reason as `addCatalogProduct`
+    // and its sibling routes: `loadReview()` below rereads the comparison
+    // from the service and REPLACES what's in the page, and a quantity
+    // written moments ago (or a save still pending retry) may not be on disk
+    // yet. Rereading would discard it, and the next save would then persist
+    // the stale number as the real order, silently. With clean state,
+    // `saveState()` returns immediately.
     const saved = await saveState();
     if (!saved) throw new Error("Le modifiche correnti non sono ancora state salvate.");
     const esito = await requestJson(API.matchAbbina, {
       method: "POST",
       body: JSON.stringify({
-        // ⚠ La run, come la mandano gia' il rifiuto e la risposta alla
-        // proposta. `productId` e `sourceRow` sono posizionali — la riga del
-        // gestionale e la riga del listino — quindi su un confronto rifatto
-        // indicano altri due articoli: senza dire su QUALE confronto e' stato
-        // premuto «È questo», il servizio abbina quei due e si ricorda per
-        // sempre che i loro codici sono lo stesso articolo. Basta una seconda
-        // scheda ferma al confronto di prima (6 settembre 2026).
+        // The run id, sent for the same reason the rejection and the
+        // candidate answer already send it: `productId` and `sourceRow` are
+        // positional — a row in the management file and a row in the price
+        // list — so after a new comparison they can point at different
+        // items. Without the run id, the service would match whichever two
+        // items now sit at those positions and permanently remember their
+        // barcodes as the same article — a risk any stale browser tab still
+        // showing an old comparison would trigger.
         runId: state.review?.run?.id || "",
         productId: state.listino.prodottoId,
         supplierId: state.listino.fornitore,
@@ -5400,22 +5325,21 @@ async function abbinaLaRiga(riga) {
   }
 }
 
-// --- «Questi due codici sono lo stesso articolo» --------------------------
-// Stavano in fondo alla finestra «Sfoglia i listini», cioè dentro un prodotto:
-// per rileggerle bisognava aprirne uno qualunque, e l'elenco mostrava due
-// numeri di tredici cifre — senza i nomi, che sono l'unica cosa con cui si
-// giudica se la dichiarazione è giusta. Adesso stanno in Impostazioni, con i
-// nomi, il fornitore e una ricerca: una dichiarazione sbagliata entra in ogni
-// confronto futuro e su tutti i fornitori, quindi deve essere rileggibile
-// senza avere un confronto aperto davanti.
+// --- "These two barcodes are the same item" declarations -------------------
+// Live under Settings, with names, supplier and search, rather than buried
+// inside a single product's "browse the price lists" dialog: a wrong
+// declaration affects every future comparison across every supplier, so it
+// needs to be reviewable without a comparison open, and by name rather than
+// by bare barcode — the name is the only thing that lets someone judge
+// whether the declaration is correct.
 
 async function caricaLeUguaglianze({ query = null } = {}) {
   if (mode === "demo") return;
   const magazzino = state.impostazioni.uguaglianze;
   if (query !== null) magazzino.query = String(query);
   magazzino.caricando = true;
-  // ⚠ Conservando il fuoco: si cerca mentre si scrive, e un `render()` secco
-  // toglierebbe il cursore dal campo di ricerca a metà parola.
+  // Preserves focus: search happens while typing, and a plain `render()`
+  // would drop the cursor out of the search field mid-word.
   rerenderPreservingFocus();
   try {
     const payload = await requestJson(
@@ -5445,8 +5369,8 @@ function cercaFraLeUguaglianze(testo) {
   const magazzino = state.impostazioni.uguaglianze;
   magazzino.query = String(testo || "");
   if (magazzino.timer) clearTimeout(magazzino.timer);
-  // La stessa attesa della ricerca nel listino: si cerca mentre si scrive, ma
-  // non a ogni tasto.
+  // Same debounce as the price-list search: search while typing, but not on
+  // every keystroke.
   magazzino.timer = setTimeout(() => caricaLeUguaglianze(), 220);
 }
 
@@ -5461,10 +5385,10 @@ async function togliLUguaglianza(codici) {
     });
     showToast(esito?.message || "Dichiarazione tolta.", "success");
     magazzino.togliendo = "";
-    // L'elenco aggiornato torna con la risposta: rileggerlo sarebbe un giro a
-    // vuoto. ⚠ Ma torna **intero**, senza la ricerca in corso applicata, quindi
-    // se una ricerca c'è si richiede — altrimenti l'elenco si allargherebbe da
-    // solo dopo una cancellazione.
+    // The updated list comes back with the response, so rereading it
+    // separately would be wasted work. But it comes back unfiltered, so
+    // an active search has to be re-requested — otherwise the list would
+    // silently widen back out after a removal.
     if (magazzino.query.trim()) {
       await caricaLeUguaglianze();
       return;
@@ -5513,10 +5437,11 @@ function renderSettingsUguaglianzePanel() {
     </section>`;
 }
 
-// Le conferme date — «sì, questa riga di listino è il mio prodotto» — non si
-// rileggono da nessuna parte: il magazzino è un file SQLite, e `app/data/` è
-// fuori da git, quindi non ne esiste nessuna copia. Il collegamento qui sotto
-// è l'unico modo di farsene una senza copiare a mano un file aperto.
+// Confirmations given — "yes, this price-list row is my product" — aren't
+// readable anywhere else: the store is a SQLite file under `app/data/`,
+// which is outside version control, so no copy of it exists elsewhere. The
+// download link below is the only way to get one without copying an open
+// database file by hand.
 function renderSettingsConfermePanel() {
   return `
     <section class="settings-card">
@@ -5540,11 +5465,11 @@ function renderSettingsConfermePanel() {
     </section>`;
 }
 
-// Una dichiarazione per intero: che cosa chiede il gestionale, che cosa dà il
-// fornitore, e quando è stata fatta. ⚠ I nomi sono quelli **normalizzati** —
-// maiuscoli, senza punteggiatura — perché sono quelli con cui il programma
-// confronta: mostrarne di più belli vorrebbe dire mostrare qualcosa di diverso
-// da quello su cui la dichiarazione vale.
+// A full declaration: what the management file asks for, what the supplier
+// offers, and when it was made. Names shown are the normalized ones —
+// uppercase, no punctuation — because that's what the matching logic
+// actually compares; a prettier display name would show something other
+// than what the declaration is defined over.
 function renderUguaglianza(voce) {
   const codici = asArray(voce.codici);
   const chiave = codici.join(",");
@@ -5578,12 +5503,12 @@ function renderUguaglianza(voce) {
     </li>`;
 }
 
-// Che cosa c'è dentro una colonna, in una riga sola. È l'informazione che
-// decide: il programma rifiuta soltanto quello che sa dimostrare (una colonna
-// che legge lui, una colonna di formule), il resto lo deve poter valutare chi
-// il listino ce l'ha davanti. Misurato il 18 agosto 2026: la colonna d'ordine
-// di LARICE contiene 641 titoli di sezione, quindi «la colonna dev'essere
-// vuota» sarebbe una regola che rifiuta la situazione di oggi.
+// What's inside a column, in one line. This is the deciding information: the
+// app only refuses what it can prove is wrong (a column it already reads, a
+// column of formulas), and leaves everything else for the user, who has the
+// price list open, to judge. A supplier's order column can legitimately
+// already hold thousands of section titles, so "the column must be empty"
+// would reject a perfectly normal document.
 function descriviColonna(colonna) {
   if (colonna.occupataDa) return `la leggo come ${colonna.occupataDa}`;
   if (colonna.formule) return `${contati(colonna.formule, "formula", "formule")} — l’ordine le cancellerebbe`;
@@ -5606,9 +5531,9 @@ function renderColonnaOrdineDialog() {
   if (!finestra.aperta) return "";
   const scelta = colonnaOrdineScelta();
   const attuale = finestra.attuale ? String(finestra.attuale.lettera || "") : "";
-  // Una colonna con dentro qualcosa non si rifiuta — si dice. Chi sceglie la
-  // colonna del suo fornitore sa che cosa c'è dentro; chi non lo sa, adesso lo
-  // legge prima di premere.
+  // A column with content isn't rejected — it's disclosed. Whoever picks
+  // their supplier's column already knows what's in it; whoever doesn't now
+  // reads it before confirming.
   const avviso = scelta && !scelta.occupataDa && !scelta.formule && scelta.valori
     ? `La colonna ${scelta.lettera} non è vuota: contiene ${contati(scelta.valori, "valore", "valori")}. Le quantità ci finiscono sopra.`
     : "";
@@ -5639,9 +5564,8 @@ function renderColonnaOrdineDialog() {
         ` : ""}
         <div class="page-actions">
           <button type="button" class="button button--secondary" data-action="chiudi-colonna-ordine">Annulla</button>
-          ${/* In errore questa finestra non aveva nessun comando utile: due
-               «chiudi» e un «salva» disabilitato, e per riprovare bisognava
-               chiuderla e ritrovare il pulsante del fornitore. */ ""}
+          ${/* Retry button: on error this dialog otherwise had nothing to do
+               but close and reopen it from the supplier's card. */ ""}
           ${finestra.errore ? `<button type="button" class="button button--secondary" data-action="apri-colonna-ordine" data-supplier-id="${escapeHtml(finestra.fornitore)}">Riprova</button>` : ""}
           <button type="button" class="button button--primary" data-action="salva-colonna-ordine"
             ${finestra.salvando || finestra.caricando || !scelta || !scelta.scegliibile || scelta.attuale ? "disabled" : ""}>
@@ -5667,11 +5591,11 @@ function renderListinoDialog() {
           <button type="button" class="dialog-close" data-action="close-listino" aria-label="Chiudi la finestra">×</button>
         </div>
         <div class="listino-dialog__comandi">
-          ${/* ⚠ Quando il fornitore chiesto non è sfogliabile non ha nessuna
-               voce nell'elenco, e senza la riga disabilitata qui sotto il
-               `<select>` mostrerebbe il primo della lista mentre lo stato dice
-               un altro: sceglierlo dalla tendina non farebbe scattare nessun
-               `change`, e la finestra sembrerebbe bloccata. */ ""}
+          ${/* When the requested supplier can't be browsed it has no entry in
+               the list, so without this disabled placeholder option the
+               `<select>` would show the first supplier while state points at
+               another — selecting it wouldn't fire a `change` event, and the
+               dialog would look stuck. */ ""}
           ${state.listino.fornitori.length ? `
           <div class="field">
             <label for="listino-fornitore">Fornitore</label>
@@ -5701,15 +5625,14 @@ function renderListinoDialog() {
 
 function contoDelListino() {
   const listino = state.listino;
-  // Un listino che non si è potuto sfogliare non ha righe da contare, e
-  // «0 righe · tutte ordinabili» sotto l'avviso che spiega perché sarebbe
-  // rumore che contraddice.
+  // A price list that couldn't be browsed has no rows to count, and "0 rows,
+  // all orderable" under the alert explaining why would just contradict it.
   if (listino.problema) return "";
   const cercate = listino.query.trim()
     ? `${contati(listino.trovate, "riga trovata", "righe trovate")} su ${formatInteger(listino.totale)}`
     : contati(listino.totale, "riga", "righe");
-  // Le righe scartate si dicono sempre: un listino che ne mostra 8.849 su 8.881
-  // senza dirlo è un visualizzatore che nasconde.
+  // Discarded rows are always stated: a viewer that shows most rows and
+  // silently drops the rest is a viewer that hides things.
   const scartate = listino.scartate
     ? ` · ${formatInteger(listino.scartate)} non ordinabili, mostrate col motivo`
     : " · tutte ordinabili";
@@ -5815,31 +5738,26 @@ function renderCatalogDialog() {
     </div>`;
 }
 
-// Il confronto dei fornitori è una tabella, e prima non lo era: ogni fornitore
-// aveva il suo riquadro con dentro le stesse quattro etichette («Prezzo per
-// collo», «Prezzo per pezzo», «Pezzi per collo», «Totale per la quantità»).
-// Su una pagina da venti prodotti sono trecentoventi etichette lette per
-// leggere trecentoventi numeri, e i numeri non erano incolonnati — che è
-// esattamente il gesto per cui si guarda un confronto.
+// The supplier comparison is a table, not one box per supplier repeating the
+// same four labels ("Price per carton", "Price per piece", "Pieces per
+// carton", "Total for this quantity"): across twenty products per page that
+// would be a lot of labels read to reach a lot of numbers, with the numbers
+// not aligned in columns — the exact thing a comparison exists to allow.
 //
-// Le etichette restano nel markup: le nasconde il foglio di stile quando le
-// intestazioni in cima bastano, e tornano visibili sugli schermi stretti, dove
-// la tabella si impila. Chi legge con la sintesi vocale le sente comunque.
-// Come il fornitore chiama quello che sta vendendo, sotto il suo nome.
+// The labels stay in the markup: the stylesheet hides them once the header
+// row covers their job, and shows them again on narrow screens, where the
+// table stacks. A screen reader announces them either way.
 //
-// ⚠ Serve anche — e soprattutto — quando il codice a barre coincide. Parole di
-// Daniele, 17 agosto 2026: «su oggetti colorati, anche con EAN esatto, il
-// prodotto potrebbe essere di colore diverso, come già visto in passato». Il
-// caso vero è sulla scheda `DOPLO PIATTI PIANI 20PZ`: il gestionale non dice il
-// colore, BETULLA ha `DOPLO Piatto Riutilizzabile Piano In Polipropilene Bianco`
-// con lo stesso EAN, ed CIPRESSO propone `PRIME PIATTI PIANI ROSSI`. La riga
-// mostrava soltanto i numeri, e il nome che il fornitore usa — l'unico posto in
-// cui il colore è scritto — non compariva da nessuna parte, benché il servizio
-// lo mandi da sempre.
+// Also matters — especially — when the barcode matches but the product still
+// differs: a colored item can share an EAN across variants while looking
+// different on the shelf. The supplier's own product name is the only place
+// that variant detail is written, even though the service has always sent
+// it — so the row includes it, rather than showing only the numbers.
 //
-// L'EAN si scrive solo quando è **diverso** da quello del prodotto: uguale non
-// aggiunge niente e sta già in testa alla scheda; diverso vuol dire che quella
-// riga è stata agganciata per altra via, ed è la cosa da guardare per prima.
+// The EAN is only shown when it differs from the product's own: matching
+// adds nothing and is already in the card's header; a mismatch means this row
+// was matched through some other signal, which is the first thing worth
+// checking.
 function rigaDelFornitore(product, offer) {
   const pezzi = [];
   if (offer.description) pezzi.push(escapeHtml(offer.description));
@@ -5872,29 +5790,22 @@ function renderOfferGrid(product) {
   const ordinate = product.offers.slice()
     .sort((a, b) => Number(b.available) - Number(a.available) || a.pricePerPiece - b.pricePerPiece);
   const disponibili = ordinate.filter((offer) => offer.available);
-  // Di quanto ogni fornitore costa più del più conveniente. ⚠ Il minimo si
-  // prende fra le sole offerte DISPONIBILI: su un prodotto dove la più
-  // economica non è utilizzabile, la pagina scriverebbe differenze rispetto a
-  // un prezzo che nessuno può ordinare. E si dichiara al pezzo, mai sul totale
-  // in colli: è la regola scritta due volte in questo file.
+  // How much each supplier costs above the cheapest one. The minimum is
+  // taken only among AVAILABLE offers: on a product where the cheapest row
+  // isn't usable, differences would otherwise be shown against a price
+  // nobody can actually order. Always per piece, never on the carton total —
+  // that rule is stated twice in this file because it's easy to break.
   const minimoAlPezzo = disponibili.length
     ? Math.min(...disponibili.map((offer) => finiteNumber(offer.pricePerPiece)))
     : 0;
-  // Un fornitore che non ha il prodotto merita una riga, non un riquadro: la
-  // frase «non ce l’hanno nel listino di adesso» era ripetuta per
-  // ciascuno, e su un prodotto senza offerte occupava tutta la scheda dicendo
-  // quattro volte la stessa cosa. Chi porta un motivo suo lo tiene.
-  // Le ragioni per cui un'offerta non è utilizzabile sono tre, e la terza è
-  // nuova: «l'hai rifiutata tu» non è «non ce l'hanno». Prima una riga rifiutata
-  // finiva in `senzaMotivo` e la pagina scriveva di quel fornitore «non ce
-  // l'hanno nel listino di adesso» — falso, e proprio sul prodotto in cui
-  // l'utente aveva appena detto il contrario.
-  // ⚠ E la quarta, che il 4 settembre 2026 si vedeva sul PC del negozio: la
-  // riga proposta di quel fornitore è QUI SOPRA, con codice, EAN e prezzo — o
-  // nel riquadro della risposta che gli hai già dato — e sotto la tabella c'era
-  // scritto «non ce l'hanno nel listino di adesso». Due frasi opposte sullo
-  // stesso fornitore a due centimetri di distanza. Chi ha un candidato in
-  // pagina è già nominato là: qui non si conta.
+  // A supplier without the product deserves one shared line, not a repeated
+  // box saying the same thing for each one; a supplier with its own reason
+  // keeps it. There are three reasons an offer isn't usable: no matching
+  // row, a row the user rejected ("you said no" isn't "they don't have it"),
+  // or a row already shown elsewhere on the card as a pending candidate to
+  // confirm. That third case is excluded from this generic list too — it
+  // would otherwise contradict the candidate box shown right above it on the
+  // same card.
   const conCandidatoInPagina = new Set([
     ...issuesForProduct(product)
       .filter((issue) => issue.code === "RIFIUTO_CON_CANDIDATO_FORTE")
@@ -5931,8 +5842,8 @@ function renderOfferGrid(product) {
             ${cella(intestazioni[1], `<strong>${formatEuro(offer.orderUnitPriceNet)}</strong>`, " offer-card__numero")}
             ${cella(
               intestazioni[2],
-              // Mezzo centesimo di tolleranza: sotto, la differenza si
-              // scriverebbe «+0,00 €/pz», che è rumore.
+              // Half-cent tolerance: below it, the delta would print as
+              // "+0.00 €/pz", which is just noise.
               `<strong>${formatEuro(offer.pricePerPiece)}</strong>${finiteNumber(offer.pricePerPiece) - minimoAlPezzo > 0.005
                 ? `<span class="offer-card__delta">+${formatEuro(finiteNumber(offer.pricePerPiece) - minimoAlPezzo)}/pz</span>`
                 : ""}`,
@@ -5959,12 +5870,10 @@ function renderOfferGrid(product) {
           </span>
           <span class="offer-card__intera offer-card__unavailable">${escapeHtml(offer.warning)}</span>
         </div>`).join("")}
-      ${/* ⚠ La riga che spiega quanto dura un no si scriveva DENTRO ogni
-           riquadro: su un prodotto rifiutato a due fornitori la stessa frase di
-           una settimana usciva due volte di fila, con l'unica differenza del
-           nome. La regola è una sola e vale per tutti: si dice una volta, sotto.
-           Nel riquadro resta quello che cambia da fornitore a fornitore — la
-           riga rifiutata, il giorno, e il modo di tornare indietro. */ ""}
+      ${/* The rule explaining how long a rejection lasts is shown once below,
+           not inside every box — it's the same sentence for every supplier.
+           Each box keeps only what differs: the rejected row, the date, and
+           the way to reverse it. */ ""}
       ${rifiutate.map((offer) => {
         const busy = Boolean(state.matches.answering);
         const answering = state.matches.answering === `${product.id}:${offer.supplierId}:rifiuto`;
@@ -5992,35 +5901,31 @@ function renderOfferGrid(product) {
     </div>`;
 }
 
-// La via d'uscita quando l'abbinamento automatico non ce l'ha fatta, e non
-// poteva farcela: il nome del gestionale non dice la variante, il fornitore usa
-// un altro codice a barre, e nessun punteggio può indovinare. Si apre sul
-// fornitore che ha già una riga per questo prodotto — così si controlla che sia
-// davvero la stessa merce — oppure sul primo listino, per cercarla.
+// The fallback for when automatic matching couldn't find a row, and
+// structurally couldn't: the management name doesn't carry the variant, the
+// supplier uses a different barcode, and no scoring heuristic can guess it.
+// Opens on the supplier that already has a matched row for this product —
+// to double-check it's really the same item — or on the first price list, to
+// search from scratch.
 function renderApriIlListino(product) {
   if (mode === "demo") return "";
-  // Prima il fornitore scelto, e solo se quello non ha una riga abbinata si
-  // ripiega sul primo utile. `.find()` da solo prendeva sempre il primo
-  // dell'elenco, che e' nell'ordine fisso di build_review_data.supplier_ids()
-  // — betulla, larice, noce, cipresso — e coincideva con il fornitore scelto
-  // solo per caso: il pulsante apriva il listino di un altro.
+  // The selected supplier goes first; only when it has no matched row does
+  // this fall back to the first one that does. `.find()` alone would always
+  // return the first supplier in `build_review_data.supplier_ids()`'s fixed
+  // order, which only coincidentally matches the selected supplier.
   const scelta = selectedOffer(product);
   const conRiga = (scelta && scelta.sourceRow != null ? scelta : null)
     || product.offers.find((offer) => offer.available && offer.sourceRow != null);
-  // Quando nessuno ha una riga abbinata — il caso «cercala a mano» — vale la
-  // stessa preferenza: si apre il listino del fornitore scelto, non il primo.
+  // When nobody has a matched row — the "search by hand" case — the same
+  // preference applies: opens on the selected supplier, not the first one.
   const primo = conRiga || scelta || product.offers[0];
-  // ⚠ Il pulsante si è chiamato «Sfoglia il listino LARICE» per un giorno, con
-  // dentro il nome del fornitore che avrebbe aperto. Daniele l'ha guardato il
-  // 22 agosto 2026 e l'ha tolto: il comando **non apre un listino solo**. La
-  // finestra che si apre porta il nome per titolo e una tendina con tutti i
-  // fornitori, e da lì si passa da uno all'altro senza chiuderla — quindi il
-  // nome sul pulsante prometteva meno di quello che il comando fa, e lo
-  // prometteva venti volte per pagina, una per scheda.
+  // The label is deliberately generic rather than naming one supplier: the
+  // dialog it opens carries the name as its title plus a dropdown to switch
+  // between every supplier without closing it, so a single supplier's name
+  // on the button would promise less than the dialog actually does.
   //
-  // Quale listino si apre PER PRIMO resta la scelta fatta qui sopra — il
-  // fornitore scelto, non il primo dell'elenco — e quella non si tocca: è la
-  // ragione per cui il pulsante non apre più la riga di qualcun altro.
+  // Which price list opens FIRST is still the choice made above — the
+  // selected supplier, not the first in the list.
   const etichetta = "Sfoglia i listini";
   return `
     <p class="offer-grid__sfoglia">
@@ -6033,19 +5938,17 @@ function renderApriIlListino(product) {
     </p>`;
 }
 
-// Il servizio locale somma due provenienze quando decide se serve una conferma:
-// il prodotto (abbinamento incerto) e l'offerta scelta (match non esatto,
-// espositore non ad alta confidenza). Qui va usata la stessa regola, altrimenti
-// esiste uno stato senza uscita: il salvataggio viene rifiutato e nella pagina
-// non c'è nessuna casella per dare la conferma che il servizio pretende.
+// The local service combines two sources when deciding whether confirmation
+// is required: the product (uncertain match) and the selected offer (inexact
+// match, low-confidence display). This must use the same rule, or a save can
+// be rejected by the service with no matching checkbox anywhere on the page.
 function confirmationRequired(product) {
-  // ⚠ Senza un fornitore scelto non c'è niente da confermare, ed è alla lettera
-  // la riga di confine del servizio (`validate_snapshot`: «requires =
-  // bool(supplier_id) and offer_needs_confirmation(...)»). Finché mancava,
-  // `product.requiresConfirmation` da solo bastava a tenere in piedi il
-  // bloccante «Conferma richiesta» su un prodotto che non ha più nessuna
-  // offerta da confermare: la casella non c'era da nessuna parte e il blocco
-  // restava.
+  // Without a selected supplier there's nothing to confirm — this mirrors
+  // the service's own gate (`validate_snapshot`: `requires =
+  // bool(supplier_id) and offer_needs_confirmation(...)`). Without this
+  // check, `product.requiresConfirmation` alone could keep a blocking
+  // "confirmation required" state alive for a product with no offer left to
+  // confirm.
   const offer = selectedOffer(product);
   if (!offer) return false;
   if (product.requiresConfirmation) return true;
@@ -6062,27 +5965,26 @@ function confirmationMessageFor(product) {
   return product.confirmationMessage;
 }
 
-// La conferma già data, quando c'è: chi l'ha ricevuta la conserva nel
-// magazzino (`app/conferme.py`), e il servizio la rimette sul prodotto come
+// The confirmation already given, when there is one: the confirmation store
+// (`app/conferme.py`) keeps it, and the service attaches it to the product as
 // `confirmation: {supplierId, since, article}`.
 //
-// ⚠ Senza questa riga la pagina non sapeva dire due cose che decidono se
-// fidarsi della spunta: **quando** è stata data, e che vale **per l'articolo**
-// — codice a barre più nome — e non per la riga del listino. È il motivo per
-// cui sopravvive al listino della settimana dopo, quando quello stesso
-// prodotto ha un'altra riga e un altro numero: senza dirlo, una spunta già
-// messa somiglia a un residuo da controllare, e la si toglie per prudenza.
+// Two things decide whether the checkmark can be trusted: when it was
+// given, and that it covers the item — barcode plus name — not the
+// price-list row. That's why it survives into next week's price list even
+// though that row has changed: without saying so, an already-checked box
+// would look like a stale leftover worth re-verifying.
 //
-// E la revoca. Lato servizio funziona da sempre — togliere la spunta — ma era
-// un gesto che nessuna scritta spiegava, ed è l'unica via d'uscita da una
-// conferma sbagliata. Nessun pulsante nuovo: si nomina quello che c'è già.
+// Revocation is also surfaced here: the service already supports clearing a
+// confirmation, but nothing on the page explained the gesture, and it's the
+// only way out of a confirmation given by mistake.
 function renderConfermaGiaData(product) {
   const conferma = product.confirmation;
-  // ⚠ Anche il flag, non solo il ricordo: appena l'utente toglie la conferma
-  // quella nel magazzino c'è ancora — sparisce al salvataggio — e scrivere
-  // «già confermato» sopra una domanda riaperta direbbe il contrario di quello
-  // che si vede. Tolta la conferma la domanda è di nuovo aperta, e quello che
-  // serve leggere è il motivo per cui è stata fatta.
+  // The flag, not just the stored record: right after the user revokes a
+  // confirmation, the store still has it — it clears on save — so "already
+  // confirmed" would contradict a question that's visibly reopened. Once
+  // revoked, the reopened question needs to show why confirmation was asked
+  // for in the first place.
   if (!conferma || !product.confirmed) return "";
   const giorno = formatDayMonth(conferma.since);
   return `
@@ -6093,28 +5995,23 @@ function renderConfermaGiaData(product) {
     </p>`;
 }
 
-// Che cosa succede DAVVERO a questo prodotto se la risposta è no.
+// What actually happens to this product if the answer is no — computed here
+// rather than left as a generic sentence, since the outcome (which supplier
+// takes over, or that none does) is specific to this product and this offer.
 //
-// ⚠ Qui c'era un paragrafo di 293 caratteri che valeva per tutti i prodotti e
-// per nessuno: «se non ce l'ha nessun altro, il prodotto finisce nell'elenco
-// Prodotti da reperire» chiedeva a chi ordina di sciogliere un «se» che la
-// pagina scioglie da sé — le offerte sono qui, e chi resta si conta. E finiva
-// con «Si torna indietro dal riquadro di LARICE qui sopra», che nel momento in
-// cui la si legge è falsa: quel riquadro nasce DOPO il no. Su SUPERMICIONE, il
-// 22 agosto 2026, la frase nominava BETULLA mentre il riquadro sopra era di
-// LARICE, e chi guardava in su non trovava niente.
-//
-// La regola di chi subentra è la stessa di `normalizeReview`: il più
-// conveniente AL PEZZO fra i disponibili. Non se ne scrive una seconda: due
-// autorità sullo stesso valore si contraddicono il giorno in cui una cambia.
+// The rule for who takes over matches `normalizeReview`: the cheapest
+// available offer BY PIECE. It isn't recomputed a second way here — two
+// authorities on the same value would drift apart the day one of them
+// changes.
 function conseguenzaDelNo(product, offer) {
   const prossimo = asArray(product?.offers)
     .filter((candidato) => candidato.available && candidato.supplierId !== offer.supplierId)
     .sort((a, b) => a.pricePerPiece - b.pricePerPiece)[0];
   if (!prossimo) {
-    // «L'unico che ce l'ha» sarebbe falso proprio nel caso in cui questa frase
-    // si legge di più: gli altri la riga ce l'hanno, sei stato tu a dire che è
-    // un altro articolo. Quello che conta è che è l'ultimo rimasto.
+    // "The only one who has it" would be false in exactly the case this
+    // sentence is most likely to be read: the others do have the row, the
+    // user said it's a different item. What matters is that this is the
+    // last one left.
     return `${offer.supplierName} è l’ultimo fornitore rimasto su questo prodotto: senza di lui resta `
       + "senza fornitore, con la sua quantità, e alla compilazione finisce nell’elenco «Prodotti da reperire».";
   }
@@ -6122,19 +6019,13 @@ function conseguenzaDelNo(product, offer) {
     + `${formatEuro(prossimo.pricePerPiece)} al pezzo.`;
 }
 
-// La domanda dell'abbinamento, con le sue due risposte.
+// The confirmation question, with its two answers, matching this card's twin
+// (`renderCandidateDecisions`, "Is it the same product? Yes / No"): two
+// buttons, the same pending state, the same wording.
 //
-// ⚠ Fino al 22 agosto 2026 il sì era una **casella** e il no un **pulsante**:
-// una domanda sola, due modi di rispondere. La casella metteva un valore nello
-// stato e aspettava il salvataggio differito — nessuna attesa dichiarata,
-// nessun riscontro — mentre il pulsante agiva, aspettava e lo diceva. La forma
-// giusta ce l'aveva già il gemello di questa scheda
-// (`renderCandidateDecisions`, «È lo stesso prodotto? Sì / No»), e adesso è la
-// stessa: due pulsanti, la stessa attesa, le stesse parole.
-//
-// A risposta data la domanda non si ripropone: si dice che cosa è stato
-// risposto e si lascia una via per cambiare idea, che è esattamente come si
-// comporta il no nella griglia delle offerte.
+// A question that's already been answered isn't asked again: the page states
+// the answer and offers a way to change it, exactly like a rejection behaves
+// in the offer grid.
 function renderConfirmation(product) {
   if (!confirmationRequired(product) || orderQuantity(product) <= 0) return "";
   const offer = selectedOffer(product);
@@ -6149,9 +6040,9 @@ function renderConfirmation(product) {
         <strong>${escapeHtml(product.confirmed ? "È lo stesso articolo" : "È lo stesso articolo?")}</strong>
         <span>Richiesto: <strong>${escapeHtml(product.name)}</strong></span>
         ${offer?.description ? `<span>${escapeHtml(offer.supplierName)} propone: <strong>${escapeHtml(offer.description)}</strong></span>` : ""}
-        ${/* Il motivo è la cosa che serve per decidere: nascosto dietro «Perché
-             serve?» chiedeva di rispondere prima di sapere a che cosa. A
-             risposta già data non serve più: la domanda non è più aperta. */ ""}
+        ${/* The reason is what's needed to decide, so it's shown directly
+             rather than behind a "why?" disclosure. Not needed once the
+             question is already answered. */ ""}
         ${gia || `<p class="confirmation__why">${escapeHtml(confirmationMessageFor(product))}</p>`}
         ${mode === "demo" ? "" : product.confirmed ? `
         <p class="confirmation__risposte">
@@ -6162,33 +6053,30 @@ function renderConfirmation(product) {
           <span>Riapre la domanda: la conferma viene tolta e il prodotto torna fra quelli da confermare.</span>
         </p>` : `
         <p class="confirmation__risposte">
-          ${/* ⚠ Il sì per primo, e in evidenza: è la risposta che chiude la
-               domanda senza togliere niente a nessuno. */ ""}
+          ${/* "Yes" comes first and is the emphasized action: it closes the
+               question without removing anything. */ ""}
           <button type="button" class="button button--primary button--piccolo" data-action="conferma-abbinamento"
             data-focus-key="conferma-${escapeHtml(product.id)}"
             data-product-id="${escapeHtml(product.id)}" data-confermato="true"
             ${occupato ? "disabled" : ""}>${attendeIlSi ? "Attendere…" : "Sì, è lo stesso"}</button>
-          ${/* La seconda risposta possibile. Senza di lei la domanda ne ammetteva
-               una sola: chi non poteva confermare restava con la compilazione
-               ferma su «Conferma richiesta · bloccante», e le due uscite
-               apparenti — confermare lo stesso, o «Escludi dall'ordine» — sono un
-               ordine sbagliato e un prodotto che sparisce anche dall'elenco di
-               quelli da reperire, perché quello salta chi ha quantità zero.
-               In modalità dimostrativa i comandi non ci sono: il servizio non
-               risponde e un pulsante che dà errore ogni volta che lo si preme non
-               è una domanda. */ ""}
+          ${/* The "No" answer. Without it, the only ways out of a blocking
+               confirmation were confirming anyway or excluding the product
+               entirely — the first is a wrong order, the second drops it from
+               the "to be sourced" list too, since that list skips
+               zero-quantity items. Not shown in demo mode: the service
+               doesn't respond there, and a button that errors on every press
+               isn't a real question. */ ""}
           ${!offer ? "" : `
           <button type="button" class="button button--secondary button--piccolo" data-action="rifiuta-abbinamento"
             data-focus-key="rifiuto-${escapeHtml(product.id)}-${escapeHtml(offer.supplierId)}"
             data-product-id="${escapeHtml(product.id)}" data-supplier-id="${escapeHtml(offer.supplierId)}"
             aria-describedby="rifiuto-nota-${escapeHtml(product.id)}"
             data-rifiutata="true" ${occupato ? "disabled" : ""}>${
-              /* ⚠ Il pulsante si spegneva e basta: fra la pressione e la
-                 pagina rifatta — un salvataggio, la risposta e il confronto
-                 riletto — restava grigio senza dire che stava lavorando. Si
-                 aspetta con le stesse parole in tutti e due i versi, e si
-                 guarda QUESTA risposta: mentre un'altra scheda risponde, questo
-                 pulsante è spento ma non sta attendendo niente. */ ""
+              /* Shows a waiting state rather than just going gray between the
+                 click and the re-rendered page (a save, the response, the
+                 reread comparison). Checks THIS specific answer: while
+                 another card's answer is pending, this button is disabled
+                 but not itself waiting. */ ""
             }${attendeIlNo ? "Attendere…" : "No, non è lo stesso"}</button>
           <span id="rifiuto-nota-${escapeHtml(product.id)}">${escapeHtml(conseguenzaDelNo(product, offer))}</span>`}
         </p>`}
@@ -6196,31 +6084,28 @@ function renderConfirmation(product) {
     </div>`;
 }
 
-// Lo sconto di testata del fornitore, in percentuale. Il campo sta dove stanno
-// i suoi soldi — nella fascia dei totali — perché è lì che si vede l'effetto:
-// si scrive 6 e i prezzi di quel fornitore scendono ovunque, comprese le
-// assegnazioni, che il servizio rifà da sé sul più conveniente.
+// The supplier's blanket discount, as a percentage. Placed where its money
+// shows up — the totals strip — because that's where the effect is visible:
+// typing 6 drops that supplier's prices everywhere, including which supplier
+// wins each product, which the service recomputes on its own.
 function renderStickySupplierTotals() {
   const sconti = state.review?.supplierDiscounts || {};
   return `
     <aside class="supplier-totals-strip" aria-label="Totali ordine per fornitore">
       <span class="supplier-totals-strip__label">Totali ordine</span>
       ${supplierTotals().map((entry) => {
-        // Gia' un numero: lo riduce a percentuale `normalizeSupplierDiscounts`,
-        // che e' il posto dove i dati del servizio diventano dati della pagina.
-        // Rifare il conto qui vorrebbe dire due autorita' sullo stesso valore,
-        // e la seconda coprirebbe i difetti della prima senza dirlo.
+        // Already a plain number here: `normalizeSupplierDiscounts` converts
+        // it to a percentage, at the boundary where service data becomes page
+        // data. Recomputing it here would create a second authority on the
+        // same value.
         const sconto = sconti[entry.supplier.id] || 0;
         return `<span class="supplier-totals-strip__item${entry.total > 0 ? " is-active" : ""}${sconto ? " has-discount" : ""}">
           <span>${escapeHtml(entry.supplier.name)}</span>
           <strong>${formatEuro(entry.total)}</strong>
-          ${/* ⚠ L'etichetta e' visibile e non piu' solo in un `title`: il
-               suggerimento compare dopo un secondo di sosta del MOUSE, quindi
-               chi lavora con la tastiera o su tocco non lo vedeva mai. Restava
-               un `aria-label` per il lettore di schermo, e per l'occhio un
-               riquadrino con «−» e «%» attorno da cui dedurre. La dimensione
-               resta quella che e': e' una decisione scritta nel foglio di
-               stile, non una svista. */ ""}
+          ${/* The label is visible text, not just a `title` tooltip: a
+               tooltip only appears after the mouse hovers, so keyboard and
+               touch users never saw it before. The compact size is a
+               deliberate stylesheet decision, not an oversight. */ ""}
           <label class="supplier-discount" title="Sconto su tutto il listino di ${escapeHtml(entry.supplier.name)}">
             <span class="supplier-discount__etichetta">sconto</span>
             −<input class="supplier-discount__input" type="number" min="0" max="99" step="0.5" inputmode="decimal"
@@ -6231,11 +6116,10 @@ function renderStickySupplierTotals() {
           </label>
         </span>`;
       }).join("")}
-      ${/* Il totale stava in un badge dentro l'intestazione dell'elenco, che
-           scorre via alla prima rotellina. Qui resta sotto gli occhi mentre si
-           cambiano le quantità, che è quando lo si guarda. È la somma delle
-           voci qui accanto: non un numero in più, lo stesso numero in un posto
-           solo. */ ""}
+      ${/* Kept visible here, in the sticky strip, rather than in the list
+           header that scrolls out of view: this is exactly when it's looked
+           at, while quantities are being changed. It's the sum of the items
+           beside it — the same number, not a second one. */ ""}
       <span class="supplier-totals-strip__item supplier-totals-strip__item--totale">
         <span>Totale</span>
         <strong>${formatEuro(allOrderTotal())}</strong>
@@ -6243,31 +6127,25 @@ function renderStickySupplierTotals() {
     </aside>`;
 }
 
-// ⚠ Qui c'era la riga «Totale 3.450,88 € — le righe mostrate sommano
-// 3.450,87 €, 0,01 € in meno per gli arrotondamenti al centesimo», sotto il
-// totale di ogni fornitore e sotto quello generale. Daniele l'ha letta usando
-// il programma il 20 agosto 2026: «ti sembra utile in qualche modo, visto che
-// il totale è scritto di fianco al fornitore? INUTILE». Ha ragione — un
-// centesimo di scarto da arrotondamento non cambia nessuna decisione di chi
-// ordina, e occupava una riga proprio accanto al numero che invece conta.
-//
-// Il servizio locale continua a mandare `roundingDifference` in `orderSummary`
-// (server.py) e continua a essere provato lì: il dato resta per chi controlla
-// i conti a mano, non si stampa più sulla pagina.
+// No rounding-difference line under supplier and grand totals: a rounding
+// difference of a cent or two never changes an ordering decision, so it
+// would only take up a line next to the number that does matter. The local
+// service still sends `roundingDifference` in `orderSummary` (server.py) and
+// is still tested for it, for anyone reconciling totals by hand.
 
-// ⚠ L'elenco dei prodotti si richiude cliccando sul nome del fornitore, e il
-// suo subtotale resta in vista. Con cinquecento righe, per arrivare al
-// fornitore dopo si scorreva tutto quello che c'era in mezzo (Daniele, 22
-// agosto 2026, usando il programma).
+// Each supplier's product list collapses by clicking its name, with the
+// subtotal staying visible. With hundreds of rows, reaching the next
+// supplier otherwise meant scrolling past everything in between.
 //
-// Nasce APERTO — è come si legge oggi, e chiudere di suo un riepilogo
-// nasconderebbe la cosa che si è venuti a guardare — quindi la memoria deve
-// tenere il «chiuso», non l'«aperto»: la chiave sta in `state.aperti` come
-// tutte le altre, con `apribile(chiave, true)`. Senza, il riepilogo si
-// riaprirebbe da solo al primo cambio di quantità, che lo ridisegna tutto.
+// Starts OPEN — that's how it's normally read, and a summary that defaults
+// to closed would hide what the user came to look at — so the persisted
+// state has to track "closed", not "open": the key lives in `state.aperti`
+// like every other collapsible, via `apribile(chiave, true)`. Without that
+// inversion, the summary would reopen on its own on the next quantity
+// change, which re-renders everything.
 //
-// La chiave porta dentro l'identificativo del fornitore: due fornitori non si
-// aprono e chiudono insieme.
+// The key includes the supplier id, so two suppliers don't open and close
+// together.
 function renderSupplierSummary(entry) {
   if (!entry.products.length) return "";
   const reached = entry.minimumOrder <= 0 || entry.total >= entry.minimumOrder;
@@ -6277,9 +6155,9 @@ function renderSupplierSummary(entry) {
   });
   return `
     <details class="supplier-summary" ${apribile(`riepilogo-fornitore:${entry.supplier.id}`, true)}>
-      ${/* Il conto delle righe sta accanto al nome, ed è quello che dice che
-           cosa si sta nascondendo quando il riquadro è chiuso: chiuso si legge
-           «BETULLA · 12 righe · 340 unità d'ordine» e il suo totale. */ ""}
+      ${/* The row count sits next to the name and is what states what's
+           hidden when the panel is collapsed: closed, it still reads as
+           "supplier · N rows · N order units" plus its total. */ ""}
       <summary class="supplier-summary__head">
         <div class="supplier-summary__chi">
           <strong>${escapeHtml(entry.supplier.name)}</strong>
@@ -6305,19 +6183,20 @@ function renderSupplierSummary(entry) {
     </details>`;
 }
 
-// --- Sposta tutto su un altro fornitore (pagina 3) ------------------------
-// Il caso vero: "da Larice avrei fatto 200 euro, troppo poco, sposto i suoi
-// prodotti sul primo miglior altro venditore". La differenza di costo si vede
-// PRIMA di decidere, ma non la calcola il browser: ogni cifra mostrata qui
-// arriva da POST /api/suppliers/move-preview. Il numero di colli non cambia,
-// cambia solo il fornitore, quindi il prezzo e i pezzi effettivi.
+// --- Move everything to another supplier (page 3) --------------------------
+// The use case: a supplier's total is below the minimum order, so its
+// products get reassigned to the next best supplier for each one. The cost
+// difference is shown BEFORE the decision, but the browser doesn't compute
+// it: every figure here comes from `POST /api/suppliers/move-preview`. The
+// carton count stays the same; only the supplier changes, and with it the
+// price and the actual piece count.
 
-// I motivi arrivano dal servizio locale come codici: qui si traducono in
-// italiano corrente. Un codice sconosciuto non deve mai far sparire il nome del
-// prodotto, perciò c'è sempre una frase di ripiego.
-// Questi sono gli unici due motivi che il servizio locale emette davvero: se
-// qui compaiono chiavi che il programma non manda mai, il prodotto finisce
-// nella frase di riserva e l'utente non sa perché è rimasto dov'era.
+// Reasons arrive from the local service as codes and are translated here. An
+// unrecognized code must never hide the product's name, so there's always a
+// fallback sentence. These are the only two reason codes the local service
+// actually emits — if a code the service never sends were to appear as a key
+// here, the product would land in the fallback and the user wouldn't know
+// why it stayed put.
 const MOVE_LEFT_BEHIND_REASONS = {
   NESSUNA_OFFERTA: {
     supplier: "questo fornitore non ha il prodotto",
@@ -6383,9 +6262,9 @@ function normalizeMoveOption(option, index) {
     costPerPieceBefore: finiteNumber(option?.costPerPieceBefore, 0),
     costPerPieceAfter: finiteNumber(option?.costPerPieceAfter, 0),
     deltaCostPerPiece: finiteNumber(option?.deltaCostPerPiece, 0),
-    // Gli omaggi delle soglie: quanti se ne perdono e quanti se ne guadagnano.
-    // Il NUMERO lo conta il servizio locale con le regole delle promozioni; il
-    // valore dell'omaggio non si calcola, per decisione commerciale.
+    // Threshold gifts (free goods): how many are lost and gained. The local
+    // service counts them from the promotion rules; their monetary value is
+    // deliberately not computed.
     giftsBefore: Math.max(0, Math.trunc(finiteNumber(option?.giftsBefore, 0))),
     giftsAfter: Math.max(0, Math.trunc(finiteNumber(option?.giftsAfter, 0))),
     giftsLost: Math.max(0, Math.trunc(finiteNumber(option?.giftsLost, 0))),
@@ -6407,25 +6286,24 @@ function normalizeMovePreview(payload) {
     from: String(payload?.from ?? ""),
     fromName: String(payload?.fromName ?? ""),
     movableCount: Math.max(0, Math.trunc(finiteNumber(payload?.movableCount, 0))),
-    // Letto ma non mostrato: il contratto non dice se è il totale dell'ordine
-    // intero o del solo fornitore di partenza, e una cifra con l'etichetta
-    // sbagliata sarebbe peggio di una cifra in meno. Il totale del fornitore che
-    // si sta svuotando è già nel titolo, preso dalla scheda che l'utente vede.
+    // Read but not displayed: the contract doesn't say whether this is the
+    // whole order's total or just the source supplier's, and a figure with
+    // the wrong label would be worse than no figure. The source supplier's
+    // total is already in the dialog title, taken from the card the user sees.
     currentNetTotal: finiteNumber(payload?.currentNetTotal, 0),
-    // Una destinazione che non sposta niente non è una scelta: non si propone.
+    // A destination that moves nothing isn't a real choice, so it's dropped.
     options: asArray(payload?.options)
       .map(normalizeMoveOption)
       .filter((option) => option.movedCount > 0 && option.assignments.length > 0),
   };
 }
 
-// La differenza va mostrata anche quando è a favore. Il colore da solo non
-// basta: accanto alla cifra c'è sempre la frase che dice cosa significa.
-// La differenza di spesa DA SOLA inganna, ed è la stessa trappola del confronto
-// fra offerte: i colli di fornitori diversi non contengono lo stesso numero di
-// pezzi, quindi un'opzione che fa spendere meno può consegnare metà merce. Si
-// dicono sempre tutte e due le cose, e la parola "si risparmia" compare solo
-// quando la merce non cala.
+// The cost difference is shown even when it's favorable. Color alone isn't
+// enough: the figure is always paired with a sentence saying what it means.
+// The cost difference alone is misleading, the same trap as comparing offers:
+// cartons from different suppliers don't hold the same piece count, so an
+// option that costs less can deliver half the goods. Both are always stated
+// together, and "you save" only appears when the goods quantity doesn't drop.
 function moveDeltaParts(option) {
   const amount = finiteNumber(option?.deltaNet, 0);
   const pieces = Math.trunc(finiteNumber(option?.deltaPieces, 0));
@@ -6441,8 +6319,8 @@ function moveDeltaParts(option) {
   return { text, tone: "is-equal", words: "stessa spesa" };
 }
 
-// Il numero onesto per confrontare due opzioni è quanto costa ogni singolo
-// pezzo: è l'unico che non dipende da quanta merce contiene un collo.
+// The honest number for comparing two options is the cost per piece: the only
+// one that doesn't depend on how much a carton holds.
 function movePieceTexts(option) {
   const pieces = Math.trunc(finiteNumber(option?.deltaPieces, 0));
   const goods = pieces === 0
@@ -6452,12 +6330,12 @@ function movePieceTexts(option) {
   return { goods, unit };
 }
 
-// Le soglie sono il motivo per cui si sposta: si dice sempre, con il totale
-// ricevuto dal servizio locale, chi la raggiunge e chi no. Attenzione a
-// hadOrderBefore: il servizio dichiara "soglia raggiunta" anche per un
-// fornitore che non ordina niente, perché chi non ordina non è sotto soglia.
-// Senza quel controllo si finisce a scrivere che un fornitore partito da zero
-// "è sceso e non raggiunge più" una soglia che non aveva mai avuto.
+// Thresholds are the reason a move happens, so who reaches theirs and who
+// doesn't is always stated, using the total from the local service. Note
+// `hadOrderBefore`: the service reports "threshold met" even for a supplier
+// with no order at all, since a supplier that doesn't order isn't below
+// threshold. Without that check, a supplier that started at zero would be
+// reported as having "dropped below" a threshold it never had.
 function moveThresholdNotes(option) {
   return asArray(option?.supplierTotalsAfter)
     .filter((row) => row.threshold > 0)
@@ -6481,19 +6359,18 @@ function moveThresholdNotes(option) {
     .filter(Boolean);
 }
 
-// Gli omaggi che si perdono spostando la merce. Le soglie con omaggio si
-// raggiungono con l'ordine di UN fornitore: portando i prodotti altrove la
-// soglia salta, e finora il preventivo non lo diceva. Si dice il NUMERO degli
-// omaggi e mai il loro valore: quanto vale un omaggio non lo decide questo
-// programma (decisione commerciale del 12 agosto 2026).
+// Gifts lost by moving the goods elsewhere. A gift threshold is met against a
+// single supplier's order, so moving products away from it breaks the
+// threshold. Only the gift count is stated, never its value: what a gift is
+// worth is a commercial decision outside this program's scope.
 function moveGiftNotes(option) {
   const notes = [];
   const persi = Math.max(0, Math.trunc(finiteNumber(option?.giftsLost, 0)));
   const guadagnati = Math.max(0, Math.trunc(finiteNumber(option?.giftsGained, 0)));
-  // Il dettaglio per fornitore: «2 prima, 2 dopo» senza dire CHI li perde e
-  // chi li guadagna nascondeva uno scambio fra fornitori — sono merci
-  // diverse (revisione avversariale R4). Il servizio conta persi e
-  // guadagnati per fornitore, la pagina li mostra per fornitore.
+  // Per-supplier detail: "2 before, 2 after" without saying who loses and who
+  // gains hides a swap between suppliers of goods that aren't the same. The
+  // service counts losses and gains per supplier, and the page shows them
+  // per supplier.
   const movimenti = asArray(option?.supplierTotalsAfter)
     .filter((row) => Math.trunc(finiteNumber(row?.giftsBefore, 0)) !== Math.trunc(finiteNumber(row?.giftsAfter, 0)))
     .map((row) => `${row.supplierName || row.supplierId} ${formatInteger(finiteNumber(row.giftsBefore, 0))}→${formatInteger(finiteNumber(row.giftsAfter, 0))}`)
@@ -6516,8 +6393,8 @@ function moveGiftNotes(option) {
 
 function moveLeftBehindText(option, fromName) {
   if (!option.leftBehind.length) return "";
-  // I prodotti che restano indietro si dicono per nome: un numero da solo non
-  // permette di capire che cosa si sta lasciando dov'era.
+  // Products left behind are named individually: a bare count wouldn't say
+  // what's staying where it was.
   const names = option.leftBehind
     .map((item) => `${item.productName || "prodotto senza nome"} (${moveLeftBehindReason(item.reason, option.kind)})`)
     .join("; ");
@@ -6535,16 +6412,15 @@ function selectedSupplierMoveOption() {
   return preview.options.find((option) => option.id === state.supplierMove.choiceId) || null;
 }
 
-// Il comando sta su ogni scheda fornitore. ⚠ Sotto soglia diventava blu, cioè
-// il primario della pagina 3, e con quattro fornitori sotto soglia sarebbero
-// stati quattro pulsanti primari contro il vero passo successivo, che è
-// «Compila i listini». Adesso resta secondario e a segnalare la soglia è il
-// colore del riquadro (`is-below`).
+// The command sits on every supplier card and stays secondary even below
+// threshold: making it primary there would mean one primary button per
+// under-threshold supplier, competing with the real next step, "Compila i
+// listini" (fill in the price lists). The threshold is signaled by the
+// card's own color (`is-below`) instead.
 //
-// La frase è una sola e dice che cosa fa il comando. Quella di prima —
-// «Con BETULLA il minimo d'ordine di 1000,00 € non è raggiunto» — ripeteva
-// l'intestazione della scheda, due righe più su, che scrive già «mancano
-// 25,65 € al minimo d'ordine».
+// The caption is one sentence stating what the command does; it doesn't
+// restate the card's header two lines above, which already states the
+// amount missing to reach the minimum order.
 function renderSupplierMoveCommand(entry) {
   const belowThreshold = entry.minimumOrder > 0 && entry.total > 0 && entry.total < entry.minimumOrder;
   return `
@@ -6561,10 +6437,10 @@ function renderSupplierMoveOption(option, fromName) {
   const delta = moveDeltaParts(option);
   const pieceTexts = movePieceTexts(option);
   const leftBehindText = moveLeftBehindText(option, fromName);
-  // Le note sulle soglie si mostrano TUTTE, comprese quelle che avvisano che la
-  // soglia resta non raggiunta: nasconderle lasciava in vista solo le buone
-  // notizie, e la soglia è il motivo per cui si sta spostando. Con loro vanno
-  // gli omaggi persi, che della soglia sono la conseguenza.
+  // All threshold notes are shown, including the ones warning that a
+  // threshold stays unmet: hiding those would leave only good news visible,
+  // and the threshold is the reason for the move. Lost gifts are shown
+  // alongside them, since they're a consequence of the same threshold.
   const notes = [...moveGiftNotes(option), ...moveThresholdNotes(option)];
   return `
     <label class="move-option${selected ? " is-selected" : ""}">
@@ -6593,9 +6469,9 @@ function renderSupplierMoveDetails(option) {
       <summary>Vedi prodotto per prodotto</summary>
       <ul class="move-details__list">
         ${option.assignments.map((assignment) => {
-          // Un espositore si ordina a espositori: scrivere "colli" qui sopra un
-          // espositore è la stessa confusione che il servizio ha appena smesso
-          // di fare sui numeri.
+          // A display is ordered by the display, not the carton: labeling it
+          // "colli" here would repeat the same confusion the service's own
+          // numbers just avoided.
           const unitaPlurale = findProduct(assignment.productId)?.orderUnitLabel || "colli";
           const unitaSingolare = orderUnitSingular(unitaPlurale);
           return `
@@ -6620,9 +6496,9 @@ function renderSupplierMoveBody(fromName) {
     return '<div class="loading-inline"><span class="spinner" aria-hidden="true"></span><span>Sto calcolando quanto costerebbe spostarli…</span></div>';
   }
   if (mode === "demo") {
-    // Nell'esempio non c'è un servizio locale a cui chiedere il preventivo, e le
-    // differenze non le inventa il browser: si dice com'è invece di mostrare
-    // numeri finti.
+    // In demo mode there's no local service to ask for a preview, and the
+    // browser doesn't invent the numbers: it says so instead of showing fake
+    // figures.
     return '<div class="empty-state empty-state--small"><div><strong>Non disponibile nell’esempio</strong><p>Le differenze di costo le calcolo sui listini veri: apri il comparatore senza l’esempio per usare questo comando.</p></div></div>';
   }
   if (move.error) {
@@ -6673,8 +6549,8 @@ function renderSupplierMoveDialog() {
     </div>`;
 }
 
-// Dopo lo spostamento: si dice che cosa è successo, si dice se una destinazione
-// ha raggiunto la soglia e si lascia il comando per tornare indietro.
+// After a move: states what happened, whether a destination reached its
+// threshold, and leaves a way to undo it.
 function renderSupplierMoveUndo() {
   const undo = state.supplierMoveUndo;
   if (!undo) return "";
@@ -6692,11 +6568,11 @@ function renderSupplierMoveUndo() {
     </div>`;
 }
 
-// L'annullo del «×» del riepilogo. Sta accanto a quello dello spostamento fra
-// fornitori, in cima alla pagina 3 e non dentro l'elenco: la riga da cui il
-// prodotto è appena sparito non esiste più, e una barra infilata nell'elenco
-// farebbe scorrere quello che si sta guardando. In cima resta ferma e non
-// spinge giù il pulsante «Compila», che sta in fondo.
+// Undo for the summary's "x" removal. Sits next to the supplier-move undo, at
+// the top of page 3 rather than inside the list: the row the product just
+// disappeared from is already gone, and a bar inserted into the list would
+// scroll past what's being looked at. Fixed at the top, it doesn't push down
+// the "Compila" button at the bottom.
 function renderRimozioneUndo() {
   const undo = state.rimozioneUndo;
   if (!undo) return "";
@@ -6718,12 +6594,10 @@ function safeDownloadUrl(value) {
   }
 }
 
-// writerIssues e historyIssues arrivano dal servizio locale da un pezzo e la
-// pagina non li leggeva: l'unico segnale era quello che il backend infilava
-// dentro `message`, stampato accanto al pulsante verde «Scarica i listini
-// pronti per l'invio». Una compilazione che ha scartato una copia, o che non è
-// entrata fra gli ordini da controllare la settimana prossima, non è una
-// compilazione pienamente riuscita e non va presentata come tale.
+// `writerIssues` and `historyIssues` come from the local service and are
+// shown separately from `message`: a compilation that discarded a copy, or
+// that didn't make it into next week's orders to review, isn't a full
+// success and shouldn't be presented as one.
 function renderCompileIssues(titolo, voci) {
   const elenco = asArray(voci).map((voce) => userFacingText(voce)).filter(Boolean);
   if (!elenco.length) return "";
@@ -6734,8 +6608,8 @@ function renderCompileIssues(titolo, voci) {
     </div>`;
 }
 
-// La compilazione andata male. Le scelte sono salvate e il pulsante qui sopra
-// riprova davvero: la frase può dirlo senza mentire.
+// A failed compilation. The choices are already saved and the retry button
+// above genuinely retries, so the message can say so without overstating.
 function renderCompileFailure() {
   const guasto = state.compileFailure;
   if (!guasto) return "";
@@ -6752,32 +6626,25 @@ function renderCompileFailure() {
     </div>`;
 }
 
-// «Premo Compila i listini e non succede niente»: il pulsante si spegne e per
-// alcuni secondi la pagina non dice altro, quindi non sembra un programma che
-// lavora — sembra un programma rotto, e la reazione naturale è premere di
-// nuovo (Daniele, 22 agosto 2026).
+// A disabled button with no other feedback for several seconds reads as
+// broken rather than busy, and invites a second press.
 //
-// ⚠ La barra è INDETERMINATA di proposito, e non è un ripiego: la scrittura
-// vera la fa un processo Node (`scripts/write_supplier_orders.mjs`) che non
-// riporta avanzamenti. Una percentuale qui sarebbe inventata. Quello che
-// serve dire è «sto lavorando», e una barra che si muove lo dice; per quanto
-// manchi non c'è nessuno da cui prendere la risposta, e infatti la frase non
-// lo promette. ⚠ E non lo spiega nemmeno: il perché non manca la stima è una
-// cosa che serve a chi legge questo codice — sta scritta qui — non a chi sta
-// in negozio davanti alla schermata. A lui servono tre cose: sto lavorando,
-// non chiudere, non premere di nuovo. La frase dice quelle, e in più dice
-// dove guardare fra un attimo, che è dove comparirà l'esito.
+// The bar is deliberately indeterminate, not a shortfall: the actual write
+// runs in a Node process (`scripts/write_supplier_orders.mjs`) that reports
+// no progress, so a percentage here would be fabricated. What the operator
+// needs is three things: it's working, don't close the window, don't press
+// again. The message says exactly that, plus where the result will appear.
 //
-// La catena del ricalcolo ha invece una percentuale vera (`avanzamento.percento`)
-// perché conta le fasi: se un giorno il writer dichiarasse le sue, questa barra
-// diventerebbe quella. Fino ad allora, no.
+// The recompute pipeline has a real percentage (`avanzamento.percento`)
+// because it counts phases. If the writer ever reports its own progress,
+// this bar can switch to that; until then it stays indeterminate.
 function renderCompileProgress(quante) {
   if (!state.compiling) return "";
   return `
     <div class="compile-progress">
       <div class="compile-progress__bar" role="progressbar" aria-label="Compilazione dei listini in corso"></div>
-      ${/* La frase è quello che resta a chi ha chiesto meno movimento, dove la
-           barra non c'è: deve reggere da sola. */ ""}
+      ${/* For a reduced-motion preference, the bar itself doesn't animate, so
+           this sentence is the only signal and has to carry it alone. */ ""}
       <p class="compile-progress__nota" role="status">Sto scrivendo ${escapeHtml(contati(quante, "copia", "copie"))} del listino. Non chiudere il programma: quando ho finito te lo dico qui sotto.</p>
     </div>`;
 }
@@ -6785,25 +6652,21 @@ function renderCompileProgress(quante) {
 function renderCompileResult() {
   if (!state.compileResult) return renderCompileFailure();
   const outputs = asArray(state.compileResult.outputs);
-  // ⚠ Qui c'era anche un elenco di errori **per fornitore**, tradotto da un
-  // codice (`FORNITORE_SENZA_COPIA`) che il servizio locale non ha mai mandato:
-  // una compilazione riuscita non ha errori per fornitore, perché o si compila
-  // tutto o `run_writer` si ferma e la risposta è un guasto (vedi
-  // `renderCompileFailure`). Tolto il 17 agosto 2026: era codice vivo solo nel
-  // suo test, e quello che davvero arriva sta in `writerIssues`.
+  // A successful compilation has no per-supplier errors: either everything
+  // compiles, or `run_writer` stops and the response is a failure (see
+  // `renderCompileFailure`). What actually arrives here is `writerIssues`.
   const writerIssues = asArray(state.compileResult.writerIssues).map((voce) => userFacingText(voce)).filter(Boolean);
-  // Gli avvisi della consegna: il documento c'è ed è giusto, ma qualcosa attorno
-  // non è andato — di solito il nome leggibile che non si è potuto dare perché
-  // il file era aperto. Prima stavano solo dentro `message` e il riquadro
-  // restava verde, come se fosse andato tutto liscio.
+  // Delivery warnings: the document exists and is correct, but something
+  // around it didn't go as planned — usually the human-readable name that
+  // couldn't be set because the file was open.
   const deliveryIssues = asArray(state.compileResult.deliveryIssues).map((voce) => userFacingText(voce)).filter(Boolean);
   const historyIssues = asArray(state.compileResult.historyIssues).map((voce) => userFacingText(voce)).filter(Boolean);
   const parziale = Boolean(writerIssues.length || deliveryIssues.length || historyIssues.length);
-  // Il pulsante della consegna compare soltanto quando il servizio locale manda
-  // uno zip: senza listini non c'è niente da consegnare, e un pulsante che
-  // scarica un 404 è peggio di nessun pulsante. È un <a download> e non un
-  // <button>: funziona senza altro JavaScript e l'indirizzo si legge nella barra
-  // di stato prima di premerlo.
+  // The delivery button only appears once the local service sends a zip:
+  // with no price lists there's nothing to deliver, and a button that
+  // downloads a 404 is worse than no button. It's an `<a download>`, not a
+  // `<button>`: it works without further JavaScript, and the URL is visible
+  // in the status bar before it's clicked.
   const zipUrl = safeDownloadUrl(state.compileResult.zipUrl);
   const titolo = parziale
     ? "I listini sono stati preparati, ma non tutto è andato a buon fine."
@@ -6823,9 +6686,9 @@ function renderCompileResult() {
     </div>`;
 }
 
-// Gli stati che l'audit registra. Un valore che non è in tabella si mostra
-// com'è arrivato: inventare una traduzione nasconderebbe un cambio del
-// contratto invece di farlo vedere.
+// States the audit records. A value missing from this table is shown as-is:
+// inventing a translation would hide a contract change instead of
+// surfacing it.
 const STATI_COMPILAZIONE = {
   FILES_READY: "listini pronti",
   PLAN_READY: "solo il piano, nessun listino",
@@ -6834,16 +6697,17 @@ const STATI_COMPILAZIONE = {
 
 const TIPI_FILE_COMPILAZIONE = {
   listino: "listino pronto",
-  // Senza questa voce il file comparirebbe nell'elenco senza dire che cos'è, e
-  // un foglio chiamato «Prodotti da reperire» in mezzo ai listini si scambia
-  // per un listino — cioè per qualcosa da mandare a un fornitore.
+  // Without this entry the file would list with no label, and a sheet named
+  // "Prodotti da reperire" among price lists could be mistaken for one —
+  // i.e. for something to send to a supplier.
   da_reperire: "prodotti da cercare altrove",
   piano: "piano dell’ordine",
   altro: "altro documento",
 };
 
-// La riga di dettaglio sotto la data. I numeri arrivano dal servizio locale e si
-// stampano come sono: il browser non ricalcola né totali né righe.
+// The detail line under the date. The numbers come from the local service
+// and are printed as-is: the browser recomputes neither totals nor row
+// counts.
 function compilazioneMeta(voce) {
   const parti = [];
   const righe = voce?.righe;
@@ -6862,9 +6726,10 @@ function renderCompilazioneFile(documento) {
   return `<li>${url ? `<a href="${escapeHtml(url)}" download>${escapeHtml(nome)}</a>` : escapeHtml(nome)}${tipo ? `<span class="compilazione__tipo">${escapeHtml(tipo)}</span>` : ""}</li>`;
 }
 
-// Una compilazione dell'elenco. La voce con `completa: false` — l'audit non si
-// legge — si mostra lo stesso e lo dichiara: la cartella esiste, i suoi file si
-// scaricano, e nasconderla farebbe sparire dei listini che invece ci sono.
+// One compilation in the list. An entry with `completa: false` — its audit
+// couldn't be read — is still shown, and says so: the folder exists, its
+// files can be downloaded, and hiding it would make real price lists
+// disappear from view.
 function renderCompilazione(voce) {
   const cartella = String(voce?.cartella || "");
   const etichetta = String(voce?.etichetta || cartella || "Compilazione senza data");
@@ -6874,10 +6739,10 @@ function renderCompilazione(voce) {
   const documenti = asArray(voce?.file);
   const zipNome = String(voce?.zipNome || "");
   const zipUrl = safeDownloadUrl(voce?.zipUrl);
-  // I documenti che la compilazione aveva prodotto e che nella cartella non ci
-  // sono più: quasi sempre è l'utente che li ha spostati per allegarli a una
-  // mail. Va detto lo stesso, perché altrimenti chi cerca un listino di due
-  // settimane fa non capisce se l'ha spostato lui o se il programma l'ha perso.
+  // Documents the compilation produced that are missing from its folder:
+  // almost always because the user moved them to attach to an email. Stated
+  // anyway, or someone looking for a two-week-old price list can't tell
+  // whether they moved it or the program lost it.
   const mancanti = asArray(voce?.mancanti);
   const confirming = state.compilazioni.confermaElimina === cartella;
   const deleting = state.compilazioni.eliminando === cartella;
@@ -6907,16 +6772,16 @@ function renderCompilazione(voce) {
     </li>`;
 }
 
-// Passo 3: le compilazioni già fatte, dalla più recente. L'ordine è quello che
-// manda il servizio locale, che legge le date sul disco.
+// Step 3: compilations already made, most recent first. The order comes from
+// the local service, which reads the dates on disk.
 function renderCompilazioniPrecedenti() {
   if (mode === "demo") return "";
   const storico = state.compilazioni;
   const voci = asArray(storico.elenco);
-  // Finché la prima risposta non è arrivata l'elenco è vuoto perché non l'ha
-  // ancora letto nessuno, non perché non ci siano compilazioni: dire «nessuna
-  // compilazione registrata» a chi ne ha appena fatte dieci sarebbe una bugia
-  // lunga il tempo di una richiesta.
+  // Until the first response arrives, the list is empty because nothing has
+  // read it yet, not because there are no compilations: saying "no
+  // compilation recorded" to someone who just made ten would be wrong for as
+  // long as the request takes.
   const inAttesa = storico.inCorso || (!storico.caricate && !storico.errore);
   return `
     <details class="panel compilazioni-panel" data-compilazioni ${storico.aperta ? "open" : ""}>
@@ -7026,12 +6891,11 @@ function renderPromotionSummary() {
   return `
     <section class="panel promotion-summary-panel">
       <div class="panel__header">
-        ${/* ⚠ Tre numeri e nient'altro erano tre motivi per agire senza un modo
-             di agire: «Ci manca poco: 3» non dice di quali fornitori parla
-             ne' porta da nessuna parte. La versione utile della stessa
-             informazione esiste gia', ed e' in pagina 2 — «Offerte a portata di
-             mano», con il comando «Mostra i prodotti». La riga qui sotto dice
-             dove andare a farci qualcosa. */ ""}
+        ${/* Three bare numbers would be three reasons to act with no way to act
+             on them: "3 close" doesn't say which suppliers or lead anywhere.
+             The useful version of the same information already lives on
+             page 2, in "Offerte a portata di mano" with its "Mostra i
+             prodotti" command. The line below points there. */ ""}
         <div><h3>Offerte, omaggi e campioncini</h3><p>Il conteggio segue le quantità e i fornitori che hai scelto. Gli omaggi non riducono il totale dell’ordine. Per quelle a cui manca poco torna a «Scegli prodotti e fornitori», riquadro «Offerte a portata di mano»: lì c’è il comando.</p></div>
         ${renderBadge(`${formatInteger(promotions.length)} condizioni lette`, "info")}
       </div>
@@ -7050,25 +6914,19 @@ function renderCompileStep() {
   const belowThreshold = activeTotals.filter((entry) => entry.minimumOrder > 0 && entry.total > 0 && entry.total < entry.minimumOrder);
   const issues = collectIssues();
   const blockers = issues.filter((issue) => issue.blocking);
-  // ⚠ Qui si leggevano 81 avvisi. Ottanta erano di prodotto — «Possibile
-  // prodotto CIPRESSO» trentanove volte, e trentadue «Nessuna offerta
-  // utilizzabile» (il titolo di allora: oggi è «Nessun fornitore ce l'ha») —
-  // e sono gli stessi che stanno sulla scheda di ogni prodotto in pagina 2,
-  // dove c'è il pulsante per rispondere. Due righe di riepilogo li contano già
-  // — «Prodotti che nessun fornitore ha» e «Proposte da controllare» — e
-  // dicono con quale filtro si trovano, anzi dal 20 agosto 2026 ci portano con
-  // un comando: ripeterli uno per uno qui non aggiungeva un'azione,
-  // aggiungeva ottanta scatole da scorrere per arrivare ai numeri dell'ordine.
-  // Restano gli avvisi che riguardano l'ordine intero — i riepiloghi, i minimi
-  // d'ordine, le righe di listino lette con riserva — e i bloccanti, che
-  // restano nominati prodotto per prodotto nel riquadro sopra.
+  // Per-product notices already live on each product's card in page 2, next
+  // to the button that answers them, and two summary lines here already
+  // count them with a link to that filter. Repeating them one by one on this
+  // page would add scrolling, not an action. Only order-wide notices stay
+  // here — summaries, minimum-order thresholds, price-list rows read with
+  // caveats — plus the blockers, which stay named product by product in the
+  // panel above.
   const notices = issues.filter((issue) => !issue.blocking && !issue.productId);
   const hasOrders = orderedProducts().length > 0;
-  // ⚠ Non si compila mentre la catena sta ricalcolando. Il servizio adesso lo
-  // rifiuta, e il pulsante deve dirlo PRIMA: finche' la fase 9 non sostituisce
-  // il confronto, quello che si compilerebbe sono i listini di quello di
-  // prima — prezzi della settimana scorsa — mentre in pagina 1 una barra dice
-  // che si sta aggiornando. Basta far partire il ricalcolo e venire qui.
+  // Compiling is blocked while the pipeline is recomputing. The service
+  // rejects it, and the button has to say so beforehand: until phase 9
+  // replaces the comparison, compiling would write the previous run's price
+  // lists — last week's prices — while page 1 shows an update in progress.
   const ricalcoloInCorso = pipelineInCorso();
   const canCompile = hasOrders
     && blockers.length === 0
@@ -7078,16 +6936,15 @@ function renderCompileStep() {
 
   return `
     ${pageHeading("3. Riepilogo e compilazione", "Controlla prodotti, quantità, fornitori, subtotali e minimi d’ordine prima di creare i listini.")}
-    ${/* La stessa fascia della pagina 2, nello stesso punto: subito sotto il
-         titolo, agganciata in alto. Qui serve di più che di là — è la pagina in
-         cui si decide se l'ordine si manda, e i subtotali sparivano alla prima
-         rotellina, dentro schede di fornitore alte quanto i loro prodotti.
-         È il componente, non una copia: un totale scritto due volte in due
-         posti è un totale che prima o poi dice due numeri.
-         ⚠ Si aggancia a `top: calc(3rem + 4px)`, sotto la barra dei passi.
-         In questa pagina non c'è nient'altro di agganciato in alto — le sole
-         due quote del foglio sono quella barra e questa fascia — quindi non si
-         sovrappone a niente; quello che le scorre sotto passa e basta. */ ""}
+    ${/* Same sticky strip as page 2, same position: right under the heading.
+         It matters more here — this is the page that decides whether the
+         order ships — since supplier cards can run as tall as their product
+         list, and without this the subtotals would scroll out of view. It's
+         the same component, not a copy: a total printed in two places
+         eventually shows two different numbers.
+         Sticks at `top: calc(3rem + 4px)`, under the step bar. Nothing else
+         on this page pins to the top, so the two never overlap; everything
+         else just scrolls underneath. */ ""}
     ${renderStickySupplierTotals()}
     ${renderCambiamentoDocumenti()}
     ${renderSupplierMoveUndo()}
@@ -7107,10 +6964,10 @@ function renderCompileStep() {
 
     <section class="compile-card compile-card--bottom">
       <div>
-        ${/* «Pronto per creare i listini?» era una domanda a cui rispondeva il
-             pulsante due righe sotto, e «I documenti originali restano
-             invariati» è la stessa promessa scritta in testa alla pagina 1.
-             Resta la frase che dice la cosa che nessun altro dice. */ ""}
+        ${/* The heading doesn't ask a question the button below already
+             answers, and doesn't repeat "the original documents stay
+             untouched" — already stated at the top of page 1. It states
+             only what nothing else on the page says. */ ""}
         <h3>Compilazione dei listini</h3>
         <p>Creo una copia del listino di ogni fornitore, con le quantità che hai scelto. <strong class="no-send-message">Nessun ordine viene inviato.</strong></p>
       </div>
@@ -7118,37 +6975,33 @@ function renderCompileStep() {
         <span>Totale dell’ordine</span>
         <strong>${formatEuro(allOrderTotal())}</strong>
       </div>
-      ${/* Quante copie, e per chi. E' l'unica azione della pagina che lascia un
-           segno fuori dal programma, e prima di premere non si sapeva quanti
-           documenti tra un attimo sarebbero esistiti. Solo conteggio e nomi:
-           i subtotali per fornitore stanno gia' nel riquadro qui sopra, e da
-           li' sono stati tolti ottanta avvisi duplicati proprio per non far
-           leggere due volte la stessa cosa. */ ""}
+      ${/* How many copies, and for whom. The only action on this page that
+           leaves a mark outside the program, and before pressing it
+           there's no way to know how many documents are about to exist.
+           Just the count and names: per-supplier subtotals already live in
+           the panel above, so they aren't repeated here. */ ""}
       ${activeTotals.length ? `<p class="compile-card__copie">${escapeHtml(`${activeTotals.length === 1 ? "Sarà creata" : "Saranno create"} ${contati(activeTotals.length, "copia", "copie")}: ${elencoNomi(activeTotals.map((entry) => entry.supplier.name))}.`)}</p>` : ""}
       ${belowThreshold.length ? `
         <label class="confirmation">
           <input type="checkbox" data-below-threshold-confirm data-focus-key="sotto-minimo" ${state.acceptBelowThreshold ? "checked" : ""}>
           <span><strong>Confermo gli ordini sotto il minimo.</strong> ${escapeHtml(belowThreshold.map((entry) => entry.supplier.name).join(", "))}: i listini saranno preparati anche se il minimo d’ordine non è raggiunto.</span>
         </label>` : ""}
-      ${/* Era verde e in maiuscolo, e sopra al riepilogo c'era un altro
-           pulsante blu («Sposta tutto su un altro fornitore», in evidenza sotto
-           il minimo d'ordine): due comandi che si contendevano l'occhio, e
-           quello che grida non era il passo successivo — questo lo è. Il blu è
-           lo stesso delle pagine 1 e 2, così «il comando principale» si legge
-           allo stesso modo in tutte e tre. */ ""}
-      ${/* ⚠ A compilazione riuscita questo pulsante restava blu, largo e acceso
-           SOPRA il riquadro dell'esito, mentre il passo successivo — scaricare
-           lo zip da portare al fornitore — era il pulsante piu' piccolo e piu'
-           in basso. Il piu' grande, in alto, ricompila e crea un'altra cartella
-           datata. Due comandi primari nella stessa schermata, nel punto in cui
-           il lavoro finisce. Fatta la compilazione, questo diventa un comando di
-           contorno e dice la conseguenza invece del passo. */ ""}
+      ${/* The button above ("Sposta tutto su un altro fornitore") is also blue
+           and highlighted when a supplier is below threshold, but it isn't
+           the next step — this is. This one uses the same blue as pages 1
+           and 2, so "the primary action" reads the same way across all
+           three. */ ""}
+      ${/* Once the compilation succeeds, this button turns secondary rather
+           than staying primary and highlighted above the result panel: the
+           real next step is downloading the zip below, while this one only
+           recompiles and creates another dated folder. Two primary actions
+           at the point where the work ends would compete for attention. */ ""}
       <button class="button button--${state.compileResult ? "secondary" : "primary"} button--wide" type="button" data-action="compile" ${canCompile ? "" : "disabled"}>
         ${state.compiling ? "Compilazione in corso…" : ricalcoloInCorso ? "Il confronto si sta aggiornando…" : state.compileResult ? "Rifai i listini" : "Compila i listini"}
       </button>
       ${ricalcoloInCorso ? `<p class="compile-card__copie">Quando il confronto ha finito di aggiornarsi, il comando torna: adesso i listini nascerebbero con i prezzi di prima.</p>` : ""}
-      ${/* Sotto il pulsante, dove l'occhio è appena stato: sopra sarebbe
-           comparsa mezza schermata più in su di dove si è premuto. */ ""}
+      ${/* Below the button, where the eye just was: above it would appear
+           half a screen higher than where it was pressed. */ ""}
       ${renderCompileProgress(activeTotals.length)}
       ${renderCompileResult()}
     </section>
@@ -7161,11 +7014,11 @@ function renderCompileStep() {
 
 // --- Pagina Impostazioni ---------------------------------------------------
 
-// Le voci che si cambiano da qui, con il nome che legge una persona e la
-// spiegazione di che cosa succede se le si sposta. L'elenco è lo stesso di
-// VOCI_IMPOSTAZIONI nel servizio locale: quello che non è scritto qui non è
-// una preferenza ma un componente del programma — la versione del prompt, per
-// esempio, è stata scelta misurando quanti ALTA sbagliati produce.
+// The settings changeable here, each with a human-readable label and what
+// changing it does. Matches `VOCI_IMPOSTAZIONI` in the local service:
+// anything not listed here isn't a preference but a fixed part of the
+// program — the prompt version, for instance, is chosen by measuring how
+// many wrong high-confidence acceptances it produces.
 const LIMITI_AI = [
   {
     nome: "tetto_spesa_usd",
@@ -7212,8 +7065,8 @@ function modelloNellElenco() {
   return state.impostazioni.modelli.elenco.find((voce) => voce.id === identificativo) || null;
 }
 
-// I prezzi di OpenRouter sono per singolo token: al milione diventano numeri
-// che una persona può confrontare a occhio.
+// OpenRouter charges by the token; scaled to a per-million rate, the price
+// becomes a number a person can actually compare.
 function prezzoDelModello(modello) {
   const ingresso = finiteNumber(modello.prezzo_ingresso) * 1e6;
   const uscita = finiteNumber(modello.prezzo_uscita) * 1e6;
@@ -7253,11 +7106,12 @@ function renderSettingsKeyPanel() {
         La chiave viene salvata sul computer, in ${escapeHtml(state.impostazioni.percorsoChiave || "app/data/secrets.json")}, perché il programma deve poterla usare da solo la prossima volta.
         Dal servizio locale non torna mai indietro: di una chiave salvata questa pagina vede soltanto le ultime quattro lettere. Il campo si svuota appena la chiave è inviata.
       </p>
-      ${/* Secondario, e non primario: in questa pagina i pulsanti blu erano due —
-           questo a meta' e «Salva modello e limiti» in fondo — e nessuno dei
-           due salva quello che salva l'altro. Il primario di una pagina e' uno,
-           ed e' quello in fondo, dove sta in tutte e tre le pagine del lavoro.
-           L'etichetta dice gia' che cosa salva, quindi non cambia. */ ""}
+      ${/* Secondary, not primary: this page has two distinct save actions —
+           this one and "Salva modello e limiti" at the bottom — and neither
+           saves what the other does. A page has one primary action, and
+           it's the one at the bottom, in the same place across all three
+           pages of the workflow. Its label already says what it saves, so
+           it doesn't change. */ ""}
       <div class="button-row">
         <button class="button button--secondary" type="button" data-action="salva-chiave" ${bloccato || !state.impostazioni.nuovaChiave ? "disabled" : ""}>
           ${state.impostazioni.salvandoChiave ? "Salvataggio…" : "Salva la chiave"}
@@ -7423,11 +7277,11 @@ function rerenderPreservingFocus() {
   }
 }
 
-// Le due fasce di annullo che riguardano le quantita' — il «×» del riepilogo e
-// l'azzeramento in blocco — non possono restare disponibili dopo che l'utente ha
-// rimesso mano ai numeri: premerle riscriverebbe quello che ha appena scritto.
-// È la stessa ragione per cui `goToStep()` invalida l'annullo dello spostamento
-// fra fornitori, con il commento che lo dice.
+// The two quantity-related undo bars — the summary's "x" removal and the
+// bulk reset — can't stay available once the user has touched the numbers
+// again: pressing them would overwrite what was just typed. Same reason
+// `goToStep()` invalidates the supplier-move undo, as its own comment
+// states.
 function scadonoGliAnnulliDiQuantita() {
   state.rimozioneUndo = null;
   state.azzeramentoUndo = null;
@@ -7443,9 +7297,10 @@ function invalidateCompilationAcceptance() {
   state.compileFailure = null;
 }
 
-// Il numero di colli resta invariato quando si cambia fornitore, ma se il nuovo
-// fornitore ha pezzi per collo diversi la merce effettiva cambia a parità di colli
-// digitati: evidenzia la scheda per qualche secondo e lo dichiara esplicitamente.
+// The carton count stays the same when the supplier changes, but if the new
+// supplier packs a different number of pieces per carton, the actual goods
+// delivered change at the same typed carton count: this highlights the card
+// for a few seconds and states it explicitly.
 function flagSupplierFactorChange(product, previousOffer, newOffer) {
   const quantity = orderQuantity(product);
   const label = quantity === 1 ? orderUnitSingular(product.orderUnitLabel) : product.orderUnitLabel;
@@ -7468,15 +7323,14 @@ function flagSupplierFactorChange(product, previousOffer, newOffer) {
 
 function goToStep(step) {
   const nextStep = Math.min(3, Math.max(1, finiteNumber(step, 1)));
-  // Chi tocca un passo del flusso sta uscendo dalle impostazioni, anche se non
-  // ha premuto "Torna al lavoro": la chiave incollata e non salvata se ne va con
-  // la pagina.
+  // Touching any step of the flow leaves the settings page, even without
+  // pressing "Torna al lavoro": a pasted, unsaved key goes away with it.
   state.impostazioni.aperta = false;
   state.impostazioni.nuovaChiave = "";
   if (nextStep !== state.currentStep) {
-    // Fuori dal riepilogo il preventivo di spostamento non ha più senso, e
-    // l'annulla non può restare disponibile dopo modifiche fatte a mano: si
-    // ripristinerebbero assegnazioni che nel frattempo l'utente ha cambiato.
+    // Outside the summary page the move preview stops making sense, and
+    // its undo can't stay available after manual changes: undoing it would
+    // restore assignments the user has since changed.
     state.supplierMove = emptySupplierMove();
     state.supplierMoveUndo = null;
     scadonoGliAnnulliDiQuantita();
@@ -7484,19 +7338,19 @@ function goToStep(step) {
   const cambiaPasso = nextStep !== state.currentStep;
   state.currentStep = nextStep;
   state.runtimeError = "";
-  // ⚠ Solo se il passo cambia davvero.  Premere «Riepilogo e compilazione»
-  // mentre ci si e' gia' sopra — cioe' premere per sbaglio la voce accesa della
-  // barra — buttava via `compileResult`, e con lui spariva «Scarica i listini»:
-  // il collegamento ai documenti appena creati, nel momento in cui il lavoro
-  // era finito. Restava cercarli fra le compilazioni precedenti.
+  // Only when the step actually changes. Pressing the already-active step in
+  // the bar — e.g. a mis-click on "Riepilogo e compilazione" while already
+  // there — must not discard `compileResult`: that's what makes "Scarica i
+  // listini" disappear, right when the download link to the just-created
+  // documents is needed most.
   if (cambiaPasso) state.compileResult = null;
   scheduleSave();
   render();
-  // All'ingresso nella pagina 2 si chiedono gli ordini ancora da ricevere: la
-  // risposta arriva dopo e ridisegna solo se serve.
+  // Entering page 2 requests the orders still awaiting delivery; the
+  // response arrives later and re-renders only if needed.
   if (nextStep === 2) loadPendingOrders();
-  // All'ingresso nel riepilogo si chiede l'elenco delle compilazioni già fatte:
-  // è lì che si ritrovano i listini di una settimana fa.
+  // Entering the summary page requests the list of compilations already
+  // made: that's where a week-old price list is found again.
   if (nextStep === 3) loadCompilazioni();
   document.querySelector("#workspace")?.focus({ preventScroll: true });
   window.scrollTo({ top: 0, behavior: "smooth" });
@@ -7506,9 +7360,9 @@ function acceptedFile(file) {
   return /\.(xlsx|xls|csv)$/i.test(file.name);
 }
 
-// Perché quel documento è rimasto fuori, detto a chi lo ha trascinato. Il caso
-// più frequente è il formato, ma un file senza estensione non ne ha uno da
-// nominare e «non è un .xlsx» sarebbe una risposta a una domanda diversa.
+// Why a document was rejected, stated to whoever dragged it in. The usual
+// cause is the format, but a file with no extension has none to name, and
+// "not a .xlsx" would answer a different question.
 function motivoDelloScarto(nome) {
   const punto = String(nome || "").lastIndexOf(".");
   const estensione = punto > 0 ? String(nome).slice(punto).toLowerCase() : "";
@@ -7518,8 +7372,9 @@ function motivoDelloScarto(nome) {
 }
 
 function addPendingFiles(fileList, role = "suppliers") {
-  // Durante il ricalcolo aggiungere documenti non è un'attesa, è un risultato
-  // diverso: il trascinamento va rifiutato come i pulsanti, e con la stessa frase.
+  // Adding documents during a recompute isn't a wait, it's a different
+  // outcome: the drop is rejected just like the buttons are, with the same
+  // message.
   if (pipelineInCorso()) {
     showToast("Il confronto è in corso: i documenti si caricano appena ha finito.", "error");
     return;
@@ -7528,18 +7383,18 @@ function addPendingFiles(fileList, role = "suppliers") {
   const rejected = incoming.filter((file) => !acceptedFile(file));
   if (rejected.length) {
     showToast(`${rejected.length === 1 ? "Ignorato" : "Ignorati"} ${contati(rejected.length, "documento", "documenti")}: il formato non è riconosciuto.`, "error");
-    // ⚠ Il messaggio a comparsa resta, ma smette di essere l'unico posto in cui
-    // l'informazione esiste: viveva 3,6 secondi, non nominava i file, e chi non
-    // lo leggeva in tempo faceva il confronto senza un fornitore — cioè mandava
-    // l'ordine a chi costa di più. Uno scarto che non si conta non è una
-    // scelta: è una perdita di dati.
+    // The transient toast stays, but isn't the only record anymore: it faded
+    // in under four seconds, never named the files, and anyone who missed it
+    // ran the comparison without a supplier — i.e. paid more without
+    // noticing. A rejection that isn't tracked isn't a choice, it's lost
+    // data.
     const gia = new Set(state.fileScartati.map((voce) => voce.chiave));
     for (const file of rejected) {
-      // ⚠ I file nascosti non si elencano. Trascinando una cartella dal Finder
-      // arriva anche il `.DS_Store` che macOS ci semina dentro: non e' un
-      // listino che l'utente voleva caricare, e comparire fra i «documenti
-      // rimasti fuori» con una spiegazione sbagliata («senza estensione»)
-      // sarebbe rumore su una riga che deve dire solo cose che contano.
+      // Hidden files aren't listed. Dragging a folder from Finder also drags
+      // in the `.DS_Store` macOS leaves behind: not a price list the user
+      // meant to upload, and showing it among "rejected documents" with a
+      // misleading reason ("no extension") would be noise on a line meant
+      // to say only what matters.
       if (String(file.name || "").startsWith(".")) continue;
       const chiave = `${role}:${file.name}:${file.size}`;
       if (gia.has(chiave)) continue;
@@ -7570,8 +7425,9 @@ async function fileToBase64(file) {
 async function uploadFiles(role = "suppliers") {
   const selectedEntries = state.pendingFiles.filter((entry) => entry.role === role);
   if (!selectedEntries.length || state.uploading) return;
-  // Il pulsante è già spento durante il ricalcolo: questa è la stessa regola
-  // detta dove conta, cioè prima di mandare i documenti al servizio locale.
+  // The button is already disabled during a recompute; this is the same
+  // rule enforced where it matters, right before sending documents to the
+  // local service.
   if (pipelineInCorso()) {
     showToast("Il confronto è in corso: i documenti si caricano appena ha finito.", "error");
     return;
@@ -7602,12 +7458,11 @@ async function uploadFiles(role = "suppliers") {
       for (const { file } of selectedEntries) {
         files.push({ name: file.name, data: await fileToBase64(file), role });
       }
-      // ⚠ Il salvataggio PRIMA della richiesta, per la ragione scritta per
-      // esteso in `abbinaLaRiga`: finito il caricamento la pagina rilegge il
-      // confronto e SOSTITUISCE quello in pagina, e una quantità scritta meno di
-      // 450 ms fa — o rimasta indietro dopo un salvataggio fallito — se ne
-      // andrebbe con lui, cioè un ordine sbagliato senza che niente lo dica (6
-      // settembre 2026). Con lo stato pulito `saveState()` torna vero subito.
+      // Save BEFORE the request, same reason as `abbinaLaRiga`: once the
+      // upload finishes, the page rereads the comparison and REPLACES what's
+      // in the page, and a quantity written moments ago — or one left behind
+      // by a failed save — would go with it, silently producing a wrong
+      // order. With clean state, `saveState()` returns immediately.
       const saved = await saveState();
       if (!saved) throw new Error("Le modifiche correnti non sono ancora state salvate.");
       const result = await requestJson(API.upload, {
@@ -7634,17 +7489,17 @@ async function uploadFiles(role = "suppliers") {
 }
 
 // --------------------------------------------------------------------------
-// Il ricalcolo del confronto (pagina 1)
+// Recomputing the comparison (page 1)
 // --------------------------------------------------------------------------
 
-// Un secondo: la catena deterministica dura venticinque secondi in tutto e la
-// fase AI un paio di minuti, quindi è il ritmo con cui la barra si muove senza
-// che le richieste diventino un carico.
+// One second: the deterministic pipeline takes about 25 seconds in total and
+// the AI phase a couple of minutes, so this is a poll rate that moves the
+// bar without turning the requests into load.
 const RITMO_PIPELINE_MS = 1000;
-// Quante richieste di stato di fila possono andare a vuoto prima di dirlo. Una
-// sola non è una notizia — il servizio locale può essere occupato un istante —
-// cinque di fila, al ritmo qui sopra, sono cinque secondi di barra ferma senza
-// una spiegazione.
+// How many consecutive failed status checks before saying so. One alone
+// isn't news — the local service can be briefly busy — but five in a row,
+// at the poll rate above, is five seconds of a stalled bar with no
+// explanation.
 const CONTROLLI_PERSI_PRIMA_DI_DIRLO = 5;
 
 function resetSchemaMapping() {
@@ -7668,48 +7523,48 @@ function initializeSchemaMapping(payload) {
     const haFattore = Boolean(proposta.columns?.pieces_per_carton);
     valori[String(documento.profileId || "")] = {
       role: proposta.role === "master" ? "master" : "supplier",
-      // ⚠ Niente ripiego su «__new__»: quando il servizio non propone nessun
-      // fornitore la tendina resta su «Scegli il fornitore…». Preselezionare
-      // qualcosa — un fornitore vero o «Nuovo fornitore…» — vuol dire che
-      // premere Conferma senza guardare fa comunque qualcosa, e quel qualcosa
-      // è stato sostituire il listino BETULLA con un foglio di offerte.
+      // No fallback to "__new__": when the service suggests no supplier, the
+      // dropdown stays on "Scegli il fornitore…". Preselecting anything — a
+      // real supplier or "Nuovo fornitore…" — would mean pressing Confirm
+      // without looking still does something, silently mapping the file to
+      // the wrong supplier.
       supplierChoice: String(proposta.supplierId || ""),
       supplierName: "",
       sheet: proposta.sheet || documento.sheets?.[0]?.name || "",
       headerRow: Number(proposta.headerRow || 1),
       dataStartRow: Number(proposta.dataStartRow || Number(proposta.headerRow || 1) + 1),
-      // Nessun separatore e' scelto in partenza: la regola la conferma
-      // l'utente, guardando la riga nell'anteprima. Una regola indovinata dal
-      // programma sarebbe peggio del numero che sostituisce.
+      // No row-break rule is chosen by default: the user confirms it by
+      // looking at the preview row. A rule guessed by the program would be
+      // worse than the number it replaces.
       dataStartBreak: "",
       markerText: "",
       columns: { ...(proposta.columns || {}) },
       orderColumn: proposta.orderColumn || "",
       factorMode: haFattore ? "column" : "fixed",
       piecesPerCartonDefault: 1,
-      // Vuoto vuol dire «ogni riga porta la sua offerta», che è come scrivono
-      // quasi tutti: non è un valore mancante, è il predefinito, e il servizio
-      // lo intende così. Indovinare la forma guardando il file sarebbe peggio
-      // del numero che sostituisce.
+      // Empty means "each row carries its own offer", the layout almost
+      // every supplier uses: not a missing value but the default, and the
+      // service treats it the same way. Guessing the layout from the file
+      // would be worse than the value it replaces.
       commercialLayout: "",
-      // I valori della colonna «Disponibilità» li scrive l'utente guardando il
-      // suo listino: qui non c'è niente da indovinare, e la voce c'è fin
-      // dall'inizio perché «hai del lavoro da perdere» confronta questi stessi
-      // valori con quelli di adesso.
+      // The "Disponibilità" column's values are typed by the user after
+      // looking at their price list; there's nothing to guess here, and the
+      // field starts populated because the unsaved-work check compares
+      // these same values against the current ones.
       availableValues: "",
     };
   }
   state.schemaMapping.data = payload;
   state.schemaMapping.loadedRunId = String(payload.runId || "");
   state.schemaMapping.values = valori;
-  // Com'erano appena caricati: serve a sapere se chi esce sta buttando via
-  // qualcosa oppure sta solo tornando indietro.
+  // The values as just loaded, so the app can tell whether leaving discards
+  // something or is just going back.
   state.schemaMapping.valoriIniziali = JSON.stringify(valori);
   state.schemaMapping.chiedendoUscita = false;
   state.schemaMapping.results = {};
 }
 
-// Chi ha toccato qualcosa dentro «Rivedi le colonne» ha del lavoro da perdere.
+// Anyone who's touched anything inside "Rivedi le colonne" has unsaved work.
 function colonneDaSalvare() {
   if (!state.schemaMapping.valoriIniziali) return false;
   return JSON.stringify(state.schemaMapping.values) !== state.schemaMapping.valoriIniziali;
@@ -7733,11 +7588,11 @@ async function loadSchemaMapping() {
   }
 }
 
-// --- Rivedere le colonne di un listino già caricato -----------------------
-// Il selettore è lo stesso della mappatura guidata; cambia da dove arriva
-// l'anteprima e che cosa succede alla conferma. Qui non riparte niente: la
-// mappatura diventa una decisione scritta, e la usa il prossimo confronto —
-// che lo lancia l'utente.
+// --- Reviewing an already-uploaded price list's columns -------------------
+// Same selector as the guided mapping; what differs is where the preview
+// comes from and what confirming does. Nothing restarts here: the mapping
+// becomes a saved decision, used by the next comparison, which the user
+// triggers.
 
 function colonneAperteAMano() {
   return Boolean(state.schemaMapping.documento);
@@ -7752,8 +7607,8 @@ async function apriColonneDocumento(nome) {
   try {
     const payload = await requestJson(`${API.colonneDocumento}?nome=${encodeURIComponent(nome)}`);
     initializeSchemaMapping(payload);
-    // ⚠ Dopo `initializeSchemaMapping`, che azzera lo stato: senza questa riga
-    // la schermata si chiuderebbe da sola appena finito di aprirsi.
+    // After `initializeSchemaMapping`, which resets the state: without this
+    // line the screen would close itself right after opening.
     state.schemaMapping.documento = nome;
   } catch (error) {
     state.schemaMapping.error = error.message || "Non sono riuscito ad aprire l’anteprima.";
@@ -7764,11 +7619,10 @@ async function apriColonneDocumento(nome) {
 }
 
 function chiudiColonneDocumento({ confermato = false } = {}) {
-  // ⚠ «Torna ai documenti» buttava via tutto quello che si era impostato, in
-  // silenzio e senza dirlo nell'etichetta: foglio, riga d'intestazione, colonne
-  // una per una — dieci campi compilati guardando il file — e si tornava
-  // indietro con niente. Adesso, se c'e' del lavoro da perdere, la domanda si
-  // fa qui: una riga, come per «Inizia nuova comparazione», non una finestra.
+  // "Torna ai documenti" would otherwise silently discard everything set —
+  // sheet, header row, columns filled in one by one by looking at the file.
+  // When there's unsaved work, the confirmation happens here: one line,
+  // like "Inizia nuova comparazione", not a dialog.
   if (!confermato && colonneDaSalvare()) {
     state.schemaMapping.chiedendoUscita = true;
     render();
@@ -7806,12 +7660,11 @@ async function salvaColonneDocumento() {
   state.schemaMapping.error = "";
   render();
   try {
-    // ⚠ Il salvataggio PRIMA della richiesta, per la ragione scritta per
-    // esteso in `abbinaLaRiga`: qui sotto `loadReview()` rilegge il confronto
-    // e SOSTITUISCE quello in pagina, e una quantità scritta meno di 450 ms fa
-    // — o rimasta indietro dopo un salvataggio fallito — se ne andrebbe con
-    // lui, cioè un ordine sbagliato senza che niente lo dica (6 settembre
-    // 2026). Con lo stato pulito `saveState()` torna vero subito.
+    // Save BEFORE the request, same reason as `abbinaLaRiga`: `loadReview()`
+    // below rereads the comparison and REPLACES what's in the page, and a
+    // quantity written moments ago — or one left behind by a failed save —
+    // would go with it, silently producing a wrong order. With clean state,
+    // `saveState()` returns immediately.
     const saved = await saveState();
     if (!saved) throw new Error("Le modifiche correnti non sono ancora state salvate.");
     const risposta = await requestJson(API.colonneSalva, {
@@ -7853,15 +7706,15 @@ function schemaMappingPayload() {
         columns,
         orderColumn: valore.orderColumn ? Number(valore.orderColumn) : "",
         piecesPerCartonDefault,
-        // Si manda sempre, anche vuoto, per la stessa ragione della riga qui
-        // sotto: il servizio deve poter distinguere «la colonna c'è ma non mi
-        // hai detto quali valori valgono» — che rifiuta — da una mappatura in
-        // cui la disponibilità non c'entra (6 settembre 2026).
+        // Always sent, even when empty, for the same reason as the field
+        // below: the service must be able to tell "the column exists but
+        // you haven't said which values count" — which it rejects — from a
+        // mapping where availability doesn't apply at all.
         availableValues: String(valore.availableValues || ""),
-        // Si manda sempre, anche vuoto: è la dichiarazione che senza colonna
-        // non produce niente e con la colonna dice come sono scritte. Senza
-        // questo campo il servizio non guarderebbe nemmeno la colonna scelta,
-        // e «dove scrive le sue offerte» sarebbe una domanda senza effetto.
+        // Always sent, even when empty: it declares that with no column it
+        // produces nothing, and with a column it states how promotions are
+        // written. Without this field the service wouldn't even look at the
+        // chosen column, and picking one would have no effect.
         commercialConditions: { layout: String(valore.commercialLayout || "") },
       };
     }),
@@ -7928,11 +7781,12 @@ function fermaPollingPipeline() {
 
 async function avviaRicalcolo() {
   if (pipelineInCorso()) return;
-  // ⚠ E nemmeno due volte mentre la prima richiesta e' in volo. Il doppio clic
-  // — che su questo pulsante e' il gesto piu' naturale del mondo, perche' non
-  // succede niente per un secondo — mandava due richieste: il servizio avviava
-  // la prima e rispondeva 409 alla seconda, e la pagina mostrava «Il confronto
-  // non e' partito» mentre il confronto stava partendo davvero.
+  // Also guards against a second click while the first request is still in
+  // flight. A double click here is the natural reaction to a button that
+  // shows no feedback for a second, and without this guard it would send
+  // two requests: the service starts the first and answers 409 to the
+  // second, showing "Il confronto non e' partito" while the comparison is
+  // actually running.
   if (state.pipeline.avviando) return;
   state.pipeline.avviando = true;
   resetSchemaMapping();
@@ -7967,12 +7821,12 @@ async function avviaRicalcolo() {
   }
 }
 
-// A che punto e' il ricalcolo, detto a chi non vede la barra. Scrive dentro
-// `#avanzamento-annuncio`, che sta in `index.html`, e' fermo e non viene mai
-// distrutto da `render()`: e' l'unico modo in cui `aria-live` funziona davvero
-// — un elemento che resta e un testo che cambia. Scrivere sempre lo stesso
-// testo farebbe ripetere l'annuncio a ogni giro, quindi si scrive solo quando
-// cambia.
+// Where the recompute stands, for anyone who can't see the bar. Writes into
+// `#avanzamento-annuncio`, in `index.html`, which is static and never
+// destroyed by `render()`: that's the only way `aria-live` actually works —
+// an element that persists with text that changes. Writing the same text
+// every time would repeat the announcement on every poll, so it only writes
+// when the text changes.
 function annunciaAvanzamento(stato) {
   const regione = document.querySelector("#avanzamento-annuncio");
   if (!regione) return;
@@ -7994,11 +7848,11 @@ async function controllaPipeline() {
   try {
     stato = await requestJson(API.pipelineStato);
   } catch (error) {
-    // Un controllo perso non è un ricalcolo perso: la catena gira nel servizio
-    // locale, non nella pagina. Si riprova al giro dopo — ma se i controlli
-    // persi diventano molti, la barra resta ferma all'ultima percentuale per
-    // sempre e l'utente aspetta un ricalcolo di cui nessuno sa più niente.
-    // Dopo la soglia si dichiara, e si continua comunque a riprovare.
+    // A missed status check isn't a lost recompute: the pipeline runs in the
+    // local service, not in the page. It retries on the next poll — but if
+    // misses pile up, the bar would stay frozen at the last percentage
+    // forever while the user waits on a recompute nobody can report on.
+    // Past the threshold it says so, and keeps retrying regardless.
     state.pipeline.controlliPersi += 1;
     if (state.pipeline.controlliPersi >= CONTROLLI_PERSI_PRIMA_DI_DIRLO) {
       state.pipeline.contattoPerso = `L'avanzamento qui sotto è fermo a prima: non riesco più a sapere a che punto è (${error.message}). Il confronto continua per conto suo; riprovo da solo, e se non riparte chiudi e riapri il comparatore.`;
@@ -8026,8 +7880,8 @@ async function controllaPipeline() {
       state.runtimeError = `Il confronto è stato aggiornato ma la pagina non è riuscita a rileggerlo: ${error.message}`;
     }
   } else if (String(stato.stato || "") === "ERRORE") {
-    // Il messaggio dipende dal perché si è fermato: quando è una questione di
-    // colonne c'è un modo di ripartire subito, ed è quello che va detto.
+    // The message depends on why it stopped: when it's a column-mapping
+    // issue there's a way to restart right away, and that's what gets said.
     if (schemaMappingRequired(stato)) {
       showToast("Un listino ha colonne che non conosco: indicamele qui sotto e riparto.", "error");
       loadSchemaMapping();
@@ -8038,21 +7892,20 @@ async function controllaPipeline() {
   render();
 }
 
-// --- Le quattro finestre, con un comportamento solo ------------------------
-// Sono quattro — la colonna d'ordine, il visualizzatore listini, il catalogo e
-// lo spostamento fra fornitori — e tutte e quattro dichiarano
-// `aria-modal="true"`. Fino a oggi la promessa era fatta quattro volte e
-// mantenuta zero: Esc chiudeva le prime due e non le altre due, solo il
-// catalogo portava il fuoco dentro all'apertura, nessuna lo restituiva al
-// comando che l'aveva aperta, nessuna si chiudeva cliccando sullo sfondo.
+// --- The four dialogs, one shared behavior ---------------------------------
+// Four dialogs — the order column, the price-list viewer, the catalog, and
+// the supplier move — all declare `aria-modal="true"`, so all four need to
+// honor it the same way: Esc closes, focus moves in on open and back to the
+// opener on close, and a click on the backdrop closes it too. This array is
+// what makes that one shared behavior instead of four separate ones.
 //
-// L'ordine dell'elenco è quello del markup, dalla finestra più in alto alla più
-// in basso: `render()` aggiunge la colonna d'ordine DOPO il contenuto di
-// qualunque pagina, quindi è sempre l'ultima disegnata e la prima a chiudersi.
+// The list order matches the markup, top dialog to bottom: `render()`
+// appends the order column after any page's content, so it's always drawn
+// last and closes first.
 //
-// `primiCampi` è una cascata, non un selettore: una finestra che sta ancora
-// caricando non ha il proprio campo, e in quel caso il fuoco va sul suo «×» —
-// che è comunque dentro la finestra, non dietro.
+// `primiCampi` is a fallback chain, not a single selector: a dialog still
+// loading has no field of its own yet, and focus falls back to its "×",
+// which is inside the dialog either way.
 const FINESTRE = [
   {
     aperta: () => Boolean(state.colonnaOrdine.aperta),
@@ -8080,16 +7933,16 @@ function finestraInCima() {
   return FINESTRE.find((finestra) => finestra.aperta()) || null;
 }
 
-// Chi ha aperto la finestra, per rimetterci il fuoco quando si chiude. Si
-// registra la `data-focus-key` del comando, non il nodo: il nodo lo distrugge
-// il primo `render()`.
+// Who opened the dialog, to return focus there on close. Stores the
+// opener's `data-focus-key`, not the node itself: the node gets destroyed
+// by the next `render()`.
 function ricordaChiApreLaFinestra() {
   state.fuocoPrimaDellaFinestra = String(document.activeElement?.dataset?.focusKey || "");
 }
 
-// ⚠ `setTimeout(…, 0)`: l'attributo `autofocus` non viene onorato sui nodi
-// inseriti con `innerHTML`, ed è esattamente il motivo per cui il catalogo
-// faceva già così nonostante l'`autofocus` scritto nel suo markup.
+// `setTimeout(…, 0)`: the `autofocus` attribute isn't honored on nodes
+// inserted via `innerHTML`, which is why the catalog needs this even though
+// its markup already declares `autofocus`.
 function portaIlFuocoDentro(selettori) {
   window.setTimeout(() => {
     for (const selettore of selettori) {
@@ -8102,10 +7955,10 @@ function portaIlFuocoDentro(selettori) {
   }, 0);
 }
 
-// Alla chiusura il fuoco torna dov'era. Se il comando che aveva aperto la
-// finestra nel frattempo non c'è più — «Sfoglia il listino» dopo che
-// l'abbinamento a mano ha cambiato la scheda del prodotto — si ripiega su
-// `#workspace`, che è dove `goToStep()` porta già il fuoco a ogni cambio pagina.
+// On close, focus returns to where it was. If the command that opened the
+// dialog is gone by then — "Sfoglia il listino" after a manual match has
+// changed the product's card — this falls back to `#workspace`, where
+// `goToStep()` already sends focus on every page change.
 function restituisciIlFuoco() {
   const chiave = state.fuocoPrimaDellaFinestra;
   if (chiave === null) return;
@@ -8113,26 +7966,26 @@ function restituisciIlFuoco() {
   window.setTimeout(() => {
     const comando = chiave ? document.querySelector(`[data-focus-key="${CSS.escape(chiave)}"]`) : null;
     comando?.focus({ preventScroll: true });
-    // ⚠ «Esiste nel DOM» non vuol dire «puo' prendere il fuoco». Il comando puo'
-    // stare dentro un `<details>` chiuso — «Sfoglia il listino X» sta dentro il
-    // riquadro del confronto — e allora `querySelector` lo trova, `focus()` non
-    // fa niente e il fuoco resta su `<body>`: il Tab riparte dall'inizio della
-    // pagina, cioe' il difetto che questa funzione esiste per chiudere. Si
-    // guarda dove il fuoco e' finito davvero, non dove lo si e' mandato.
+    // Being in the DOM doesn't mean it can take focus. The command can sit
+    // inside a closed `<details>` — "Sfoglia il listino X" is inside the
+    // comparison panel — so `querySelector` finds it, `focus()` does
+    // nothing, and focus stays on `<body>`, restarting Tab from the top of
+    // the page. This checks where focus actually landed, not where it was
+    // sent.
     if (comando && document.activeElement === comando) return;
     document.querySelector("#workspace")?.focus({ preventScroll: true });
   }, 0);
 }
 
-// Esc e il clic sullo sfondo passano tutti e due di qui.
+// Both Esc and a click on the backdrop go through here.
 function chiudiLaFinestraInCima() {
   const finestra = finestraInCima();
   if (!finestra) return false;
-  // ⚠ Il ritorno del fuoco NON sta qui ma dentro le quattro funzioni di
-  // chiusura. Da qui passano Esc, il «×» e il clic sullo sfondo; le tre azioni
-  // primarie — salvare la colonna d'ordine, aggiungere un prodotto dal
-  // catalogo, eseguire lo spostamento — chiudono per conto loro, e chi le usa
-  // con la tastiera perdeva il segno esattamente come prima della correzione.
+  // Focus return does NOT live here, it lives in each of the four close
+  // functions. Esc, the "×" and a backdrop click all pass through here, but
+  // the three primary actions — saving the order column, adding a catalog
+  // product, applying the move — close their own dialog directly, and need
+  // the same focus handling a keyboard user relies on.
   finestra.chiudi();
   return true;
 }
@@ -8239,13 +8092,12 @@ async function addCatalogProduct(productId) {
         });
       }
     } else {
-      // ⚠ PRIMA il salvataggio, poi la richiesta. Qui sotto il confronto viene
-      // riletto dal servizio e SOSTITUISCE quello in pagina: una quantità
-      // scritta meno di 450 ms fa — o rimasta indietro perché un salvataggio è
-      // fallito e sta per riprovare — non è ancora sul disco, e quella rilettura
-      // se la porta via. Il salvataggio successivo consolida il numero vecchio,
-      // cioè un ordine sbagliato, senza che niente lo dica (6 settembre 2026).
-      // Con lo stato pulito `saveState()` torna vero subito e non costa niente.
+      // Save BEFORE the request. Below, the comparison is reread from the
+      // service and REPLACES what's in the page: a quantity written less
+      // than 450 ms ago — or left behind by a failed save about to retry —
+      // isn't on disk yet, and that reread would discard it, silently
+      // persisting the stale number as the real order. With clean state,
+      // `saveState()` returns immediately at no cost.
       if (!(await saveState())) throw new Error("Le modifiche non sono ancora salvate: riprova fra un momento.");
       const result = await requestJson(API.productAdd, {
         method: "POST",
@@ -8283,8 +8135,8 @@ function excludeProduct(product) {
     selectedSupplierId: product.selectedSupplierId,
     confirmed: product.confirmed,
   };
-  // La stessa cosa che tiene la fascia, ma dove non scade: la fascia è una
-  // sola e la prossima esclusione la sostituisce.
+  // Holds the same data as the undo bar, but doesn't expire: there's only
+  // one bar, and the next exclusion replaces it.
   state.sceltePrimaDellEsclusione.set(product.id, {
     quantity: orderQuantity(product),
     selectedSupplierId: product.selectedSupplierId || "",
@@ -8308,18 +8160,17 @@ function restoreProduct(product, previous = null) {
     product.confirmed = previous.confirmed;
   }
   persistExcludedProducts();
-  // ⚠ Solo se la fascia parla di QUESTO prodotto: rimetterne uno faceva sparire
-  // l'annullo di un altro appena escluso, e quello e' il lavoro di qualcun
-  // altro.
+  // Only when the undo bar is about THIS product: restoring one must not
+  // clear the undo for a different product excluded right after it.
   if (state.exclusionUndo && state.exclusionUndo.id === product.id) state.exclusionUndo = null;
   invalidateCompilationAcceptance();
   scheduleSave();
   render();
 }
 
-// Chiede al servizio locale quanto costerebbe spostare tutti i prodotti di un
-// fornitore. È solo un preventivo: finché l'utente non conferma non cambia
-// niente, e nessun prezzo viene calcolato qui.
+// Asks the local service what it would cost to move all of a supplier's
+// products elsewhere. Just a preview: nothing changes until the user
+// confirms, and no price is computed here.
 async function openSupplierMove(supplierId) {
   const entry = supplierTotals().find((candidate) => candidate.supplier.id === supplierId);
   if (!entry || !entry.products.length) return;
@@ -8342,12 +8193,12 @@ async function openSupplierMove(supplierId) {
       body: JSON.stringify({ ...snapshot(), from: supplierId }),
     });
     if (payload?.ok === false) throw new Error(payload.message || "Il servizio locale non ha calcolato le alternative.");
-    // Nel frattempo la finestra può essere stata chiusa o riaperta su un altro
-    // fornitore: una risposta in ritardo non deve sovrascrivere quella giusta.
+    // The dialog may have been closed or reopened on a different supplier
+    // by now: a late response must not overwrite the right one.
     if (state.supplierMove.from !== requested) return;
     const preview = normalizeMovePreview(payload);
     state.supplierMove.preview = preview;
-    // Predefinita: la migliore alternativa per ciascun prodotto.
+    // Default: the best alternative for each product.
     state.supplierMove.choiceId = (preview.options.find((option) => option.kind === "best") || preview.options[0])?.id || "";
   } catch (error) {
     if (state.supplierMove.from !== requested) return;
@@ -8367,9 +8218,10 @@ function closeSupplierMove() {
   restituisciIlFuoco();
 }
 
-// Applica la scelta: cambia SOLO il fornitore dei prodotti indicati dal
-// preventivo. Quantità, esclusioni e origine della quantità restano come sono; le
-// conferme no, perché una conferma data su un'offerta non vale per un'altra.
+// Applies the choice: changes ONLY the supplier of the products named by
+// the preview. Quantity, exclusion state and quantity origin stay as they
+// are; confirmations don't, because a confirmation given for one offer
+// doesn't carry over to another.
 function applySupplierMove() {
   const option = selectedSupplierMoveOption();
   if (!option) return;
@@ -8388,8 +8240,8 @@ function applySupplierMove() {
     product.selectedSupplierId = assignment.toSupplierId;
     product.confirmed = false;
     const newOffer = selectedOffer(product);
-    // Stessi colli ma pezzi per collo diversi: la scheda va evidenziata come nel
-    // cambio di fornitore singolo.
+    // Same carton count but a different pieces-per-carton: the card gets
+    // highlighted the same way as a single supplier change.
     if (assignment.factorChanged && previousOffer && newOffer) {
       flagSupplierFactorChange(product, previousOffer, newOffer);
     }
@@ -8410,9 +8262,9 @@ function applySupplierMove() {
     confirmationCount: option.assignments.filter((assignment) => assignment.needsConfirmation).length,
     previous,
   };
-  // Se il riepilogo era filtrato proprio sul fornitore appena svuotato, la sua
-  // scheda non esiste più: si torna a mostrare tutti i fornitori, altrimenti
-  // resterebbe una pagina vuota senza spiegazione.
+  // If the summary was filtered to the supplier just emptied out, its card
+  // is gone: falls back to showing all suppliers, or the page would be
+  // empty with no explanation.
   const emptied = state.supplierMove.from;
   if (state.summary.supplierId === emptied
     && !supplierTotals().some((entry) => entry.supplier.id === emptied && entry.products.length)) {
@@ -8427,8 +8279,8 @@ function applySupplierMove() {
   document.querySelector(".move-undo")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-// Ripristina esattamente le assegnazioni e le conferme di prima dello
-// spostamento, sullo stile dell'annulla dell'esclusione.
+// Restores exactly the assignments and confirmations from before the move,
+// the same pattern as the exclusion undo.
 function undoSupplierMove() {
   const undo = state.supplierMoveUndo;
   if (!undo) return;
@@ -8437,7 +8289,7 @@ function undoSupplierMove() {
     if (!product) continue;
     product.selectedSupplierId = entry.selectedSupplierId;
     product.confirmed = entry.confirmed;
-    // Gli avvisi sui pezzi per collo riguardavano lo spostamento annullato.
+    // The pieces-per-carton notices belonged to the move being undone.
     const timer = state.supplierChangeTimers.get(entry.id);
     if (timer) window.clearTimeout(timer);
     state.supplierChangeTimers.delete(entry.id);
@@ -8500,34 +8352,36 @@ async function compileOrders() {
         body: JSON.stringify(snapshot()),
       });
       if (result.ok === false) throw new Error(result.message || "Il servizio locale non ha compilato i listini.");
-      // La compilazione riscrive tutto lo stato, e senza la versione nuova lo
-      // `scheduleSave()` qui sotto verrebbe rifiutato: la raccoglie
-      // `requestJson` per tutti, non serve farlo qui.
+      // Compiling rewrites the whole state, and without the new version the
+      // `scheduleSave()` below would be rejected; `requestJson` already
+      // captures it for every call, so there's nothing to do here.
       state.compileResult = result;
     }
     state.currentStep = 3;
     scheduleSave();
-    // La compilazione appena fatta è la prima voce dello storico: senza questa
-    // richiesta il riquadro «Compilazioni precedenti» resterebbe indietro di una
-    // e sembrerebbe che la cartella nuova non sia stata creata.
+    // The compilation just made is the newest entry in the history: without
+    // this request, the "Compilazioni precedenti" panel would be one behind
+    // and look like the new folder was never created.
     loadCompilazioni();
-    // ⚠ E il pannello si apre. `state.compilazioni.aperta` nasce `false`, quindi
-    // il riquadro che dice DOVE sono finiti i documenti appena creati restava
-    // chiuso, a un clic di distanza e senza che niente lo suggerisse. Subito
-    // dopo una compilazione riuscita quella e' l'informazione che si cerca.
+    // And the panel opens. `state.compilazioni.aperta` starts `false`, so
+    // without this the panel that says WHERE the just-created documents
+    // went would stay closed, one click away with nothing pointing to it —
+    // right when a successful compilation is exactly the information being
+    // sought.
     state.compilazioni.aperta = true;
     showToast(state.compileResult.message || "Listini compilati correttamente.");
   } catch (error) {
-    // Le scelte restano in state.review e sono già salvate: il pulsante
-    // «COMPILA I LISTINI» qui sotto è davvero un modo di riprovare, e la frase
-    // può prometterlo. Il testo tecnico non sparisce, va nel pieghevole.
+    // The choices stay in `state.review` and are already saved: the
+    // "Compila i listini" button below is a genuine retry, so the message
+    // can promise that. The technical detail isn't lost, it goes into the
+    // collapsible.
     state.compileFailure = {
       message: "I listini non sono stati preparati. Le tue scelte sono salvate: puoi riprovare col pulsante qui sotto.",
       detail: String(error.message || ""),
       controlli: asArray(error.dettagli?.errors).map(normalizeIssue).filter((voce) => voce.productName || voce.productId),
     };
-    // state.runtimeError non si tocca: se il salvataggio era fallito quella
-    // frase è ancora vera e sovrascriverla la farebbe sparire.
+    // `state.runtimeError` is left untouched: if the save had failed, that
+    // message is still true, and overwriting it would make it disappear.
     showToast("I listini non sono stati preparati. Nessun ordine è stato inviato.", "error");
   } finally {
     state.compiling = false;
@@ -8546,16 +8400,16 @@ function openSettings() {
   if (mode === "demo") return;
   loadSettings();
   if (!state.impostazioni.modelli.caricati) loadModels();
-  // Si rileggono a ogni apertura, non una volta sola: una dichiarazione può
-  // essere nata in questa stessa sessione, abbinando a mano una riga di
-  // listino, e un elenco fermo alla prima apertura non la mostrerebbe.
+  // Reloaded on every open, not just once: a declaration can be created
+  // within this same session, by manually matching a price-list row, and a
+  // list frozen at first open wouldn't show it.
   caricaLeUguaglianze({ query: "" });
 }
 
 function closeSettings() {
   state.impostazioni.aperta = false;
-  // La chiave incollata e non salvata non sopravvive all'uscita dalla pagina:
-  // restarne in memoria non servirebbe a niente e sarebbe solo un valore in giro.
+  // A pasted, unsaved key doesn't survive leaving the page: keeping it in
+  // memory would serve no purpose, just a loose value lying around.
   state.impostazioni.nuovaChiave = "";
   state.impostazioni.messaggio = "";
   render();
@@ -8592,8 +8446,8 @@ async function loadModels() {
     const payload = await requestJson(API.impostazioniModelli);
     state.impostazioni.modelli.elenco = asArray(payload.modelli).filter((voce) => voce && voce.id);
     state.impostazioni.modelli.avviso = String(payload.avviso || "");
-    // ok === false qui non è un guasto della pagina: l'elenco è una comodità e
-    // l'identificativo si scrive comunque a mano.
+    // `ok === false` here isn't a page failure: the list is a convenience,
+    // and the identifier can always be typed by hand.
     state.impostazioni.modelli.errore = payload.ok === false ? String(payload.messaggio || "Elenco non disponibile.") : "";
     state.impostazioni.modelli.caricati = true;
   } catch (error) {
@@ -8624,8 +8478,8 @@ async function saveApiKey() {
     state.impostazioni.errore = `Chiave non salvata: ${error.message}`;
     showToast("Chiave non salvata.", "error");
   } finally {
-    // Azzerata in tutti i rami: dopo l'invio il valore non ha più ragione di
-    // restare nella pagina.
+    // Cleared on every branch: once submitted, the value has no reason to
+    // stay on the page.
     state.impostazioni.nuovaChiave = "";
     state.impostazioni.salvandoChiave = false;
     render();
@@ -8640,9 +8494,9 @@ async function testConnection() {
   state.impostazioni.messaggio = "";
   render();
   try {
-    // La chiave incollata **non** viene azzerata qui: si prova prima di salvare,
-    // e chi ha appena visto "la chiave funziona" deve poter premere "Salva"
-    // senza reincollarla.
+    // The pasted key is not cleared here: it's tested before saving, and
+    // someone who just saw "it works" needs to be able to press "Salva"
+    // without pasting it again.
     state.impostazioni.prova = await requestJson(API.impostazioniProva, {
       method: "POST",
       body: JSON.stringify({
@@ -8658,10 +8512,11 @@ async function testConnection() {
   }
 }
 
-// Un numero scritto in un campo numerico arriva come stringa. Il servizio
-// locale rifiuta "3" per un tetto che vale 3.0, ed è giusto che sia severo:
-// qui si converte prima di spedire, e quello che non è un numero parte com'è,
-// perché il messaggio che spiega il separatore decimale lo scrive il servizio.
+// A number typed into a numeric field arrives as a string. The local
+// service rejects "3" for a threshold that's 3.0, and that strictness is
+// correct: this converts it before sending, and anything that isn't a
+// number is sent as-is, since the service itself writes the message about
+// the decimal separator.
 function settingsNumber(valore) {
   const testo = String(valore ?? "").trim();
   if (!testo) return testo;
@@ -8686,8 +8541,9 @@ async function saveSettings() {
     state.impostazioni.messaggio = String(payload.messaggio || "Impostazioni salvate.");
     showToast("Impostazioni salvate.");
   } catch (error) {
-    // Il messaggio del servizio locale è già in italiano e già spiegato — dice
-    // per esempio che i decimali si scrivono con il punto: arriva così com'è.
+    // The local service's message is already in Italian and already
+    // explained — it might say, for instance, that decimals use a dot — so
+    // it arrives as-is.
     state.impostazioni.errore = `Impostazioni non salvate. ${error.message}`;
     showToast("Impostazioni non salvate.", "error");
   } finally {
@@ -8697,9 +8553,9 @@ async function saveSettings() {
 }
 
 stepperElement.addEventListener("click", (event) => {
-  // La quarta voce — «Impostazioni», che compare solo mentre sono aperte — non
-  // porta `data-step` perche' non e' un passo del lavoro: premerla le chiude e
-  // riporta dov'eri.
+  // The fourth entry — "Impostazioni", shown only while open — carries no
+  // `data-step` because it isn't a step of the workflow: pressing it closes
+  // the page and returns to where you were.
   if (event.target.closest('[data-action="chiudi-impostazioni"]')) {
     closeSettings();
     return;
@@ -8710,18 +8566,18 @@ stepperElement.addEventListener("click", (event) => {
 });
 
 appElement.addEventListener("click", (event) => {
-  // ⚠ Lo sfondo scuro chiude la finestra, ma solo se il clic è arrivato
-  // PROPRIO lì. Non passa da `data-action` di proposito: `closest()` risalirebbe
-  // dal punto cliccato fino allo sfondo, quindi un clic dentro la finestra che
-  // finisce su un margine — fra due campi, accanto a un titolo — la chiuderebbe
-  // e butterebbe via quello che si stava facendo. Nella finestra della colonna
-  // d'ordine vorrebbe dire perdere la scelta appena fatta.
+  // The dark backdrop closes the dialog, but only if the click actually
+  // landed there. Deliberately not routed through `data-action`: `closest()`
+  // would climb from the click target up to the backdrop, so a click inside
+  // the dialog that lands on a margin — between two fields, next to a title
+  // — would close it and discard whatever was being done. In the
+  // order-column dialog that would mean losing the choice just made.
   if (event.target?.classList?.contains?.("dialog-backdrop") && chiudiLaFinestraInCima()) return;
   const target = event.target.closest("[data-action]");
   if (!target) return;
   const action = target.dataset.action;
-  // Durante la compilazione non si cambiano i fornitori sotto ai documenti che
-  // si stanno creando.
+  // While compiling, suppliers can't be changed out from under the
+  // documents being created.
   if (state.compiling && ["next", "previous", "move-supplier", "apply-supplier-move", "undo-supplier-move"].includes(action)) return;
   if (action === "retry") loadReview();
   if (action === "riprova-salvataggio") {
@@ -8761,8 +8617,9 @@ appElement.addEventListener("click", (event) => {
   }
   if (action === "confirm-delete-upload") deleteUploadedList(String(target.dataset.uploadName || ""));
   if (action === "avvia-pipeline") avviaRicalcolo();
-  // La fascia «i documenti sono cambiati» compare anche nelle pagine 2 e 3, dove
-  // il pulsante del confronto non c'è: questo comando riporta dov'è.
+  // The "documents have changed" banner also shows on pages 2 and 3, where
+  // the recompute button isn't visible: this command goes back to where it
+  // is.
   if (action === "vai-al-ricalcolo") goToStep(1);
   if (action === "validate-schemas") validateSchemas();
   if (action === "confirm-schemas") confirmSchemas();
@@ -8830,12 +8687,11 @@ appElement.addEventListener("click", (event) => {
   if (action === "restore-product") {
     const productId = String(target.dataset.productId || "");
     const product = findProduct(productId);
-    // ⚠ Con le scelte di prima, non a mani vuote: «Rimetti nell'ordine»
-    // rimetteva il prodotto con la quantità a zero, cioè lo rimetteva
-    // nell'elenco e fuori dall'ordine. Se non ce ne sono — prodotto escluso
-    // prima di questa correzione, o memoria del browser ripulita — si torna al
-    // comportamento di prima, che è il meglio che si possa fare senza
-    // inventare una quantità.
+    // Restores the previous choices, not empty-handed: without them,
+    // "Rimetti nell'ordine" would put the product back at zero quantity —
+    // i.e. back in the list but still out of the order. If there are none
+    // — cleared browser storage, for instance — it falls back to that, the
+    // best that can be done without inventing a quantity.
     if (product) restoreProduct(product, state.sceltePrimaDellEsclusione.get(productId) || null);
   }
   if (action === "move-supplier") openSupplierMove(String(target.dataset.supplierId || ""));
@@ -8862,11 +8718,11 @@ appElement.addEventListener("click", (event) => {
   if (action === "summary-remove-product") {
     const product = findProduct(String(target.dataset.productId || ""));
     if (product) {
-      // Prima di azzerare: il prodotto sparisce da questa pagina nello stesso
-      // istante, perché `orderedProducts()` tiene solo chi ha quantità maggiore
-      // di zero. Senza questo, per rimediare bisognava accorgersene, tornare
-      // alla pagina 2, ritrovare il prodotto fra cinquecento e ridigitare una
-      // quantità che nel frattempo non si ricorda.
+      // Recorded before zeroing: the product disappears from this page the
+      // same instant, since `orderedProducts()` keeps only items with
+      // quantity above zero. Without this record, undoing it would mean
+      // finding the product again among hundreds on page 2 and retyping a
+      // forgotten quantity.
       state.rimozioneUndo = {
         id: product.id,
         name: product.name,
@@ -8886,20 +8742,20 @@ appElement.addEventListener("click", (event) => {
     const precedente = state.rimozioneUndo;
     const product = findProduct(precedente.id);
     if (product) {
-      // ⚠ Anche l'esclusione. Fra il «×» e l'annullo l'utente puo' essere
-      // passato dalla pagina 2 e aver premuto «Escludi dall'ordine» sullo stesso
-      // prodotto: rimettere la sola quantita' produrrebbe un prodotto insieme
-      // «Escluso» e con sei colli, contato nei subtotali e nel totale della
-      // pagina 3 e poi azzerato dal servizio locale. Il pulsante dice «Rimetti
-      // nell'ordine», e questo e' quello che vuol dire — la stessa cosa che fa
-      // `restoreProduct`.
+      // Also clears the exclusion. Between the "x" and the undo, the user
+      // could have gone to page 2 and pressed "Escludi dall'ordine" on the
+      // same product: restoring only the quantity would leave a product
+      // marked "Escluso" with a nonzero carton count — counted in page 3's
+      // subtotals and total, then zeroed out by the local service. The
+      // button says "Rimetti nell'ordine", and this is what that means —
+      // the same thing `restoreProduct` does.
       state.excludedProductIds.delete(precedente.id);
       persistExcludedProducts();
       product.quantity = precedente.quantity;
       product.quantitySource = precedente.quantitySource;
-      // ⚠ Anche la conferma, che il comando azzera insieme alla quantità: senza,
-      // il prodotto tornerebbe nell'ordine con la compilazione bloccata e
-      // nessuna riga che dica perché.
+      // Also the confirmation, which the command clears together with the
+      // quantity: without this, the product would return to the order with
+      // compilation blocked and no line explaining why.
       product.confirmed = precedente.confirmed;
     }
     state.rimozioneUndo = null;
@@ -8940,8 +8796,9 @@ appElement.addEventListener("click", (event) => {
       const product = findProduct(voce.id);
       if (!product) continue;
       product.quantity = voce.quantity;
-      // ⚠ Torna «gestionale», non «utente»: se tornasse «utente» il pulsante
-      // non le vedrebbe più, e premerlo di nuovo non farebbe niente.
+      // Restored as "gestionale", not "utente": as "utente" the button
+      // wouldn't find these quantities again, and pressing it a second time
+      // would do nothing.
       product.quantitySource = "gestionale";
       product.confirmed = voce.confirmed;
     }
@@ -8960,17 +8817,17 @@ appElement.addEventListener("click", (event) => {
     render();
     document.querySelector(".toolbar")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
-  // Il comando scritto sull'avviso: applica il filtro che l'avviso nomina e
-  // porta dove si risponde. Il filtro si controlla contro `FILTRI_PRODOTTO`
-  // prima di scriverlo nello stato: una voce sbagliata lascerebbe la pagina su
-  // un elenco vuoto senza dire perche'.
+  // The command written on the notice: applies the filter it names and goes
+  // to where it's answered. The filter is checked against `FILTRI_PRODOTTO`
+  // before it's written to state: a bad value would leave the page on an
+  // empty list with no explanation.
   if (action === "vai-al-filtro") {
     const filtro = String(target.dataset.filtro || "");
     if (FILTRI_PRODOTTO[filtro]) {
       state.filters.status = filtro;
-      // La ricerca e il filtro per tipo restringerebbero l'elenco che l'avviso
-      // ha appena promesso: si azzerano, come fa «Mostra i prodotti» delle
-      // offerte.
+      // The search box and the type filter would narrow the list the
+      // notice just promised, so they're cleared, the same way "Mostra i
+      // prodotti" does for offers.
       state.filters.search = "";
       state.filters.type = "all";
       state.filters.promotionId = null;
@@ -9040,8 +8897,8 @@ appElement.addEventListener("change", (event) => {
         valore.dataStartRow = valore.headerRow + 1;
         valore.columns = {};
         valore.orderColumn = "";
-        // I separatori sono quelli di QUEL foglio: tenerne uno scelto qui
-        // dentro descriverebbe una riga che in questo foglio non c'e'.
+        // Row-break rules belong to that specific sheet: keeping one chosen
+        // here would describe a row that doesn't exist in this sheet.
         valore.dataStartBreak = "";
         valore.markerText = "";
       }
@@ -9051,19 +8908,20 @@ appElement.addEventListener("change", (event) => {
       }
       if (campo === "headerRow" && Number(valore.dataStartRow) <= Number(valore.headerRow)) {
         valore.dataStartRow = Number(valore.headerRow) + 1;
-        // La riga dei prodotti l'ha appena decisa l'intestazione: la regola
-        // che diceva un'altra riga non descrive piu' questo taglio.
+        // The header row just decided where the data starts: a rule naming
+        // a different row doesn't describe this cut anymore.
         valore.dataStartBreak = "";
         valore.markerText = "";
       }
     }
     delete state.schemaMapping.results[identificativo];
     state.schemaMapping.error = "";
-    // ⚠ `render()` SOSTITUISCE l'HTML: la tendina appena usata muore e ne nasce
-    // una nuova, senza fuoco. Chi assegna dodici colonne con la tastiera
-    // ricomincia dodici volte dall'inizio della pagina. L'id c'è già e
-    // `idCampoSchema` lo costruisce con i due valori che stanno nel markup,
-    // quindi è lo stesso prima e dopo il ridisegno: basta ritrovarlo.
+    // `render()` REPLACES the HTML: the dropdown just used dies and a new
+    // one is born, with no focus. Someone assigning twelve columns via
+    // keyboard would restart from the top of the page twelve times. The id
+    // already exists — `idCampoSchema` builds it from the two values
+    // already in the markup — so it's the same before and after the
+    // redraw: it just needs to be found again.
     const tornaSu = String(target.id || "");
     render();
     if (tornaSu) document.querySelector(`#${CSS.escape(tornaSu)}`)?.focus();
@@ -9071,8 +8929,9 @@ appElement.addEventListener("change", (event) => {
   }
 
   if (target.dataset.elencoModelli !== undefined) {
-    // L'elenco riempie il campo di testo, che resta il valore vero: un modello
-    // uscito ieri non è nell'elenco e deve poter essere scritto lo stesso.
+    // The dropdown fills the text field, which stays the real value: a
+    // model released yesterday isn't in the list yet and still needs to be
+    // typeable.
     if (target.value) {
       state.impostazioni.valori.model = String(target.value);
       render();
@@ -9138,17 +8997,12 @@ appElement.addEventListener("change", (event) => {
   }
 
   if (target.dataset.moveOption) {
-    // Cambia solo la destinazione evidenziata: nessun prodotto si muove finché
-    // non si preme "Sposta i prodotti".
+    // Only changes the highlighted destination: no product moves until
+    // "Sposta i prodotti" is pressed.
     state.supplierMove.choiceId = String(target.value || "");
     rerenderPreservingFocus();
     return;
   }
-
-  // ⚠ `data-product-confirm` non esiste più: la conferma era una casella e dal
-  // 22 agosto 2026 è un pulsante, come il no che risponde alla stessa domanda.
-  // Il ramo che la leggeva è stato tolto invece di essere lasciato lì a
-  // rispondere a un elemento che nessuno disegna.
 
   if (target.matches("[data-below-threshold-confirm]")) {
     state.acceptBelowThreshold = Boolean(target.checked);
@@ -9174,12 +9028,12 @@ appElement.addEventListener("change", (event) => {
     state.listino.nome = "";
     state.listino.da = 0;
     state.listino.rigaFuoco = null;
-    // ⚠ Le righe del listino di prima escono di scena SUBITO. Restavano in
-    // tabella, cliccabili, sotto il nome del fornitore nuovo, per tutto il
-    // tempo della richiesta: «È questo» avrebbe mandato quel numero di riga
-    // all'altro fornitore, cioè un abbinamento sul listino sbagliato, cioè un
-    // ordine sbagliato. Stessa ragione per l'esito: «Abbinato» sopra il listino
-    // di un altro si legge come una cosa che non è successa.
+    // The previous supplier's rows are cleared immediately: leaving them in
+    // the table, clickable, under the new supplier's name for the length of
+    // the request would let "È questo" send that row number to the wrong
+    // supplier — a match on the wrong price list, i.e. a wrong order. Same
+    // reason for the outcome message: "Abbinato" shown over another
+    // supplier's list would read as something that didn't happen.
     state.listino.righe = [];
     state.listino.esito = "";
     state.listino.totale = 0;
@@ -9192,9 +9046,10 @@ appElement.addEventListener("change", (event) => {
   if (target.dataset.filter && target.dataset.filter !== "search") {
     state.filters[target.dataset.filter] = target.value;
     state.filters.page = 1;
-    // Toccare i filtri a mano riprende il controllo dall'azione "Mostra i
-    // prodotti" del pannello offerte. L'ordinamento no: non è un filtro, e
-    // cambiare l'ordine non deve far sparire l'elenco che si sta guardando.
+    // Touching a filter by hand takes back control from the "Mostra i
+    // prodotti" action in the offers panel. Sorting doesn't: it isn't a
+    // filter, and changing the order shouldn't make the list being looked
+    // at disappear.
     if (target.dataset.filter !== "sort") state.filters.promotionId = null;
     render();
     return;
@@ -9221,9 +9076,9 @@ appElement.addEventListener("input", (event) => {
     return;
   }
   if (target.dataset.chiaveOpenrouter !== undefined) {
-    // La chiave resta soltanto in memoria: qui non si ridisegna niente, così il
-    // valore non passa mai per l'HTML della pagina. Si aggiorna a mano il solo
-    // pulsante che dipende da lei.
+    // The key stays only in memory: nothing re-renders here, so the value
+    // never passes through the page's HTML. Only the button that depends
+    // on it is updated by hand.
     state.impostazioni.nuovaChiave = target.value;
     const salva = document.querySelector('[data-action="salva-chiave"]');
     if (salva) salva.disabled = state.impostazioni.salvandoChiave || state.impostazioni.provando || !state.impostazioni.nuovaChiave;
@@ -9231,9 +9086,9 @@ appElement.addEventListener("input", (event) => {
   }
   if (target.dataset.impostazione) {
     state.impostazioni.valori[target.dataset.impostazione] = target.value;
-    // Solo il modello ha qualcosa da ridisegnare mentre si scrive: il prezzo e
-    // l'avviso "non è nell'elenco". I limiti no, e ridisegnarli farebbe
-    // saltare il cursore a ogni tasto.
+    // Only the model field has something to redraw while typing: the price
+    // and the "not in the list" notice. The limits don't, and redrawing
+    // them would jump the cursor on every keystroke.
     if (target.dataset.impostazione === "model") rerenderPreservingFocus();
     return;
   }
@@ -9245,8 +9100,9 @@ appElement.addEventListener("input", (event) => {
     product.quantitySource = "utente";
     if (product.quantity === 0) product.confirmed = false;
     scadonoGliAnnulliDiQuantita();
-    // Il render è rimandato di 180 ms: gli avvisi vanno invalidati subito, altrimenti
-    // una lettura in quella finestra userebbe il calcolo precedente alla digitazione.
+    // The render is delayed by 180 ms, but issues are invalidated right
+    // away: otherwise a read within that window would use the calculation
+    // from before the keystroke.
     invalidateIssues();
     invalidateCompilationAcceptance();
     scheduleSave();
@@ -9255,8 +9111,8 @@ appElement.addEventListener("input", (event) => {
     return;
   }
   if (target.matches("[data-promotion-search]")) {
-    // Il riquadro delle offerte resta aperto mentre si scrive: si ridisegna
-    // conservando il fuoco, come per la ricerca dei prodotti.
+    // The offers panel stays open while typing: it redraws while keeping
+    // focus, same as the product search.
     state.filters.promotionQuery = target.value;
     rerenderPreservingFocus();
     return;
@@ -9272,8 +9128,9 @@ appElement.addEventListener("input", (event) => {
     return;
   }
   if (target.matches("[data-listino-cerca]")) {
-    // Il listino è di ottomila righe e sta sul servizio locale: si aspetta che
-    // si smetta di scrivere, invece di chiederlo a ogni tasto.
+    // The price list runs to eight thousand rows and lives on the local
+    // service: this waits for typing to stop instead of asking on every
+    // keystroke.
     state.listino.query = target.value;
     state.listino.da = 0;
     if (state.listino.timer) clearTimeout(state.listino.timer);
@@ -9287,11 +9144,11 @@ appElement.addEventListener("input", (event) => {
   rerenderPreservingFocus();
 });
 
-// Una quantità d'ordine non deve poter cambiare senza un gesto esplicito. Nei
-// programmi di navigazione che lo fanno ancora (Firefox, Chromium prima della
-// versione 119) la rotellina sopra un campo numerico a fuoco lo incrementa da
-// sola, una tacca per scatto, mentre la pagina resta ferma. Si toglie il fuoco e
-// si annulla l'evento: la scorsa successiva scorre la pagina normalmente.
+// An order quantity shouldn't change without an explicit gesture. Browsers
+// that still do this (Firefox, Chromium before version 119) let the wheel
+// over a focused number field increment it one notch per tick while the
+// page stays put. This blurs the field and cancels the event, so the next
+// scroll scrolls the page normally.
 appElement.addEventListener("wheel", (event) => {
   const field = event.target.closest?.('input[type="number"]');
   if (!field || document.activeElement !== field) return;
@@ -9299,8 +9156,8 @@ appElement.addEventListener("wheel", (event) => {
   field.blur();
 }, { passive: false });
 
-// L'evento "toggle" di <details> non risale, ma la fase di cattura lo vede lo
-// stesso: serve per ricordare che il riquadro delle offerte era aperto.
+// The <details> "toggle" event doesn't bubble, but the capture phase still
+// sees it: kept to remember whether the offers panel was left open.
 appElement.addEventListener("toggle", (event) => {
   const target = event.target;
   if (target instanceof HTMLDetailsElement && target.dataset.promotionCatalog !== undefined) {
@@ -9334,11 +9191,10 @@ appElement.addEventListener("drop", (event) => {
 });
 
 window.addEventListener("keydown", (event) => {
-  // Esc chiude la finestra in cima, qualunque delle quattro sia. Prima ne
-  // chiudeva due: il visualizzatore listini e la finestra della colonna
-  // d'ordine si chiudevano soltanto col «×» — e il visualizzatore è la via
-  // d'uscita quando l'abbinamento automatico non ce l'ha fatta, cioè si apre
-  // quando qualcosa è già andato storto.
+  // Esc closes whichever of the four dialogs is on top. This matters for
+  // the price-list viewer in particular: it's the way out when automatic
+  // matching couldn't find a row, i.e. it opens exactly when something has
+  // already gone wrong.
   if (event.key === "Escape") chiudiLaFinestraInCima();
 });
 
@@ -9350,53 +9206,51 @@ window.addEventListener("beforeunload", (event) => {
 });
 
 loadReview();
-// Chi ricarica la pagina mentre la catena lavora deve ritrovare la barra dov'era:
-// il ricalcolo gira nel servizio locale e non si ferma perché il browser si è
-// chiuso. Un errore qui non conta niente — vuol dire solo che non c'è nessun
-// ricalcolo da riprendere.
+// Reloading the page while the pipeline is running should find the bar
+// where it was: the recompute runs in the local service and doesn't stop
+// because the browser closed. An error here means nothing — just that
+// there's no recompute to resume.
 //
-// ⚠ E deve ritrovare anche l'esito, non solo la barra. Prima qui si riprendeva
-// il solo IN_CORSO: un ricalcolo fermato a metà, o finito con degli avvisi,
-// spariva dalla pagina al primo ricaricamento — e gli avvisi di quel ricalcolo
-// sono esattamente le frasi che dicono che la compilazione va ricontrollata.
-// Il servizio lo stato finale ce l'ha (lo tiene in `pipeline_status.json` e lo
-// rilegge anche dopo un riavvio): era la pagina a buttarlo via.
+// This also recovers the outcome, not just the bar. A recompute that
+// stopped partway, or finished with warnings, needs to survive a page
+// reload, since those warnings are exactly what says the compilation needs
+// another look. The service keeps the final state (in
+// `pipeline_status.json`, reread even after a restart).
 if (mode === "live") {
   requestJson(API.pipelineStato)
     .then((stato) => {
       const esito = String(stato?.stato || "");
-      // ⚠ Qui c'era scritto che IN_ATTESA «vuol dire che non è mai partito
-      // niente». Non è più vero: IN_ATTESA con `cambiamento` vuol dire che i
-      // documenti sono cambiati dopo l'ultimo confronto, e quella fascia deve
-      // tornare anche dopo un ricaricamento della pagina — è proprio quando si
-      // riapre il programma il lunedì dopo che serve sapere che i prezzi a
-      // schermo sono vecchi. Senza `cambiamento` l'assunto originale resta
-      // giusto: nessun ricalcolo da riprendere, niente da mostrare.
+      // IN_ATTESA doesn't always mean nothing has ever run: with
+      // `cambiamento`, it means the documents changed since the last
+      // comparison, and that banner needs to survive a page reload too —
+      // reopening the program the following Monday is exactly when knowing
+      // the on-screen prices are stale matters most. Without
+      // `cambiamento`, the simpler reading still holds: no recompute to
+      // resume, nothing to show.
       if (!esito || (esito === "IN_ATTESA" && !cambiamentoDocumenti(stato))) return;
       state.pipeline.stato = stato;
       state.pipeline.chiesto = true;
       render();
       if (schemaMappingRequired(stato)) loadSchemaMapping();
-      // Si continua a interrogare solo una run viva: su una finita il timer
-      // ripeterebbe per sempre la stessa risposta.
+      // Keeps polling only a live run: on a finished one, the timer would
+      // repeat the same response forever.
       if (esito === "IN_CORSO") pianificaControlloPipeline();
     })
     .catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
-// La data della versione, in alto a destra.
+// The published-version date, top right.
 //
-// Questo PC si allinea a GitHub da solo a ogni avvio, e quando non ci riesce —
-// credenziali scadute, rete che non risponde — per scelta non blocca niente:
-// lo scrive in una riga di console e parte con quello che ha. Quella riga non
-// la legge nessuno, e un programma fermo da mesi ha esattamente lo stesso
-// aspetto di uno aggiornato stamattina. Con la data scritta qui basta
-// guardarla, o farsela leggere al telefono, per sapere quale dei due e'.
+// This PC syncs itself from GitHub on every launch, and when it can't —
+// expired credentials, no network — it deliberately doesn't block anything:
+// it logs a line to the console and starts with what it has. Nobody reads
+// that line, and a program that's been stuck for months looks identical to
+// one updated minutes ago. With the date shown here, a glance — or having
+// someone read it out over a phone call — is enough to tell which one it is.
 //
-// Sta nella topbar, che e' fuori da `#app`: `render()` sostituisce l'HTML del
-// solo `#app`, quindi questa riga si scrive una volta e nessun ridisegno se la
-// porta via.
+// Lives in the topbar, outside `#app`: `render()` replaces only `#app`'s
+// HTML, so this line is written once and no redraw carries it away.
 if (mode === "live") {
   const elementoVersione = document.querySelector("#versione-pubblicata");
   if (elementoVersione) {
@@ -9406,16 +9260,18 @@ if (mode === "live") {
         if (quando) {
           const frase = `versione del ${quando}`;
           elementoVersione.textContent = frase;
-          // Data e ora precise per chi sta cercando di capire un difetto: in
-          // pagina basta il giorno, nel dettaglio serve sapere quale avvio.
+          // Precise date and time for anyone debugging an issue: the page
+          // only needs the day, but pinpointing a specific run needs the
+          // exact moment.
           elementoVersione.title = formatDateTime(salute.versionePubblicata);
-          // Senza questo chi legge con la sintesi vocale sentirebbe il
-          // tooltip: `title` da solo diventa il nome dell'elemento e copre il
-          // testo scritto.
+          // Without this, a screen reader would announce the tooltip
+          // instead: `title` alone becomes the element's accessible name
+          // and overrides the visible text.
           elementoVersione.setAttribute("aria-label", frase);
         } else {
-          // Nessuna data vuol dire che qui git non c'e' o non risponde: e' una
-          // risposta, non un guasto, e va detta invece di lasciare il vuoto.
+          // No date means git isn't available here or isn't responding:
+          // that's an answer, not a failure, and it's stated instead of
+          // leaving a blank.
           elementoVersione.textContent = "versione sconosciuta";
           elementoVersione.title = "Non riesco a leggere quale versione sta girando su questo computer.";
         }

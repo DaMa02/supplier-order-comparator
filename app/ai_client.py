@@ -1,41 +1,40 @@
 #!/usr/bin/env python3
-"""Il client che fa giudicare all'AI una shortlist di candidati gia' prodotta.
+"""AI client: asks a model to judge a shortlist of candidates already built upstream.
 
-Fase 5a. Il passo deterministico produce, per ogni coppia (articolo del
-gestionale, fornitore), una manciata di candidati con un punteggio. Qui si
-chiede a un modello, tramite OpenRouter, se uno di quei candidati e' lo stesso
-identico prodotto. La decisione esce nel formato di
-`references/ai-decision-format.md`, che e' quello letto da
-`scripts/merge_match_decisions.py`.
+The deterministic step produces, for every pair (management-software item,
+supplier), a handful of candidates with a score. This module asks a model,
+through OpenRouter, whether one of those candidates is the same product. The
+decision is emitted in the format described by
+`references/ai-decision-format.md`, which `scripts/merge_match_decisions.py`
+reads.
 
-Due regole governano tutto il file.
+Two invariants govern this file.
 
-**Il degrado e' un valore di ritorno, non un'eccezione.** Nessun metodo pubblico
-solleva per un guasto della rete, del servizio o della risposta: torna un
-`EsitoAI` con lo stato che dice cosa e' andato storto e `decisione = None`. Chi
-chiama traduce ogni `decisione is None` in `DA_VERIFICARE`. Un'eccezione resta
-ammessa solo per un uso sbagliato dell'API (un caso senza candidati, un file di
-prompt che non esiste).
+Degradation is a return value, not an exception. No public method raises
+for a network, service or response failure: it returns an `EsitoAI` whose
+status says what went wrong, with `decisione = None`. Callers translate every
+`decisione is None` into `DA_VERIFICARE`. An exception is reserved for API
+misuse (a case with no candidates, a missing prompt file).
 
-**Una risposta vuota non e' un rifiuto.** Misurato l'11 agosto 2026 su chiamate
-vere: `deepseek/deepseek-v4-flash` su molti fornitori di calcolo e' un modello
-che ragiona, e i token di ragionamento si scalano da `max_tokens`. Con
-`max_tokens` a 400, 11 risposte su 30 tornavano con `finish_reason: "length"`,
-`content` vuoto e nessun errore HTTP: il modello aveva consumato tutto il tetto
-pensando, senza mai scrivere la risposta. Se il codice non riconosce quel caso,
-lo legge come «nessun candidato va bene» e un prodotto sparisce dal confronto in
-silenzio. Da qui `max_tokens` predefinito a 1500, lo stato `TRONCATA` e il suo
-test dedicato.
+An empty response is not a rejection. Measured on real calls:
+`deepseek/deepseek-v4-flash`, on several compute providers, is a reasoning
+model whose reasoning tokens are charged against `max_tokens`. With
+`max_tokens` at 400, 11 of 30 responses came back with `finish_reason:
+"length"`, empty `content` and no HTTP error: the model had spent the whole
+token budget thinking and never wrote the answer. If the code doesn't
+recognize this case, it reads as "no candidate matches" and a product
+silently drops out of the comparison. Hence the default `max_tokens` of 1500,
+the `TRONCATA` status, and its dedicated test.
 
-Il trasporto HTTP e' iniettabile dal costruttore, ed e' cosi' che i test evitano
-la rete. Un trasporto e' un chiamabile con questa forma:
+The HTTP transport is injectable from the constructor, which is how tests
+avoid the network. A transport is a callable of this shape:
 
-    trasporto(url: str, corpo: dict, intestazioni: dict, timeout: float)
+    transport(url: str, body: dict, headers: dict, timeout: float)
         -> tuple[int, Any]
 
-Torna il codice HTTP e il corpo della risposta gia' decodificato da JSON (o il
-testo grezzo, se JSON non era). Solleva soltanto per un guasto di rete: il
-client lo traduce in `ERRORE_RETE`. Il trasporto vero e' `trasporto_urllib`.
+It returns the HTTP status and the response body already JSON-decoded (or the
+raw text, if it wasn't JSON). It raises only for a network failure, which the
+client translates into `ERRORE_RETE`. The real transport is `trasporto_urllib`.
 """
 
 from __future__ import annotations
@@ -72,43 +71,41 @@ PERCORSO_MEMORIA = RADICE_APP / "data" / "memoria_ai.json"
 
 
 CONFIGURAZIONE_PREDEFINITA = {
-    # Scelto dal confronto fra i sette candidati sul banco di prova, non da una
-    # preferenza: e' l'unico che unisce zero risposte non conformi, il minor
-    # numero di match mancati e la velocita' piu' alta. `deepseek-v4-flash`, che
-    # era il predefinito scritto nel piano, sbaglia il doppio degli `ALTA`.
-    # Costa anche meno di `gpt-oss-120b` **misurato**, benche' il listino lo dia
-    # a 0,600 $/M in uscita contro 0,170: l'altro produce molti piu' token di
-    # ragionamento. Il prezzo di listino non basta a scegliere.
+    # Chosen from a benchmark of seven candidate models, not by preference: it
+    # is the only one combining zero non-conforming responses, the fewest
+    # missed matches and the highest speed. `deepseek-v4-flash`, the original
+    # default, gets twice as many `ALTA` calls wrong. It is also cheaper than
+    # `gpt-oss-120b` as measured, even though the list price favors the
+    # latter (0.170 $/M output vs 0.600): the other model produces far more
+    # reasoning tokens. List price alone isn't enough to choose.
     "model": "openai/gpt-5.6-luna",
     "base_url": "https://openrouter.ai/api/v1",
     "max_tokens": 1500,
     "temperature": 0.0,
     "timeout_secondi": 60.0,
-    "tetto_spesa_usd": 3.0,        # ~2,6 € — il budget di Daniele è 2-3 € a run
+    "tetto_spesa_usd": 3.0,        # the store's per-run spend budget, in USD
     "tetto_chiamate": 4000,
-    # Misurato il 12 agosto 2026 su chiamate vere, con la verifica avversariale
-    # accesa e la memoria vuota a ogni passata: **150 casi** in 82,1 s a 8, in
-    # 22,7 s a 32, in 19,0 s a 64. 32 e' il punto in cui la curva si piega:
-    # raddoppiarlo toglie poco e moltiplica per due le richieste che un
-    # fornitore di calcolo si vede arrivare insieme.
+    # Measured on real calls, with the adversarial check on and memory empty
+    # each pass: 150 cases take 82.1 s at 8 workers, 22.7 s at 32, 19.0 s at
+    # 64. 32 is the knee of the curve: doubling it buys little and doubles
+    # the requests a compute provider sees arrive together.
     #
-    # ⚠ Non si moltiplica per 948/150 per avere la durata di una run vera, e la
-    # revisione della 6b l'ha misurato: il costo della memoria non e' lineare
-    # nel numero di casi — ogni salvataggio riscrive tutto il file, che nel
-    # frattempo cresce — e su quella parte il parallelismo non compra niente,
-    # perche' sta dentro il lucchetto. La run vera dei 948 casi, misurata da
-    # capo a fondo: **105 s** con la memoria che partiva vuota. Vedi
-    # `RISPOSTE_FRA_DUE_SALVATAGGI`, che e' la correzione di quel costo.
+    # This can't be scaled by 948/150 to estimate a real run's duration:
+    # memory's cost isn't linear in the number of cases — every save rewrites
+    # the whole file, which keeps growing — and parallelism buys nothing on
+    # that part, since it runs inside the lock. A full 948-case run, measured
+    # end to end: 105 s with memory starting empty. See
+    # `RISPOSTE_FRA_DUE_SALVATAGGI`, which corrects for that cost.
     "parallelismo": 32,
-    # v3 e' quella misurata: v1 sbagliava 5 ALTA e perdeva il 32% dei match,
-    # v2 ne perdeva il 16% ma sbagliava 9 ALTA, v3 sbaglia 3 e ne perde il 31%.
-    # Con la verifica avversariale sopra, v3 porta gli ALTA sbagliati a zero.
+    # v3 is the one benchmarked: v1 got 5 ALTA wrong and missed 32% of
+    # matches, v2 missed 16% but got 9 ALTA wrong, v3 gets 3 wrong and misses
+    # 31%. With the adversarial check above, v3 brings wrong ALTA to zero.
     "versione_prompt": "v3",
     "versione_avversario": "v1",
 }
 
 
-# Gli stati. `OK` e `DALLA_MEMORIA` portano una decisione, tutti gli altri no.
+# The statuses. `OK` and `DALLA_MEMORIA` carry a decision; none of the others do.
 STATO_OK = "OK"
 STATO_DALLA_MEMORIA = "DALLA_MEMORIA"
 STATO_TRONCATA = "TRONCATA"
@@ -120,24 +117,24 @@ STATO_ERRORE_RETE = "ERRORE_RETE"
 STATO_SENZA_CHIAVE = "SENZA_CHIAVE"
 STATO_TETTO_SPESA = "TETTO_SPESA"
 STATO_TETTO_CHIAMATE = "TETTO_CHIAMATE"
-# Il fornitore vuole la parola «json» nel messaggio: si ripete aggiungendola.
+# The compute provider wants the word "json" in the message; retried with it added.
 STATO_JSON_RICHIESTO = "JSON_RICHIESTO"
 
-# Un solo tentativo di ripetizione, e solo per gli stati che possono cambiare
-# esito. Un `HTTP_400` (model id sbagliato) e un `HTTP_401` (chiave non valida)
-# ripetendoli non si aggiustano.
-# Gli stati per cui NON ha senso continuare l'infornata: la chiave non e'
-# accettata, il credito e' finito, il fornitore ci ha chiusi fuori. Ripetere
-# non li aggiusta e nemmeno provare gli altri novecento casi: e' la stessa
-# risposta novecento volte, minuti di attesa e un rischio di limitazione, per
-# scoprire alla fine quello che si sapeva alla prima. Restano fuori `HTTP_429`
-# e `HTTP_5xx`, che sono passeggeri, e `HTTP_400` (model id sbagliato), che
-# oggi conviene lasciar correre perche' puo' dipendere dal singolo caso.
+# A single retry, and only for statuses that can change on a second try. An
+# `HTTP_400` (wrong model id) or `HTTP_401` (invalid key) won't fix itself by
+# repeating.
+# Statuses for which continuing the batch makes no sense: the key is rejected,
+# the credit is spent, the provider has locked us out. Retrying doesn't fix
+# these, and neither does trying the other nine hundred cases: it's the same
+# answer nine hundred times, minutes of waiting and a rate-limit risk, only to
+# learn at the end what was already known after the first call. `HTTP_429`
+# and `HTTP_5xx` stay out, since they're transient, as does `HTTP_400` (wrong
+# model id), which is left to run per case since it can be case-specific.
 STATI_CHE_FERMANO_L_INFORNATA = frozenset({"HTTP_401", "HTTP_402", "HTTP_403"})
 
-# Chi non e' stato chiesto perche' l'infornata si e' fermata prima. Non e' un
-# guasto del caso: e' un caso che nessuno ha valutato, e a valle vale come
-# `DA_VERIFICARE` esattamente come gli altri non valutati.
+# A case that was never asked because the batch stopped earlier. It isn't a
+# per-case failure: nobody evaluated it, and downstream it counts as
+# `DA_VERIFICARE` exactly like any other unevaluated case.
 STATO_NON_CHIESTO = "NON_CHIESTO"
 
 STATI_RIPETIBILI = frozenset({
@@ -146,92 +143,91 @@ STATI_RIPETIBILI = frozenset({
     STATO_NON_E_JSON,
     STATO_SCHEMA_NON_CONFORME,
     STATO_ERRORE_RETE,
-    # Ripetibile perche' la seconda chiamata e' diversa dalla prima: porta la
-    # parola che il fornitore ha chiesto. Senza questo, un `HTTP_400` non si
-    # ripeterebbe mai — ed e' giusto, perche' un model id sbagliato ripetuto
-    # resta sbagliato.
+    # Retryable because the second call differs from the first: it carries
+    # the word the provider asked for. Without this, an `HTTP_400` would
+    # never be retried — correctly so, since a wrong model id stays wrong no
+    # matter how many times it's repeated.
     STATO_JSON_RICHIESTO,
     "HTTP_429",
     "HTTP_5xx",
 })
 
-# Un guasto del trasporto che non e' un guasto di rete: un difetto di codice
-# dentro un trasporto iniettato. Non si ripete — ripetere un MemoryError o un
-# KeyError e' la cosa peggiore da fare — e non si confonde con la rete che va
-# male, perche' nella contabilita' per stato sono due cose diverse.
+# A transport failure that isn't a network failure: a code defect inside an
+# injected transport. It isn't retried — retrying a MemoryError or a
+# KeyError is the worst thing to do — and it isn't mixed with genuine network
+# failures, since per-status accounting treats them as two different things.
 STATO_ERRORE_TRASPORTO = "ERRORE_TRASPORTO"
 
-# Un guasto imprevisto dentro il client stesso, catturato per non far cadere
-# tutta l'infornata insieme a un caso solo.
+# An unexpected failure inside the client itself, caught so a single case
+# can't take down the whole batch.
 STATO_ERRORE_INTERNO = "ERRORE_INTERNO"
 
-# Le famiglie che sono davvero un guasto di rete. `OSError` comprende
-# `TimeoutError`, `ConnectionError` e `URLError`; `ValueError` copre un corpo
-# che non si decodifica.
+# The families that really are network failures. `OSError` covers
+# `TimeoutError`, `ConnectionError` and `URLError`; `ValueError` covers a body
+# that doesn't decode.
 GUASTI_DI_RETE = (OSError, http.client.HTTPException, ValueError)
 
-# Quanto si mette da parte per una chiamata in volo, finche' non si e' visto un
-# costo vero. Misurato l'11 agosto: un caso completo costa ~0,0001 $. Si parte
-# dieci volte piu' alti, perche' sbagliare per eccesso costa qualche chiamata in
-# meno e sbagliare per difetto costa sforare il tetto.
+# What is set aside for an in-flight call until a real cost is observed.
+# Measured: a full case costs ~$0.0001. It starts ten times higher, since
+# overestimating costs a few fewer calls while underestimating risks
+# overshooting the spend cap.
 COSTO_ATTESO_INIZIALE = 0.001
 
-# Quante risposte nuove si accumulano prima di riscrivere il file della memoria,
-# quando si lavora a infornate. Vedi `ClientAI._scrivi_ricordo`: salvare vuol
-# dire riscrivere tutto il file, e con 1057 salvataggi su una run vera erano
-# ~90 secondi dentro il lucchetto. Cento e' il compromesso: dieci scritture su
-# una run da 948 casi, e al massimo cento risposte gia' pagate perse se il
-# processo muore a meta'.
+# How many new answers accumulate before the memory file is rewritten, when
+# running in a batch. See `ClientAI._scrivi_ricordo`: saving means rewriting
+# the whole file, and on a real run with over a thousand saves that meant
+# ~90 seconds inside the lock. A hundred is the trade-off: about ten writes
+# over a 948-case run, and at most a hundred already-paid-for answers lost if
+# the process dies partway through.
 RISPOSTE_FRA_DUE_SALVATAGGI = 100
 
-# Prima di ripetere si aspetta, ma solo dove aspettare serve davvero.
+# Waits before retrying, but only where waiting actually helps.
 PAUSA_RIPETIZIONE_S = 2.0
 STATI_CON_PAUSA = frozenset({"HTTP_429", "HTTP_5xx", STATO_ERRORE_RETE})
 
-# Alcuni fornitori di calcolo pretendono la parola «json» nei messaggi.
+# Some compute providers require the word "json" in the messages.
 #
-# E' quello che ha ucciso `qwen/qwen3.5-flash-02-23` nel confronto fra i
-# modelli: HTTP 400 su tutte e 150 le chiamate, con il corpo dell'errore che lo
-# dice per esteso — «'messages' must contain the word 'json' in some form, to
-# use 'response_format'». La stessa identica chiamata, con la parola aggiunta,
-# torna 200 dallo stesso fornitore. Provato.
+# This is what broke `qwen/qwen3.5-flash-02-23` in the model benchmark: HTTP
+# 400 on all 150 calls, with the error body spelling it out — "'messages'
+# must contain the word 'json' in some form, to use 'response_format'". The
+# same exact call, with the word added, returns 200 from the same provider.
 #
-# Conta perche' **il fornitore lo sceglie OpenRouter**, ed e' una decisione
-# presa e giusta: inchiodarne uno trasformerebbe un guasto suo in un guasto
-# nostro. Ma vuol dire che domani il modello configurato puo' finire su un
-# fornitore con questa regola, e la fase AI di quella run risponderebbe 400 in
-# blocco. Il programma gira da solo: non ci sara' nessuno a capire perche'.
+# It matters because OpenRouter chooses the provider, which is the right
+# call: pinning one would turn its failure into ours. But it means the
+# configured model can land on a provider with this rule tomorrow, and that
+# run's AI phase would answer 400 across the board with nobody around to
+# understand why.
 #
-# ⚠ **La parola non si aggiunge sempre**, e la ragione e' misurata. Metterla in
-# coda al prompt di sistema cambia le risposte, perche' il modello legge
-# un'istruzione sul formato come un invito a essere sbrigativo:
+# The word is not always added, for a measured reason. Appending it to the
+# system prompt changes the answers, because the model reads a format
+# instruction as license to be terse:
 #
-#   | prompt di sistema        | `ALTA` sbagliati | match mancati |
-#   |--------------------------|------------------|---------------|
-#   | senza aggiunte (3 giri)  | **4 · 4 · 5**    | 40 · 41 · 43  |
-#   | «Rispondi soltanto con   | **7 · 6 · 7**    | 36 · 37 · 37  |
-#   |  l'oggetto json…» (3)    |                  |               |
-#   | «Formato: json.» (1)     | 6                | 41            |
+#   | system prompt             | wrong `ALTA` | missed matches |
+#   |----------------------------|--------------|-----------------|
+#   | no addition (3 runs)       | 4 · 4 · 5    | 40 · 41 · 43    |
+#   | "Reply only with the json  | 7 · 6 · 7    | 36 · 37 · 37    |
+#   |  object…" (3 runs)         |              |                 |
+#   | "Format: json." (1 run)    | 6            | 41              |
 #
-# Le due fasce non si sovrappongono: pagare due `ALTA` sbagliati su 400 casi —
-# il solo errore che fa comprare la cosa sbagliata — per difendersi da un
-# fornitore che oggi non ci serve nemmeno e' un cattivo affare.
+# The two bands don't overlap: paying for two extra wrong `ALTA` calls out of
+# 400 cases — the only error that causes a wrong purchase — to guard against
+# a provider that isn't even in use today is a bad trade.
 #
-# Quindi la parola entra **solo quando quel fornitore ha gia' risposto che la
-# vuole**: un `HTTP 400` con questa firma diventa ripetibile una volta sola, e
-# la ripetizione la aggiunge. Il percorso normale resta identico a quello
-# misurato, e la difesa c'e' lo stesso.
+# So the word is added only once that specific provider has already asked
+# for it: an `HTTP 400` with this signature becomes retryable once, and the
+# retry adds it. The normal path stays exactly as measured, and the defense
+# still applies.
 FIRMA_JSON_RICHIESTO = "must contain the word 'json'"
 ISTRUZIONE_FORMATO = "Formato della risposta: json."
 
 
 def _chiede_la_parola_json(risposta: Any) -> bool:
-    """Riconosce il rifiuto del fornitore che vuole la parola «json».
+    """Recognizes a provider's rejection asking for the word "json".
 
-    Si guarda **tutta** la risposta serializzata, non il solo messaggio: quando
-    OpenRouter incarta l'errore di un fornitore, in cima resta un generico
-    «Provider returned error» e la frase vera sta annidata in
-    `error.metadata.raw`, dentro una stringa. Misurato su una risposta vera."""
+    Checks the whole serialized response, not just the message: when
+    OpenRouter wraps a provider's error, the top level carries a generic
+    "Provider returned error" while the real message is nested inside
+    `error.metadata.raw`, as a string."""
     try:
         testo = risposta if isinstance(risposta, str) else json.dumps(risposta, ensure_ascii=False)
     except (TypeError, ValueError):
@@ -242,8 +238,8 @@ AZIONI_AMMESSE = ("ACCEPT", "REJECT", "UNRESOLVED")
 CONFIDENZE_AMMESSE = ("ALTA", "MEDIA", "BASSA")
 CHIAVI_ATTESE = frozenset({"azione", "source_row", "confidenza", "motivo"})
 
-# La versione dello schema entra nella chiave della memoria insieme a quella del
-# prompt: cambiare la forma della risposta deve invalidare le risposte vecchie.
+# The schema version enters the memory key alongside the prompt version:
+# changing the response shape must invalidate old answers.
 VERSIONE_SCHEMA = "v1"
 NOME_SCHEMA = "valutazione_candidati"
 
@@ -269,11 +265,11 @@ SCHEMA_RISPOSTA = {
 
 @dataclass(frozen=True)
 class Candidato:
-    """Un candidato della shortlist, come lo vede il modello.
+    """A shortlist candidate, as the model sees it.
 
-    Niente EAN e niente prezzo: l'EAN perche' il banco di prova lo usa come
-    verita' di riferimento e mostrarlo renderebbe falsa la misura, il prezzo
-    perche' non c'entra con l'identita' del prodotto.
+    No EAN and no price: the EAN because the benchmark uses it as ground
+    truth and showing it would invalidate the measurement, the price because
+    it has nothing to do with product identity.
     """
 
     source_row: int
@@ -283,7 +279,7 @@ class Candidato:
 
 @dataclass(frozen=True)
 class CasoValutazione:
-    """Una coppia (articolo del gestionale, fornitore) con la sua shortlist."""
+    """A pair (management-software item, supplier) with its shortlist."""
 
     gestionale_source_row: int
     supplier: str
@@ -293,10 +289,10 @@ class CasoValutazione:
 
 @dataclass(frozen=True)
 class EsitoAI:
-    """Il risultato di una valutazione: sempre un valore, mai un'eccezione."""
+    """The result of an evaluation: always a value, never an exception."""
 
-    stato: str                 # vedi gli stati qui sopra
-    decisione: dict | None     # formato di references/ai-decision-format.md, o None
+    stato: str                 # see the statuses above
+    decisione: dict | None     # shape of references/ai-decision-format.md, or None
     modello: str
     fornitore_calcolo: str | None
     costo_usd: float
@@ -304,11 +300,11 @@ class EsitoAI:
     token_uscita: int
     tentativi: int
     durata_s: float
-    dettaglio: str             # italiano, leggibile, MAI contiene la chiave
+    dettaglio: str             # Italian, human-readable, NEVER contains the key
 
 
-# Il caso con cui `prova_connessione` verifica chiave, model id e schema con una
-# chiamata vera: `GET /models` non serve, e' pubblico e risponde anche senza chiave.
+# The case `prova_connessione` uses to verify key, model id and schema with a
+# real call: `GET /models` won't do, since it's public and answers without a key too.
 CASO_DI_PROVA = CasoValutazione(
     gestionale_source_row=0,
     supplier="prova",
@@ -321,18 +317,18 @@ CASO_DI_PROVA = CasoValutazione(
 
 
 NASCOSTO = "[chiave nascosta]"
-# Rete di sicurezza generica, oltre alla sostituzione della chiave vera: qualunque
-# cosa abbia la forma di una chiave non deve uscire da qui.
+# A generic safety net beyond substituting the real key: anything shaped like
+# a key must not leave this function.
 _FORMA_DI_CHIAVE = re.compile(r"sk-[A-Za-z0-9._\-]{8,}")
 
 
 def oscura(valore: Any, chiave: str | None) -> Any:
-    """Toglie la chiave da un testo. Si applica a ogni campo di `EsitoAI`.
+    """Strips the key out of a text. Applied to every field of `EsitoAI`.
 
-    **Pubblica di proposito.** La usa anche `app/server.py`, che ripulisce da
-    qui ogni messaggio d'errore diretto al browser: due espressioni regolari da
-    tenere allineate vorrebbero dire che quella dimenticata e' quella che perde
-    la chiave. Chi la rinomina rompe il server, ed e' giusto che lo sappia."""
+    Public on purpose: `app/server.py` also uses it to scrub every error
+    message sent to the browser. Keeping two regexes in sync elsewhere would
+    risk the forgotten one leaking the key; renaming this function breaks the
+    server, deliberately."""
 
     if not isinstance(valore, str):
         return valore
@@ -356,11 +352,11 @@ def _intero(valore: Any, predefinito: int = 0) -> int:
 
 
 def _decimale(valore: Any) -> float:
-    """Un numero, accettando anche «3,0».
+    """A number, also accepting the Italian decimal comma ("3,0").
 
-    La virgola decimale e' il modo naturale in cui si scrive un numero in
-    italiano, e le impostazioni le scrive una persona. Solleva se non e' un
-    numero: qui serve accorgersene, non ripiegare.
+    Settings are typed in by a person, and the comma is the natural way to
+    write a decimal in Italian. Raises if it isn't a number: this call site
+    needs to notice, not silently fall back.
     """
 
     if isinstance(valore, bool):
@@ -384,13 +380,12 @@ def _testo_non_vuoto(valore: Any) -> str:
     return testo
 
 
-# Ogni voce della configurazione ha il suo convertitore e il suo minimo. Un
-# valore che non si converte **non diventa zero**: torna il predefinito, e lo
-# dice. Un tetto di spesa che vale zero e' indistinguibile da «non chiamare
-# mai», ed e' il guasto peggiore che questa fase possa avere, perche' non si
-# vede: ogni caso torna `TETTO_SPESA`, tutti i prodotti diventano
-# `DA_VERIFICARE` e il messaggio all'utente gli ripete il numero che credeva di
-# aver impostato.
+# Every config entry has its own converter and minimum. A value that fails to
+# convert does not become zero: it falls back to the default, and says so. A
+# spend cap of zero is indistinguishable from "never call", and is the worst
+# possible failure for this phase, because it's invisible: every case returns
+# `TETTO_SPESA`, every product becomes `DA_VERIFICARE`, and the message shown
+# to the user just repeats the number they thought they had set.
 TIPI_CONFIGURAZIONE: dict[str, tuple[Callable[[Any], Any], Any]] = {
     "model": (_testo_non_vuoto, None),
     "base_url": (_testo_non_vuoto, None),
@@ -406,11 +401,10 @@ TIPI_CONFIGURAZIONE: dict[str, tuple[Callable[[Any], Any], Any]] = {
 
 
 def _convalida_configurazione(configurazione: dict, *, da_dove: str) -> dict:
-    """Converte e controlla ogni voce, e per quelle sbagliate usa il predefinito.
+    """Converts and checks every entry, falling back to the default for bad ones.
 
-    Torna sempre una configurazione utilizzabile: e' il punto in cui un valore
-    scritto male viene fermato, invece di diventare uno zero silenzioso a metà
-    di una run.
+    Always returns a usable configuration: this is where a badly written
+    value is stopped, instead of turning into a silent zero mid-run.
     """
 
     pulita = dict(configurazione)
@@ -439,7 +433,7 @@ def _convalida_configurazione(configurazione: dict, *, da_dove: str) -> dict:
 
 
 def _stato_http(codice: int) -> str:
-    """Il nome dello stato per un codice HTTP dichiarato dal servizio."""
+    """The status name for an HTTP code the service reported."""
 
     if 500 <= codice <= 599:
         return "HTTP_5xx"
@@ -455,17 +449,16 @@ def _accorcia(testo: Any, quanti: int = 300) -> str:
 
 
 # ----------------------------------------------------------------------------
-# Chiave, configurazione, prompt
+# Key, configuration, prompt
 # ----------------------------------------------------------------------------
 
 
 def leggi_chiave(percorso_secrets: Path | None = None) -> str | None:
-    """La chiave OpenRouter: prima l'ambiente, poi `app/data/secrets.json`.
+    """The OpenRouter key: environment first, then `app/data/secrets.json`.
 
-    Nel file la chiave sta **annidata** in `openrouter.api_key`. Cercarla al
-    primo livello torna `None` e poi HTTP 401, mentre `GET /api/v1/models`
-    continua a rispondere perche' e' pubblico: e' una trappola gia' costata un
-    giro di misure.
+    In the file the key is nested under `openrouter.api_key`. Looking for it
+    at the top level returns `None` and later an HTTP 401, while
+    `GET /api/v1/models` keeps answering because it's public — an easy trap.
     """
 
     dall_ambiente = (os.environ.get("OPENROUTER_API_KEY") or "").strip()
@@ -487,12 +480,12 @@ def leggi_chiave(percorso_secrets: Path | None = None) -> str | None:
 
 
 def stato_chiave(percorso_secrets: Path | None = None) -> dict:
-    """Se la chiave c'e' e da dove arriva, **senza mai restituirne il valore**.
+    """Whether the key is set and where it comes from, never the value itself.
 
-    E' l'unica cosa che il server puo' mandare al browser: la pagina non deve
-    poterla rileggere, nemmeno per riempire un campo. La coda di quattro
-    caratteri serve solo a distinguere due chiavi diverse a occhio, e quattro
-    caratteri non ricostruiscono niente."""
+    The only thing the server can send to the browser: the page must never be
+    able to read the key back, not even to prefill a field. The four-
+    character tail only lets a person tell two keys apart at a glance, and
+    four characters reconstruct nothing."""
 
     dall_ambiente = (os.environ.get("OPENROUTER_API_KEY") or "").strip()
     if dall_ambiente:
@@ -504,20 +497,17 @@ def stato_chiave(percorso_secrets: Path | None = None) -> dict:
 
 
 def salva_chiave(chiave: str, percorso_secrets: Path | None = None) -> None:
-    """Scrive la chiave in `app/data/secrets.json` **conservando il resto**.
+    """Writes the key into `app/data/secrets.json`, keeping the rest of the file.
 
-    Il file esiste gia' e puo' contenere altro: si rilegge e si sostituisce la
-    sola voce annidata `openrouter.api_key`. Si scrive prima accanto e poi si
-    rinomina, perche' un'interruzione a meta' lascerebbe l'utente senza chiave
-    e senza saperlo.
+    The file may already exist with other content: it's re-read and only the
+    nested `openrouter.api_key` entry is replaced. Written to a sibling
+    temp file first, then renamed, so a crash midway can't leave the user
+    without a key and without knowing it.
 
-    ⚠ I permessi si stringono **prima** di scriverci dentro, e adesso e' vero:
-    il file nasce con `os.open(..., 0o600)`.  Fino al 20 agosto 2026 questa
-    riga del docstring diceva il contrario di quello che il codice faceva —
-    `write_bytes` e poi `chmod` — cioe' la chiave toccava il disco con i
-    permessi di umask e veniva ristretta un istante dopo.  Finestra stretta e
-    macchina a utente singolo, ma un docstring che promette una difesa che non
-    c'e' e' peggio della difesa mancante: chi legge smette di guardare."""
+    Permissions are tightened before any content is written: the file is
+    created with `os.open(..., 0o600)`, not written first and `chmod`ed
+    after — the gap between those two steps would let the key touch disk
+    with the process's umask permissions before being restricted."""
 
     valore = str(chiave or "").strip()
     if not valore:
@@ -534,14 +524,14 @@ def salva_chiave(chiave: str, percorso_secrets: Path | None = None) -> None:
     sezione = dati.get("openrouter")
     dati["openrouter"] = {**sezione, "api_key": valore} if isinstance(sezione, dict) else {"api_key": valore}
 
-    # Il temporaneo porta processo e filo come tutte le altre scritture del
-    # programma: con un nome fisso due salvataggi in volo si contendono lo
-    # stesso file.
+    # The temp filename carries process id and thread id, like every other
+    # write in the program: a fixed name would let two concurrent saves
+    # collide on the same file.
     accanto = percorso.with_name(f"{percorso.name}.{os.getpid()}.{threading.get_ident()}.nuovo")
     testo = (json.dumps(dati, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     try:
-        # `0o600` al momento della creazione: su Windows il modo non significa
-        # granche', ma li' non c'e' nemmeno il problema che chiude.
+        # `0o600` at creation time; on Windows the mode is mostly meaningless,
+        # but there's no equivalent risk to guard against there either.
         descrittore = os.open(accanto, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(descrittore, "wb") as flusso:
             flusso.write(testo)
@@ -557,17 +547,17 @@ def salva_chiave(chiave: str, percorso_secrets: Path | None = None) -> None:
 
 
 def salva_impostazioni(valori: dict, percorso_impostazioni: Path | None = None) -> dict:
-    """Scrive `app/data/impostazioni_ai.json` e restituisce la configurazione viva.
+    """Writes `app/data/impostazioni_ai.json` and returns the live configuration.
 
-    Accetta **solo** i nomi che esistono in `CONFIGURAZIONE_PREDEFINITA`: una
-    voce sconosciuta verrebbe ignorata in lettura, e salvarla lascerebbe
-    all'utente un file che sembra dire una cosa che il programma non fa.
-    In particolare la chiave non passa mai di qui — quella ha il suo posto.
+    Accepts only the names that exist in `CONFIGURAZIONE_PREDEFINITA`: an
+    unknown entry would be silently ignored on read, and saving it anyway
+    would leave the user a file that claims something the program doesn't
+    do. The key itself never passes through here — it has its own path.
 
-    Ogni valore passa dagli stessi convertitori della lettura, quindi un
-    tetto di spesa scritto `3,0` all'italiana non azzera niente: viene
-    rifiutato subito, con il ripiego sul predefinito, invece di spegnere la
-    fase AI dicendo all'utente il numero che credeva di aver impostato."""
+    Every value goes through the same converters as on load, so a spend cap
+    written as the Italian `3,0` doesn't silently zero out: it's rejected
+    immediately, falling back to the default, instead of quietly disabling
+    the AI phase while showing the user the number they thought they'd set."""
 
     percorso = Path(percorso_impostazioni if percorso_impostazioni is not None else PERCORSO_IMPOSTAZIONI)
     try:
@@ -586,14 +576,14 @@ def salva_impostazioni(valori: dict, percorso_impostazioni: Path | None = None) 
 
     da_scrivere = {**gia_scritte, **{nome: valore for nome, valore in valori.items() if valore is not None}}
 
-    # Si convalida **prima** di scrivere, e qui un valore rifiutato dev'essere
-    # un errore, non un ripiego. `_convalida_configurazione` avvisa e ripiega —
-    # ed e' la cosa giusta all'avvio, dove spegnere il programma per una voce
-    # storta sarebbe peggio. In salvataggio no: l'utente ha appena scritto quel
-    # numero e sta guardando lo schermo. Scriverlo nel file e poi ignorarlo e'
-    # il difetto misurato nella 5a — `tetto_spesa_usd: "3,0"` con la virgola
-    # italiana azzerava il tetto **dicendo all'utente il numero che credeva di
-    # aver impostato**.
+    # Validated before writing, and here a rejected value must be an error,
+    # not a silent fallback. `_convalida_configurazione` warns and falls back
+    # — the right behavior at startup, where refusing to run over one bad
+    # entry would be worse. Not on save: the user just typed that number and
+    # is looking at the screen. Writing it to the file and then ignoring it
+    # is the failure mode this guards against: `tetto_spesa_usd: "3,0"` with
+    # the Italian decimal comma would zero out the cap while showing the user
+    # the number they thought they'd set.
     convalidata = _convalida_configurazione(
         {**CONFIGURAZIONE_PREDEFINITA, **da_scrivere}, da_dove="impostazioni AI in salvataggio"
     )
@@ -610,10 +600,11 @@ def salva_impostazioni(valori: dict, percorso_impostazioni: Path | None = None) 
             "Attenzione al separatore decimale: i numeri si scrivono con il punto (3.0), non con la virgola."
         )
 
-    # Una versione di prompt che non esiste passa la convalida — e' una stringa
-    # non vuota — e poi fa sollevare il client al primo `ClientAI(...)`, cioe'
-    # lontano da qui e a fase gia' avviata. Si prova subito: leggerlo costa
-    # niente ed e' l'unico momento in cui c'e' qualcuno che guarda.
+    # A prompt version that doesn't exist passes validation — it's a
+    # non-empty string — and only raises later, at the first `ClientAI(...)`,
+    # far from here and after the phase has already started. Checked right
+    # away instead: reading it costs nothing, and this is the only moment
+    # someone is actually watching.
     for nome in ("versione_prompt", "versione_avversario"):
         if nome not in valori:
             continue
@@ -628,19 +619,18 @@ def salva_impostazioni(valori: dict, percorso_impostazioni: Path | None = None) 
 
 
 def elenco_modelli(base_url: str | None = None, timeout: float = 20.0) -> list[dict]:
-    """L'elenco dei modelli di OpenRouter, per il menu' della pagina.
+    """The list of OpenRouter models, for the settings page's dropdown.
 
-    Sola libreria standard, e **GET**: `trasporto_urllib` e' cablato su POST con
-    un corpo JSON e qui non serve.
+    Standard library only, and GET: `trasporto_urllib` is wired for POST with
+    a JSON body, which isn't needed here.
 
-    ⚠ Questa chiamata **e' pubblica**: risponde anche senza chiave, e anche con
-    una chiave scaduta. Un menu' che si popola non e' una prova che la chiave
-    valga: quella si prova solo chiamando il modello. Chi usa questa funzione
-    non deve raccontare il contrario all'utente.
+    This call is public: it answers without a key, and even with an expired
+    one. A populated menu is not proof the key works — only an actual model
+    call proves that, and callers of this function must not imply otherwise
+    to the user.
 
-    Gli alias non chiamabili — quelli che nell'elenco hanno la **tilde** davanti
-    — restano fuori: `deepseek/deepseek-v4-flash-latest` e' costato un giro di
-    misure e due documenti sbagliati proprio perche' era nell'elenco."""
+    Non-callable aliases — the ones prefixed with a tilde in the listing —
+    are filtered out: including them led to real, costly confusion before."""
 
     url = str(base_url or CONFIGURAZIONE_PREDEFINITA["base_url"]).rstrip("/") + "/models"
     richiesta = urllib.request.Request(url, headers={"Accept": "application/json"}, method="GET")
@@ -666,11 +656,11 @@ def elenco_modelli(base_url: str | None = None, timeout: float = 20.0) -> list[d
 
 
 def carica_configurazione(percorso_impostazioni: Path | None = None) -> dict:
-    """Predefiniti, poi `app/data/impostazioni_ai.json`, poi `OPENROUTER_MODEL`.
+    """Defaults, then `app/data/impostazioni_ai.json`, then `OPENROUTER_MODEL`.
 
-    Il file puo' non esistere: e' il caso normale oggi e non e' un errore.
-    Nessun model id e' cablato nella logica: sta solo in
-    `CONFIGURAZIONE_PREDEFINITA`, in un posto solo.
+    The file may not exist: that's the normal case, not an error. No model
+    id is hard-coded in the logic; it lives only in
+    `CONFIGURAZIONE_PREDEFINITA`, in one place.
     """
 
     configurazione = dict(CONFIGURAZIONE_PREDEFINITA)
@@ -700,12 +690,12 @@ _lucchetto_prompt = threading.Lock()
 
 
 def leggi_prompt(versione: str, nome: str = "valuta_candidati") -> str:
-    """Il prompt versionato, letto da `references/prompts/`.
+    """The versioned prompt, read from `references/prompts/`.
 
-    Il file contiene il testo del prompt e nient'altro: quello che ci sta
-    dentro e' esattamente quello che il modello riceve. `nome` sceglie la
-    famiglia: `valuta_candidati` per il primo giro, `verifica_avversariale`
-    per il secondo.
+    The file contains the prompt text and nothing else: whatever is in it is
+    exactly what the model receives. `nome` selects the family:
+    `valuta_candidati` for the first pass, `verifica_avversariale` for the
+    adversarial one.
     """
 
     cartella = Path(CARTELLA_PROMPT)
@@ -731,12 +721,12 @@ def leggi_prompt(versione: str, nome: str = "valuta_candidati") -> str:
 
 
 # ----------------------------------------------------------------------------
-# Il caso reso testo e la chiave della memoria
+# The case rendered as text, and the memory key
 # ----------------------------------------------------------------------------
 
 
 def caso_come_testo(caso: CasoValutazione) -> str:
-    """Il caso come lo legge il modello. Misurato l'11 agosto, da non cambiare."""
+    """The case as the model reads it. The exact wording was benchmarked; keep it stable."""
 
     righe = [f"Articolo cercato: {caso.descrizione}", "", "Candidati del fornitore:"]
     for candidato in caso.candidati:
@@ -748,7 +738,7 @@ def caso_come_testo(caso: CasoValutazione) -> str:
 
 
 def _caso_serializzato(caso: CasoValutazione) -> str:
-    """Il caso in una forma stabile: stessi dati, sempre lo stesso testo."""
+    """The case in a stable form: same data, always the same text."""
 
     return json.dumps(
         {
@@ -771,15 +761,12 @@ def _caso_serializzato(caso: CasoValutazione) -> str:
 
 
 def impronta_prompt(testo: str) -> str:
-    """Le prime dodici cifre dell'impronta del **testo** di un prompt.
+    """The first twelve hex digits of the fingerprint of a prompt's text.
 
-    Serve a chiudere un difetto trovato dalla revisione della 6b: la chiave
-    della memoria sigillava l'**etichetta** della versione (`v3`), non quello
-    che c'e' scritto dentro. Chi corregge `valuta_candidati.v3.md` senza
-    rinominarlo continuava a ricevere le risposte del prompt vecchio, e il
-    commento qui sotto — «se cambia uno qualunque di questi, la risposta vecchia
-    non vale piu'» — era falso proprio sul campo che si cambia piu' spesso.
-    Misurato dal revisore: stessa chiave prima e dopo aver riscritto il file."""
+    Without this, the memory key would seal only the version label (`v3`),
+    not the actual prompt content: editing `valuta_candidati.v3.md` without
+    renaming it would keep returning answers cached under the old prompt.
+    Hashing the text itself ties the memory key to what the model actually saw."""
 
     return hashlib.sha256(str(testo).encode("utf-8")).hexdigest()[:12]
 
@@ -790,12 +777,12 @@ def chiave_memoria(
     versione_schema: str,
     caso: CasoValutazione,
 ) -> str:
-    """La memoria e' indirizzata dal contenuto.
+    """Memory is addressed by content.
 
-    Modello, versione del prompt, versione dello schema e caso: se cambia uno
-    qualunque di questi, la risposta vecchia non vale piu'. `versione_prompt`
-    porta anche l'impronta del testo del prompt (vedi `impronta_prompt`), quindi
-    «versione» qui vuol dire davvero versione e non solo il nome del file.
+    Model, prompt version, schema version and case: if any one of these
+    changes, the old answer no longer applies. `versione_prompt` also carries
+    the prompt text's fingerprint (see `impronta_prompt`), so "version" here
+    really means version, not just a filename.
     """
 
     impronta = hashlib.sha256()
@@ -810,17 +797,17 @@ def chiave_memoria(
 
 
 # ----------------------------------------------------------------------------
-# Il trasporto vero
+# The real transport
 # ----------------------------------------------------------------------------
 
 
 def trasporto_urllib(url: str, corpo: dict, intestazioni: dict, timeout: float) -> tuple[int, Any]:
-    """La sola parte che tocca la rete: una POST, e niente altro.
+    """The only part that touches the network: a POST, and nothing else.
 
-    Torna `(codice HTTP, corpo decodificato)`. Un errore HTTP non e'
-    un'eccezione: e' un codice di ritorno, perche' il corpo di un 400 o di un
-    401 dice cosa e' successo. Un guasto di rete invece solleva, e il client lo
-    traduce in `ERRORE_RETE`.
+    Returns `(HTTP status, decoded body)`. An HTTP error is not an
+    exception, it's a return value, because the body of a 400 or a 401 says
+    what happened. A network failure does raise, and the client translates it
+    into `ERRORE_RETE`.
     """
 
     dati = json.dumps(corpo, ensure_ascii=False).encode("utf-8")
@@ -842,18 +829,18 @@ def _decodifica(testo: str) -> Any:
 
 
 # ----------------------------------------------------------------------------
-# Il client
+# The client
 # ----------------------------------------------------------------------------
 
 
 class ClientAI:
-    """Chiede al modello di scegliere fra i candidati, e non si fida di niente.
+    """Asks the model to choose among the candidates, and trusts nothing it says.
 
-    `trasporto=None` usa `trasporto_urllib`. `memoria=None` significa nessuna
-    persistenza su disco (e' il modo dei test): la memoria in RAM resta attiva,
-    perche' un caso gia' visto non si paga due volte nemmeno dentro una run.
-    `chiave=None` cerca la chiave con `leggi_chiave()`; `chiave=""` dichiara che
-    la chiave non c'e', ed e' come i test provano lo stato `SENZA_CHIAVE`.
+    `trasporto=None` uses `trasporto_urllib`. `memoria=None` means no disk
+    persistence (the mode tests use): in-RAM memory still applies, so a case
+    already seen isn't paid for twice even within a single run.
+    `chiave=None` looks up the key via `leggi_chiave()`; `chiave=""` declares
+    there is no key, which is how tests exercise the `SENZA_CHIAVE` status.
     """
 
     def __init__(
@@ -871,52 +858,52 @@ class ClientAI:
         self._trasporto = trasporto if trasporto is not None else trasporto_urllib
         self._chiave = leggi_chiave() if chiave is None else (chiave or "")
         self._prompt = leggi_prompt(self.configurazione["versione_prompt"])
-        # Si accende da se', la prima volta che un fornitore lo pretende, e
-        # resta acceso per tutta la vita del client: vedi FIRMA_JSON_RICHIESTO.
-        # Non serve un lucchetto — piu' thread possono scriverlo insieme, ma
-        # scrivono tutti lo stesso `True`, e leggerlo un istante prima costa
-        # una ripetizione, non un errore.
+        # Turns on by itself the first time a provider demands it, and stays
+        # on for the client's lifetime: see FIRMA_JSON_RICHIESTO. No lock
+        # needed — several threads may write it concurrently, but they all
+        # write the same `True`, and reading it one instant too early only
+        # costs a retry, not a correctness bug.
         self._formato_obbligatorio = False
-        # Il prompt dell'avversario si legge solo quando serve: chi usa il
-        # client per il primo giro soltanto non deve averlo.
+        # The adversarial prompt is read only when needed: a client used only
+        # for the first pass never has to load it.
         self._prompt_avversario_letto: str | None = None
 
         self._lucchetto = threading.Lock()
         self._chiamate = 0
         self._costo = 0.0
-        self._impegnato = 0.0            # spesa prenotata dalle chiamate in volo
+        self._impegnato = 0.0            # spend reserved by in-flight calls
         self._costo_atteso = COSTO_ATTESO_INIZIALE
         self._per_stato: dict[str, int] = {}
         self._dalla_memoria = 0
 
         self._percorso_memoria = Path(memoria) if memoria is not None else None
         self._voci: dict[str, dict] = {}
-        # Quante risposte nuove aspettano di essere scritte su disco, e se
-        # siamo dentro un'infornata. Vedi `_scrivi_ricordo`.
+        # How many new answers are waiting to be written to disk, and whether
+        # we're inside a batch. See `_scrivi_ricordo`.
         self._da_salvare = 0
         self._in_infornata = False
-        # Chi vuole sapere a che punto e' un'infornata mette qui una funzione.
-        # Serve alla barra di avanzamento dell'orchestratore: la fase dura due
-        # minuti, e un programma che sta zitto per due minuti sembra rotto.
-        # Resta `None` per tutti gli altri, e allora non costa niente.
+        # Whoever wants batch progress sets a callback here. Used by the
+        # orchestrator's progress bar: the phase can run for minutes, and a
+        # program that stays silent that long looks stuck. Stays `None` for
+        # everyone else, at no cost.
         self.avanzamento: Callable[[int, int], None] | None = None
         if self._percorso_memoria is not None:
             self._voci = self._carica_memoria(self._percorso_memoria)
 
-    # -- superficie pubblica -------------------------------------------------
+    # -- public surface -------------------------------------------------
 
     def valuta_candidati(self, caso: CasoValutazione) -> EsitoAI:
-        """Valuta un caso. Non solleva mai per un guasto: torna uno stato."""
+        """Evaluates one case. Never raises for a failure: returns a status."""
 
         _verifica_caso(caso)
         return self._registra(self._valuta(caso, usa_memoria=True))
 
     def valuta_molti(self, casi: Sequence[CasoValutazione]) -> list[EsitoAI]:
-        """Valuta molti casi in parallelo, **nell'ordine dei casi in ingresso**.
+        """Evaluates many cases in parallel, in the order the cases were given.
 
-        Un caso che fallisce non ferma gli altri: il suo fallimento e' un valore
-        di ritorno come tutti. I casi malformati si scoprono prima di partire,
-        cosi' un errore d'uso dell'API non spegne mezza infornata.
+        A failing case doesn't stop the others: its failure is a return value
+        like any other. Malformed cases are caught before starting, so an API
+        misuse doesn't take down half a batch.
         """
 
         return self._infornata(casi, self._valuta_senza_sorprese)
@@ -937,20 +924,21 @@ class ClientAI:
         finally:
             with self._lucchetto:
                 self._in_infornata = False
-                # La coda delle risposte non ancora scritte va sul disco
-                # adesso: e' la «fine» a cui `_scrivi_ricordo` si appoggia.
+                # Any answers still queued get flushed to disk now: this is
+                # the "end" that `_scrivi_ricordo` relies on.
                 if self._da_salvare:
                     self._salva_adesso()
 
     def _conta_mentre_valuta(
         self, casi: list[CasoValutazione], valuta: Callable[[CasoValutazione], EsitoAI]
     ) -> Callable[[CasoValutazione], EsitoAI]:
-        """Avvolge la valutazione per dire a che punto siamo, se qualcuno ascolta.
+        """Wraps the evaluator to report progress, if anyone is listening.
 
-        Il conteggio sta dentro il lucchetto del client perche' i thread sono
-        trentadue: senza, `fatti += 1` perde colpi e la barra torna indietro.
-        L'avviso all'ascoltatore si fa **fuori** dal lucchetto — chi ascolta
-        scrive su disco, e tenerlo dentro serializzerebbe l'infornata.
+        The counter is updated inside the client's lock because several
+        worker threads run concurrently: without it, `fatti += 1` would drop
+        increments and the progress bar would go backwards. The listener is
+        called outside the lock — it may write to disk, and holding the lock
+        there would serialize the whole batch.
         """
 
         ascoltatore = self.avanzamento
@@ -970,8 +958,8 @@ class ClientAI:
                 try:
                     ascoltatore(quanti, totali)
                 except Exception:
-                    # Un ascoltatore che si rompe non deve far cadere una run
-                    # da due minuti: e' una barra di avanzamento.
+                    # A broken listener must not take down a multi-minute
+                    # run: it's just a progress bar.
                     pass
 
         return valuta_e_conta
@@ -984,15 +972,15 @@ class ClientAI:
         if operai == 1:
             return [valuta(caso) for caso in casi]
 
-        # La prima chiamata vera si fa **da sola**, e non e' una cautela di
-        # stile: prima di averne vista una non si sa quanto costi una chiamata
-        # con il modello configurato, quindi la prenotazione della spesa lavora
-        # su una stima e tutti i thread configurati possono superare insieme il
-        # tetto — oggi sono trentadue, e domani sono quelli che c'e' scritto in
-        # `parallelismo`, che e' una voce delle impostazioni. Fatta
-        # la prima, `_costo_atteso` e' un numero vero e il tetto tiene. Costa un
-        # viaggio di rete su una run di minuti, e in cambio un modello sbagliato
-        # o una chiave scaduta si scoprono prima di lanciare 948 chiamate.
+        # The first real call runs alone, and it's not a stylistic caution:
+        # until one call has actually completed, the cost of a call with the
+        # configured model is unknown, so the spend reservation works off a
+        # guess and every configured worker thread could overshoot the cap
+        # together — the thread count is a settings value (`parallelismo`).
+        # Once the first call is done, `_costo_atteso` is a real number and
+        # the cap holds. It costs one extra network round trip on a run that
+        # takes minutes, and in exchange a wrong model or an expired key
+        # surfaces before hundreds of calls are launched.
         esiti: list[EsitoAI] = []
         indice = 0
         while indice < len(casi) and self.contabilita["chiamate"] == 0:
@@ -1000,13 +988,12 @@ class ClientAI:
             indice += 1
 
         restanti = casi[indice:]
-        # ⚠ E se la prima ha detto «questa chiave non la accetto», ci si ferma
-        # qui. Il commento qui sopra prometteva gia' che «una chiave scaduta si
-        # scopre prima di lanciare 948 chiamate», e la promessa non era
-        # mantenuta: `_prenota_chiamata` conta la chiamata **prima** di farla,
-        # quindi dopo la prima — anche fallita — il ciclo di riscaldamento
-        # finiva e il pool partiva lo stesso. Novecento risposte identiche, un
-        # rischio di limitazione, e la notizia alla fine invece che subito.
+        # If the first call comes back with "this key is rejected", the batch
+        # stops right here instead of launching the pool anyway: since
+        # `_prenota_chiamata` reserves a call slot before making it, the
+        # warm-up loop above finishes after the first attempt regardless of
+        # whether it failed, so this check is what actually keeps a bad key
+        # from producing hundreds of identical failures.
         if restanti and esiti and esiti[-1].stato in STATI_CHE_FERMANO_L_INFORNATA:
             fermata = esiti[-1]
             esiti.extend(
@@ -1036,14 +1023,14 @@ class ClientAI:
         return self._prompt_avversario_letto
 
     def _verifica(self, caso: CasoValutazione, decisione: dict) -> EsitoAI:
-        """Il secondo giro: un solo candidato, quello proposto, e istruzioni
-        rovesciate. Il caso e' un `CasoValutazione` con la sola riga scelta,
-        cosi' il controllo della shortlist vale anche qui."""
+        """The adversarial pass: only the proposed candidate, with reversed
+        instructions. The case is a `CasoValutazione` holding just that one
+        row, so the shortlist check applies here too."""
 
         scelta = next(
             (c for c in caso.candidati if c.source_row == decisione.get("source_row")), None
         )
-        if scelta is None:  # non ci si arriva: il controllo 6 l'ha gia' escluso
+        if scelta is None:  # unreachable: check 6 already excludes this
             return self._costruisci(
                 STATO_RIGA_FUORI_SHORTLIST,
                 dettaglio="La riga da verificare non è fra i candidati.",
@@ -1064,7 +1051,7 @@ class ClientAI:
     def _verifica_senza_sorprese(self, caso: CasoValutazione) -> EsitoAI:
         try:
             return self.valuta_con_verifica(caso)
-        except Exception as errore:  # noqa: BLE001 — vedi _valuta_senza_sorprese
+        except Exception as errore:  # noqa: BLE001 — see _valuta_senza_sorprese
             return self._registra(
                 self._costruisci(
                     STATO_ERRORE_INTERNO,
@@ -1076,18 +1063,18 @@ class ClientAI:
             )
 
     def _valuta_senza_sorprese(self, caso: CasoValutazione) -> EsitoAI:
-        """La rete di sicurezza dell'infornata: un caso rotto non porta via gli altri.
+        """The batch's safety net: a broken case doesn't take the others down with it.
 
-        Senza questa, un'eccezione imprevista su un solo caso risale da
-        `attesa.result()` e butta via **tutti** i risultati gia' calcolati e gia'
-        pagati degli altri: su una run da 948 casi si torna con un'eccezione al
-        posto di 947 esiti buoni. «Un caso che fallisce non ferma gli altri»
-        deve valere anche per un'eccezione, non solo per uno stato.
+        Without this, an unexpected exception on a single case propagates up
+        from `attesa.result()` and discards every already-computed,
+        already-paid-for result for the rest of the batch. "A failing case
+        doesn't stop the others" must hold for an exception too, not just for
+        a status.
         """
 
         try:
             return self.valuta_candidati(caso)
-        except Exception as errore:  # noqa: BLE001 — e' esattamente il punto
+        except Exception as errore:  # noqa: BLE001 — that's the whole point here
             return self._registra(
                 self._costruisci(
                     STATO_ERRORE_INTERNO,
@@ -1099,22 +1086,21 @@ class ClientAI:
             )
 
     def valuta_con_verifica(self, caso: CasoValutazione) -> EsitoAI:
-        """Il primo giro, e su ogni `ACCEPT` un secondo giro che prova a demolirlo.
+        """The first pass, then a second pass on every `ACCEPT` that tries to refute it.
 
-        E' quello che rende `ALTA` degno di fiducia, ed e' la ragione per cui gli
-        `ALTA` si possono accettare senza chiedere niente a schermo. Misurato
-        l'11 agosto 2026 su 150 casi del banco, con il prompt `v3`:
+        This is what makes `ALTA` trustworthy enough to accept without asking
+        anything on screen. Measured on a 150-case benchmark, with prompt `v3`:
 
-        | | ALTA sbagliati | ACCEPT giusti |
+        | | wrong ALTA | correct ACCEPT |
         |---|---|---|
-        | solo primo giro | 3 | 43 |
-        | con la verifica | **0** | 40 |
+        | first pass only | 3 | 43 |
+        | with the check  | 0 | 40 |
 
-        Se i due giri non concordano il caso **non diventa una domanda a
-        schermo**: la decisione scende a `UNRESOLVED`, cioe' `DA_VERIFICARE`,
-        e finisce nell'elenco che il revisore guarda con l'ordine davanti.
-        Costa una chiamata in piu' sui soli `ACCEPT`, cioe' meno di un terzo dei
-        casi: sul banco, 0,004 $ ogni 150.
+        When the two passes disagree, the case does not turn into a question
+        on screen: the decision drops to `UNRESOLVED`, i.e. `DA_VERIFICARE`,
+        and lands in the list the reviewer checks against the paper order.
+        Costs one extra call, but only on `ACCEPT` cases — under a third of
+        the total.
         """
 
         esito = self.valuta_candidati(caso)
@@ -1133,8 +1119,9 @@ class ClientAI:
         else:
             motivo_contrario = f"la verifica non è arrivata ({controllo.stato})"
 
-        # I due giri non concordano: non si sceglie chi ha ragione, si passa la
-        # mano al revisore. Un ACCEPT non confermato vale meno di niente.
+        # The two passes disagree: no attempt to decide who is right, the
+        # case is handed to the reviewer instead. An unconfirmed ACCEPT is
+        # worth less than nothing.
         declassata = {
             **decisione,
             "action": "UNRESOLVED",
@@ -1156,21 +1143,21 @@ class ClientAI:
         )
 
     def valuta_molti_con_verifica(self, casi: Sequence[CasoValutazione]) -> list[EsitoAI]:
-        """Come `valuta_molti`, ma con la verifica avversariale su ogni ACCEPT."""
+        """Like `valuta_molti`, but with the adversarial check on every ACCEPT."""
 
         return self._infornata(casi, self._verifica_senza_sorprese)
 
     def prova_connessione(self) -> EsitoAI:
-        """Una chiamata vera su un caso finto: chiave, model id e schema insieme."""
+        """A real call on a fixture case: exercises key, model id and schema together."""
 
         return self._registra(self._valuta(CASO_DI_PROVA, usa_memoria=False))
 
     @property
     def contabilita(self) -> dict:
-        """Quante chiamate, quanto speso, con quali esiti, quante dalla memoria.
+        """Calls made, spend, outcomes by status, and how many came from memory.
 
-        `chiamate` conta le richieste HTTP davvero partite, ripetizioni comprese:
-        e' quello che il tetto deve trattenere.
+        `chiamate` counts HTTP requests actually sent, retries included: it's
+        what the spend cap has to hold back.
         """
 
         with self._lucchetto:
@@ -1181,7 +1168,7 @@ class ClientAI:
                 "dalla_memoria": self._dalla_memoria,
             }
 
-    # -- il giro di una valutazione -----------------------------------------
+    # -- a single evaluation round -----------------------------------------
 
     def _valuta(
         self,
@@ -1199,8 +1186,8 @@ class ClientAI:
         if usa_memoria:
             chiave_ricordo = chiave_memoria(
                 self.configurazione["model"],
-                # L'etichetta **e** il testo: un prompt corretto senza
-                # rinominarlo deve invalidare le risposte vecchie.
+                # Label and text both: a corrected prompt, even without
+                # renaming it, must invalidate old answers.
                 f"{etichetta_prompt}:{impronta_prompt(prompt)}",
                 VERSIONE_SCHEMA,
                 caso,
@@ -1210,8 +1197,8 @@ class ClientAI:
                 ricordata = ricordo.get("decisione")
                 problema = decisione_non_utilizzabile(caso, ricordata)
                 if problema:
-                    # Una voce alterata non deve poter diventare una decisione:
-                    # si butta e si richiama, come se non ci fosse mai stata.
+                    # A corrupted entry must never turn into a decision: it's
+                    # discarded and re-requested, as if it never existed.
                     print(
                         f"[AVVISO] memoria AI: voce scartata per la riga "
                         f"{caso.gestionale_source_row} / {caso.supplier} — {problema}. "
@@ -1256,10 +1243,10 @@ class ClientAI:
                 )
 
             esito = self._una_chiamata(caso, tentativo=tentativo, inizio=inizio, prompt=prompt)
-            # Il primo tentativo si paga anche quando fallisce — una risposta
-            # troncata ha consumato e fatturato i token di ragionamento — quindi
-            # l'esito porta la somma, non l'ultimo importo: chi somma gli esiti
-            # per fare un rapporto deve trovare la spesa vera.
+            # The first attempt is charged even when it fails — a truncated
+            # response still consumed and billed reasoning tokens — so the
+            # outcome carries the running total, not just the last amount:
+            # anyone summing outcomes for a report needs to see the real spend.
             costo_accumulato += esito.costo_usd
             esito = _con_costo(esito, costo_accumulato)
             if esito.stato == STATO_OK:
@@ -1272,7 +1259,7 @@ class ClientAI:
             if esito.stato in STATI_CON_PAUSA and PAUSA_RIPETIZIONE_S > 0:
                 time.sleep(PAUSA_RIPETIZIONE_S)
 
-        return ultimo  # non ci si arriva: il ciclo torna sempre prima
+        return ultimo  # unreachable: the loop always returns before this
 
     def _una_chiamata(
         self,
@@ -1307,8 +1294,9 @@ class ClientAI:
                 url, corpo, intestazioni, _numero(self.configurazione["timeout_secondi"], 60.0)
             )
         except GUASTI_DI_RETE as errore:
-            # Rete, DNS, timeout, corpo indecifrabile: sono guasti, non eccezioni
-            # per chi chiama, e ha senso ritentarli.
+            # Network, DNS, timeout, an undecodable body: these are failures,
+            # not exceptions as far as the caller sees them, and retrying
+            # them makes sense.
             self._chiudi_prenotazione(0.0)
             return self._costruisci(
                 STATO_ERRORE_RETE,
@@ -1316,10 +1304,11 @@ class ClientAI:
                 durata=time.monotonic() - inizio,
                 dettaglio=f"Chiamata non riuscita ({type(errore).__name__}): {self._pulito(errore)}",
             )
-        except Exception as errore:  # noqa: BLE001 — vedi STATO_ERRORE_TRASPORTO
-            # Un KeyError, un AssertionError, un MemoryError dentro un trasporto
-            # iniettato non sono la rete che va male: sono un difetto. Non si
-            # ripetono e non si mescolano ai guasti di rete nella contabilita'.
+        except Exception as errore:  # noqa: BLE001 — see STATO_ERRORE_TRASPORTO
+            # A KeyError, AssertionError or MemoryError inside an injected
+            # transport isn't the network failing: it's a defect. These
+            # aren't retried, and they aren't mixed with network failures in
+            # the per-status accounting.
             self._chiudi_prenotazione(0.0)
             return self._costruisci(
                 STATO_ERRORE_TRASPORTO,
@@ -1331,12 +1320,12 @@ class ClientAI:
                 ),
             )
 
-        # La prenotazione va chiusa **comunque**, anche se l'interpretazione
-        # solleva o se il codice non e' un numero: una prenotazione che resta
-        # aperta non torna mai giu', e dopo qualche caso ogni valutazione
-        # comincia a rispondere TETTO_SPESA con il tetto quasi intatto. La run
-        # si spegnerebbe da sola, in silenzio, e tutti i prodotti rimasti
-        # diventerebbero DA_VERIFICARE senza che niente lo dica.
+        # The reservation must be released regardless, even if interpreting
+        # the response raises or the status code isn't a number: a
+        # reservation left open never comes back down, and after a few cases
+        # every evaluation starts returning TETTO_SPESA while the actual cap
+        # is barely touched. The run would quietly stall, with every
+        # remaining product silently turning into DA_VERIFICARE.
         esito = None
         try:
             esito = self._interpreta(caso, int(codice), risposta, tentativo=tentativo, inizio=inizio)
@@ -1344,7 +1333,7 @@ class ClientAI:
         finally:
             self._chiudi_prenotazione(esito.costo_usd if esito is not None else 0.0)
 
-    # -- i controlli, nell'ordine del contratto ------------------------------
+    # -- the checks, in contract order ------------------------------
 
     def _interpreta(
         self,
@@ -1356,9 +1345,10 @@ class ClientAI:
         inizio: float,
     ) -> EsitoAI:
         corpo = risposta if isinstance(risposta, dict) else {}
-        # `or {}` non basta: copre un usage falso (null, {}, 0) ma non un usage
-        # vero di forma sbagliata, e un `.get` su una stringa solleva. Qui una
-        # sola risposta deforme farebbe saltare l'intera infornata.
+        # `or {}` isn't enough: it covers a falsy usage (null, {}, 0) but not
+        # a real usage object of the wrong shape, and `.get` on a string
+        # raises. A single malformed response would otherwise crash the
+        # whole batch.
         uso = corpo.get("usage") if isinstance(corpo.get("usage"), dict) else {}
         costo = _numero(uso.get("cost"), 0.0)
         comune = {
@@ -1379,13 +1369,13 @@ class ClientAI:
                 **comune,
             )
 
-        # 1. HTTP diverso da 200.
+        # 1. HTTP status other than 200.
         if codice != 200:
-            # Il fornitore che pretende la parola «json» nei messaggi: non e' un
-            # rifiuto e non e' un model id sbagliato, e' una convenzione sua.
-            # Si accende l'aggiunta e si ripete — una volta sola, e da qui in
-            # avanti per tutta l'infornata, altrimenti 948 casi pagherebbero
-            # 948 primi tentativi buttati.
+            # The provider requiring the word "json" in messages: not a
+            # rejection and not a wrong model id, just its own convention.
+            # The flag is turned on and the call is retried — once, and then
+            # for the rest of the batch, otherwise every case would pay for a
+            # wasted first attempt.
             if codice == 400 and _chiede_la_parola_json(risposta):
                 self._formato_obbligatorio = True
                 return esito(
@@ -1401,12 +1391,12 @@ class ClientAI:
                 dettaglio=f"Il servizio ha risposto {codice}: {self._pulito(_messaggio_di_errore(risposta))}",
             )
 
-        # Un errore dichiarato dentro un 200: capita quando il guasto arriva a
-        # risposta gia' aperta. Vale come l'errore HTTP che dichiara, **anche se
-        # insieme arriva un `choices` pieno**: se il servizio dichiara un
-        # guasto, l'esito e' quel guasto. Nel caso raro in cui il contenuto
-        # fosse comunque completo si paga una ripetizione, che e' il verso
-        # giusto in cui sbagliare.
+        # An error declared inside a 200: happens when the failure arrives
+        # after the response stream has already opened. Treated as the HTTP
+        # error it declares even if a populated `choices` comes along with
+        # it: if the service reports a failure, that's the outcome. In the
+        # rare case the content was actually complete, this costs one
+        # unnecessary retry — the right side to err on.
         errore_nel_corpo = corpo.get("error")
         if isinstance(errore_nel_corpo, dict):
             codice_interno = _intero(errore_nel_corpo.get("code"), 0)
@@ -1422,7 +1412,7 @@ class ClientAI:
         messaggio = scelta.get("message") if isinstance(scelta.get("message"), dict) else {}
         contenuto = messaggio.get("content")
 
-        # 2. La trappola misurata: il tetto dei token consumato a ragionare.
+        # 2. The measured trap: the token budget spent entirely on reasoning.
         if motivo_fine == "length":
             return esito(
                 STATO_TRONCATA,
@@ -1433,14 +1423,14 @@ class ClientAI:
                 ),
             )
 
-        # 3. Contenuto assente, non stringa o vuoto: mai un REJECT.
+        # 3. Content missing, not a string, or empty: never treated as a REJECT.
         if not isinstance(contenuto, str) or not contenuto.strip():
             return esito(
                 STATO_CONTENUTO_VUOTO,
                 dettaglio="Il servizio ha risposto 200 ma senza testo utile: nessuna decisione.",
             )
 
-        # 4. Contenuto non JSON.
+        # 4. Content that isn't JSON.
         try:
             grezza = json.loads(contenuto)
         except ValueError:
@@ -1449,7 +1439,7 @@ class ClientAI:
                 dettaglio=f"Risposta non in JSON: {self._pulito(contenuto, 160)}",
             )
 
-        # 5. Chiavi o valori fuori schema.
+        # 5. Keys or values outside the schema.
         problema = _fuori_schema(grezza)
         if problema:
             return esito(
@@ -1461,7 +1451,7 @@ class ClientAI:
         source_row = grezza["source_row"]
         righe_ammesse = {candidato.source_row for candidato in caso.candidati}
 
-        # 6. Una riga che non era fra i candidati: si scarta, non si discute.
+        # 6. A row that wasn't among the candidates: discarded, no debate.
         if azione == "ACCEPT" and source_row not in righe_ammesse:
             return esito(
                 STATO_RIGA_FUORI_SHORTLIST,
@@ -1471,7 +1461,7 @@ class ClientAI:
                 ),
             )
 
-        # 7. Una riga su un rifiuto non vuol dire niente: si azzera.
+        # 7. A row on a non-ACCEPT means nothing: cleared.
         if azione != "ACCEPT" and source_row is not None:
             source_row = None
 
@@ -1482,13 +1472,13 @@ class ClientAI:
             "source_row": source_row,
             "confidence": grezza["confidenza"],
             "rationale": str(grezza["motivo"]),
-            # Resta `true`: accettare gli ALTA senza conferma tocca
-            # merge_match_decisions.py e build_review_data.py, non la 5a.
+            # Stays `true`: auto-accepting high-confidence matches without
+            # confirmation is a decision for `merge_match_decisions.py` and
+            # `build_review_data.py`, not for this module.
             "requires_user_confirmation": True,
         }
-        # Ultima rete, la stessa che attraversa una decisione ripresa dalla
-        # memoria: cosi' il controllo sta davvero in un posto solo e le due
-        # strade non possono divergere.
+        # The same final check a memory-recalled decision goes through: this
+        # keeps the validation in one place, so the two paths can't diverge.
         problema = decisione_non_utilizzabile(caso, decisione)
         if problema:
             return esito(
@@ -1497,24 +1487,24 @@ class ClientAI:
             )
         return esito(STATO_OK, decisione=decisione, dettaglio="Risposta valida e validata.")
 
-    # -- contabilita', tetti, memoria ---------------------------------------
+    # -- accounting, caps, memory ---------------------------------------
 
     def _prenota_chiamata(self) -> str | None:
-        """Verifica i tetti e prenota chiamata **e spesa**. Torna chi trattiene.
+        """Checks the caps and reserves a call and its spend. Returns who's blocking.
 
-        Il controllo e la prenotazione stanno nella stessa sezione protetta: con
-        `parallelismo` thread — trentadue, oggi — controllare e poi
-        incrementare farebbe sforare il tetto di altrettante chiamate.
+        The check and the reservation happen inside the same lock: with
+        `parallelismo` worker threads, checking and then incrementing
+        separately would let that many calls overshoot the cap together.
 
-        Si prenota anche la spesa, non solo la chiamata: il costo vero si sa
-        solo quando la risposta torna, quindi senza prenotazione N thread
-        possono superare il controllo tutti insieme prima che uno qualunque
-        abbia aggiunto il suo costo, e il tetto salta di N chiamate. Si mette da
-        parte il costo piu' alto visto finora (all'inizio una stima prudente) e
-        lo si restituisce quando arriva il costo vero.
+        The spend is reserved too, not just the call slot: the real cost is
+        only known once the response comes back, so without a reservation N
+        threads could all pass the check before any of them has added its
+        cost, overshooting the cap by N calls. The highest cost seen so far
+        (a conservative guess at first) is set aside and returned once the
+        real cost arrives.
 
-        Il ripiego dei due tetti e' il **predefinito**, mai zero: un tetto che
-        vale zero spegne tutta la fase senza dirlo.
+        The fallback for both caps is always the default, never zero: a cap
+        of zero would silently disable the whole phase.
         """
 
         with self._lucchetto:
@@ -1535,7 +1525,7 @@ class ClientAI:
             return None
 
     def _chiudi_prenotazione(self, costo: float) -> None:
-        """Il costo vero prende il posto della stima messa da parte."""
+        """The real cost replaces the estimate that was set aside."""
 
         with self._lucchetto:
             self._impegnato = max(0.0, self._impegnato - self._costo_atteso)
@@ -1551,7 +1541,7 @@ class ClientAI:
         return esito
 
     def _leggi_ricordo(self, chiave: str) -> dict | None:
-        """La voce, solo se ha la forma minima. Chi chiama la valida comunque."""
+        """The entry, only if it has the minimal shape. The caller validates it anyway."""
 
         with self._lucchetto:
             voce = self._voci.get(chiave)
@@ -1560,31 +1550,32 @@ class ClientAI:
             return dict(voce)
 
     def _dimentica(self, chiave: str) -> None:
-        """Toglie una voce guasta, così non la si rilegge a ogni giro."""
+        """Removes a corrupted entry, so it isn't read back on every pass."""
 
         with self._lucchetto:
             self._voci.pop(chiave, None)
 
     def _scrivi_ricordo(self, chiave: str, esito: EsitoAI) -> None:
-        """Solo le risposte valide entrano in memoria.
+        """Only valid answers are memorized.
 
-        Un fallimento non si memorizza: la run dopo deve poterlo ritentare.
+        A failure is never memorized: the next run needs to be able to retry it.
 
-        ⚠ **Dentro un'infornata il file non si riscrive a ogni risposta.**
-        Salvare significa rileggere, fondere e riscrivere **tutto** il file, e
-        il costo cresce con la sua dimensione: misurato dalla revisione della
-        6b, 948 casi con una memoria di 568 KB pagavano **~90 secondi**
-        serializzati dentro il lucchetto — su una run che di rete ne impiega
-        105 — e il file cresceva a 1408 KB, cioe' la settimana dopo sarebbe
-        costata di piu'. Il parallelismo su quei 90 secondi non compra niente,
-        perche' sono tutti dentro la stessa sezione protetta.
+        Inside a batch, the file is not rewritten on every single answer.
+        Saving means re-reading, merging and rewriting the whole file, and
+        the cost grows with its size: measured on a real 948-case run with a
+        568 KB memory file, ~1000 saves cost ~90 s serialized inside the
+        lock, against ~105 s of network time for the rest of the run, and the
+        file grew to 1408 KB — so the following week's run would cost more
+        still. Parallelism buys nothing on that time, since it all runs
+        inside the same lock.
 
-        Quindi: in RAM sempre, su disco ogni `RISPOSTE_FRA_DUE_SALVATAGGI` e
-        una volta alla fine dell'infornata. Fuori da un'infornata si salva
-        subito, com'era: chi valuta un caso solo non ha una «fine» a cui
-        appoggiarsi. Il prezzo e' che una run interrotta perde al massimo un
-        centinaio di risposte gia' pagate, e la memoria e' una cache: perderne
-        un pezzo costa soldi la prossima volta, non correttezza.
+        So: always in RAM, flushed to disk every
+        `RISPOSTE_FRA_DUE_SALVATAGGI` answers and once at the end of the
+        batch. Outside a batch it's saved immediately, as before: evaluating
+        a single case has no "end" to defer to. The trade-off is that an
+        interrupted run loses at most a hundred already-paid-for answers,
+        and memory is a cache: losing a slice of it costs money next time,
+        not correctness.
         """
 
         voce = {
@@ -1603,12 +1594,12 @@ class ClientAI:
             self._salva_adesso()
 
     def _salva_adesso(self) -> None:
-        """Riscrive il file della memoria. **Va chiamata con il lucchetto in mano.**
+        """Rewrites the memory file. Must be called with the lock held.
 
-        Si rilegge il file e ci si fonde dentro: un secondo client (o una
-        seconda run) che avesse scritto nel frattempo non deve sparire perche'
-        noi riscriviamo la nostra copia in RAM. Le nostre voci vincono sulle sue
-        a parita' di chiave, ma non le cancellano."""
+        The file is re-read and merged into: a second client (or a second
+        run) that wrote in the meantime must not lose its entries just
+        because this call rewrites its own in-RAM copy. This call's entries
+        win on a matching key, but don't erase the others."""
 
         if self._percorso_memoria is None:
             return
@@ -1620,7 +1611,7 @@ class ClientAI:
 
     @staticmethod
     def _carica_memoria(percorso: Path, *, in_silenzio: bool = False) -> dict[str, dict]:
-        """Un file di memoria illeggibile è un avviso, non un errore."""
+        """An unreadable memory file is a warning, not an error."""
 
         if not percorso.exists():
             return {}
@@ -1639,21 +1630,17 @@ class ClientAI:
 
     @staticmethod
     def _salva_memoria(percorso: Path, voci: dict[str, dict]) -> None:
-        """Scrittura atomica, in binario e forzata sul disco: `scrittura_sicura`.
+        """Atomic, binary, fsync'd write, via `scrittura_sicura`.
 
-        Lo schema — temporaneo col nome di chi lo scrive, `fsync`, `os.replace`
-        — era in quattro copie e questa era la sola col nome unico: adesso ce
-        l'hanno tutte, e ce l'hanno una volta sola.  Le chiavi si ordinano
-        perche' due salvataggi dello stesso contenuto devono dare lo stesso
-        file.
+        Keys are sorted so that two saves of the same content produce the
+        same file byte for byte.
 
-        ⚠ Un guasto del **disco** non ferma niente: si perde la memoria di
-        questa run e si ripagano le domande all'AI, che e' meno grave di una run
-        che si ferma. Gli altri si', e non e' cambiato con lo spostamento su
-        `scrittura_sicura`: `json.dumps` stava fuori dal `try` anche prima,
-        quindi una voce non serializzabile propagava allora come adesso. Quello
-        che e' cambiato in meglio e' che il temporaneo viene tolto di mezzo per
-        qualunque eccezione, non solo per un `OSError`.
+        A disk failure doesn't stop anything: this run's memory is lost and
+        the AI questions get re-asked, which is less severe than stopping the
+        run. A non-serializable entry still propagates as an exception,
+        since `json.dumps` runs outside the try block; what the shared
+        `scrittura_sicura` helper does add is cleaning up the temp file for
+        any exception, not just an `OSError`.
         """
 
         try:
@@ -1664,10 +1651,10 @@ class ClientAI:
         except OSError as errore:
             print(f"[AVVISO] memoria AI non salvata: {errore}")
     def _pulito(self, testo: Any, quanti: int = 300) -> str:
-        """Prima toglie la chiave, poi accorcia.
+        """Strips the key first, then truncates.
 
-        L'ordine conta: accorciare per primo potrebbe tagliare la chiave a meta'
-        e lasciarne un pezzo, che la sostituzione esatta non riconoscerebbe piu'.
+        Order matters: truncating first could cut the key in half and leave
+        a fragment the exact-match substitution would no longer recognize.
         """
 
         return _accorcia(oscura(str(testo or ""), self._chiave), quanti)
@@ -1686,7 +1673,7 @@ class ClientAI:
         durata: float = 0.0,
         dettaglio: str = "",
     ) -> EsitoAI:
-        """Costruisce l'esito e toglie la chiave da ogni campo, uno per uno."""
+        """Builds the outcome and strips the key from every field, one by one."""
 
         if decisione is not None:
             decisione = {nome: oscura(valore, self._chiave) for nome, valore in decisione.items()}
@@ -1705,12 +1692,12 @@ class ClientAI:
 
 
 # ----------------------------------------------------------------------------
-# Aiutanti liberi
+# Free-standing helpers
 # ----------------------------------------------------------------------------
 
 
 def _verifica_caso(caso: CasoValutazione) -> None:
-    """Un caso senza candidati è un uso sbagliato dell'API, non un guasto."""
+    """A case with no candidates is API misuse, not a failure."""
 
     if not isinstance(caso, CasoValutazione):
         raise TypeError("Serve un CasoValutazione.")
@@ -1722,7 +1709,7 @@ def _verifica_caso(caso: CasoValutazione) -> None:
 
 
 def _fuori_schema(grezza: Any) -> str:
-    """Dice perché la risposta non è conforme, o stringa vuota se lo è."""
+    """Says why the response doesn't conform, or an empty string if it does."""
 
     if not isinstance(grezza, dict):
         return f"non è un oggetto ma {type(grezza).__name__}"
@@ -1757,16 +1744,15 @@ CHIAVI_DECISIONE = frozenset({
 
 
 def decisione_non_utilizzabile(caso: CasoValutazione, decisione: Any) -> str:
-    """Dice perche' una decisione non si puo' usare, o stringa vuota se si puo'.
+    """Says why a decision can't be used, or an empty string if it can.
 
-    Vale per **tutte** le decisioni, da qualunque strada arrivino: quella appena
-    interpretata e quella ripresa dalla memoria. Sono i controlli 5, 6 e 7 del
-    contratto raccolti in un posto solo, cosi' non possono piu' restare indietro
-    su una delle due strade. La memoria vive in `app/data/`, fuori dal controllo
-    di versione: e' un file che si puo' modificare a mano, che puo' cambiare
-    forma fra una versione e l'altra, e da cui non deve mai poter uscire la
-    decisione piu' pericolosa che questo progetto conosca — un `ACCEPT` con
-    confidenza `ALTA` su una riga che non era fra i candidati.
+    Applies to every decision, whichever path it took: freshly interpreted
+    or recalled from memory. This collects checks 5, 6 and 7 of the contract
+    in one place, so the two paths can't drift apart. Memory lives in
+    `app/data/`, outside version control — a file that can be hand-edited and
+    can change shape between versions — and it must never be able to produce
+    the most dangerous decision this project knows: an `ACCEPT` at `ALTA`
+    confidence on a row that wasn't among the candidates.
     """
 
     if not isinstance(decisione, dict):
@@ -1801,7 +1787,7 @@ def decisione_non_utilizzabile(caso: CasoValutazione, decisione: Any) -> str:
 
 
 def _messaggio_di_errore(risposta: Any) -> str:
-    """Il messaggio dichiarato dal servizio, se c'è; altrimenti il corpo."""
+    """The message the service declared, if any; otherwise the whole body."""
 
     if isinstance(risposta, dict):
         errore = risposta.get("error")
@@ -1830,6 +1816,6 @@ def _con_dettaglio(esito: EsitoAI, dettaglio: str) -> EsitoAI:
 
 
 def _con_costo(esito: EsitoAI, costo_usd: float) -> EsitoAI:
-    """L'esito con la spesa di **tutti** i tentativi, non solo dell'ultimo."""
+    """The outcome with the spend of every attempt, not just the last one."""
 
     return replace(esito, costo_usd=round(costo_usd, 10))

@@ -1,36 +1,34 @@
 #!/usr/bin/env python3
-"""Il magazzino delle conferme: quello che l'utente ha già risposto, e quando.
+"""Store of the user's confirmations: what was answered, and when.
 
-Il problema che risolve, con i numeri veri di questo progetto. Ogni settimana
-l'export del gestionale è un file nuovo, e l'identificativo di un prodotto in
-pagina è il suo **numero di riga** (`product:539`). Misurato il 15 agosto 2026
-sui due export veri sul disco: dei 457 identificativi presenti in tutti e due,
-**449 portano un articolo diverso** — `product:3` era un appendiabiti e adesso
-è una lametta Gillardo. Una conferma legata a quell'identificativo non si
-perde soltanto: si riapplica in silenzio a merce che l'utente non ha mai visto.
+The management-software export is a new file every week, and a product's
+identifier on the page is its row number (`product:539`). Row numbers are
+not stable across exports: the same identifier can point at a different item
+next week. A confirmation keyed on the row number would not just get lost —
+it would silently reapply to merchandise the user never actually reviewed.
 
-Qui la conferma è legata a **che cosa è l'articolo**, non a dove sta scritto:
+A confirmation is keyed on what the item is, not on where it is written:
 
-* l'articolo del **gestionale** è `impronta_prodotto` — codice a barre e nome
-  ridotto all'osso, niente riga e niente prezzo;
-* l'articolo del **fornitore** è `impronta_articolo` di
-  `scripts/build_review_data.py`, che esiste già e non si riscrive qui: due
-  definizioni della stessa identità sono due verità sullo stesso dato, e il
-  giorno in cui una cambia il magazzino smette di combaciare in silenzio.
+* the management-software item identity is `impronta_prodotto` — barcode
+  and name stripped to the essentials, no row and no price;
+* the supplier item identity is `impronta_articolo` from
+  `scripts/build_review_data.py`, reused rather than redefined here: two
+  definitions of the same identity would be two sources of truth for the same
+  data, and the day one of them changes the store stops matching silently.
 
-**Questo modulo non decide niente.** Non sa che cos'è un'offerta conveniente,
-non applica nessuna conferma e non scade niente da solo: ricorda quello che gli
-si dice e risponde a chi chiede. Ogni regola commerciale sta fuori di qui.
+This module makes no business decisions. It doesn't know what a good deal
+is, doesn't apply any confirmation and doesn't expire anything on its own: it
+remembers what it's told and answers what it's asked. All commercial rules
+live outside this module.
 
-⚠ **Una conferma che dura per sempre è un modo di sbagliare per sempre.** A
-valle di questa memoria c'è un ordine vero: se l'utente conferma una
-corrispondenza sbagliata, quella tornerebbe ogni lunedì senza che nessuno la
-riguardi. Per questo ogni riga porta con sé **quando**, **quale offerta esatta**
-e **perché**, niente si cancella mai davvero (`dimentica` chiude una riga, non
-la butta) e `esporta` restituisce tutto in chiaro: un `.db` non si legge a
-occhio, e l'utente deve poter guardare che cosa ha confermato.
+A confirmation that never expires is a mistake that repeats forever: if the
+user confirms a wrong match, it would resurface every week unreviewed. So every
+row carries when, which exact offer, and why; nothing is ever
+truly deleted (`dimentica` closes a row, it doesn't drop it), and `esporta`
+returns everything in the open — a `.db` file isn't human-readable, and the
+user needs to be able to see what was confirmed.
 
-Il file lo sceglie il chiamante: qui dentro non c'è nessun percorso cablato.
+The caller chooses the file path; nothing is hardcoded here.
 """
 
 from __future__ import annotations
@@ -41,11 +39,9 @@ import threading
 from pathlib import Path
 from typing import Any
 
-# `normalized_name` e `impronta_articolo` vengono dal modulo che li ha già:
-# ricopiarli qui vorrebbe dire due regole di identità da tenere allineate, e
-# quella che si dimentica è sempre quella che fa perdere le conferme. È lo
-# stesso aggancio che `app/server.py` usa da prima (`from build_review_data
-# import impronta_articolo`).
+# `normalized_name` and `impronta_articolo` come from the module that already
+# owns them: duplicating them here would mean two identity rules to keep in
+# sync. Same import path `app/server.py` already uses.
 _CARTELLA_SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 if str(_CARTELLA_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_CARTELLA_SCRIPTS))
@@ -61,68 +57,60 @@ __all__ = [
     "VERSIONE_SCHEMA",
 ]
 
-# 2: le uguaglianze fra codici a barre (17 agosto 2026).
-# ⚠ Il numero sale **anche per una tabella in più**, e il guardiano di
-# `_prepara` continua a rifiutare un file scritto da una versione più recente.
-# Sembra severo — una tabella nuova non rompe la lettura di quella vecchia — ma
-# l'eccezione «le aggiunte non contano» è una regola che dovrebbe indovinare da
-# sola quali cambiamenti sono innocui, e il primo che non lo è passerebbe in
-# silenzio. Il prezzo, tornando indietro con la versione, è riaprire il file con
-# la versione che l'ha scritto: dichiarato, e reversibile.
+# 2: adds the barcode-equality tables. Bumped for any schema change, including
+# an additive one: `_prepara` rejects a file written by a newer schema rather
+# than guessing which changes are safe to skip. Downgrading means reopening
+# the file with the version that wrote it.
 VERSIONE_SCHEMA = 2
 
-# Quanto una scrittura aspetta che l'altra finisca prima di dichiarare il file
-# occupato. Il servizio è multi-thread — il polling della pagina e il filo della
-# pipeline scrivono dallo stesso processo, e niente vieta due processi — e senza
-# questa attesa la seconda scrittura morirebbe con «database is locked» invece
-# di mettersi in coda per qualche millisecondo.
+# How long one write waits for another to finish before the file counts as
+# busy. The service is multi-threaded (the page poller and the pipeline
+# thread write from the same process, and nothing rules out a second
+# process), and without this wait the second write would fail with
+# "database is locked" instead of queuing for a few milliseconds.
 ATTESA_BLOCCO_S = 10.0
 
 
 class MagazzinoNonUtilizzabile(RuntimeError):
-    """Il file delle conferme non si apre, o non si legge più.
+    """The confirmations file can't be opened, or has become unreadable.
 
-    È **un'eccezione sola da intercettare**, e non un guasto silenzioso, per una
-    ragione che vale la pena scrivere: rispondere «nessuna conferma» a un file
-    illeggibile farebbe tornare tutte le domande senza dire perché, e l'utente
-    riconfermerebbe a mano credendo che il programma non avesse mai saputo
-    niente. Chi aggancia questo magazzino al servizio deve intercettarla
-    **all'apertura**, in un posto solo, e decidere lì se proseguire senza
-    memoria dicendolo in pagina: la decisione è sua, non di questo modulo.
+    A single exception to catch, deliberately not a silent fallback:
+    answering "no confirmation" for an unreadable file would resurface every
+    question without explanation, and the user would reconfirm by hand
+    believing the program never knew anything. The caller must catch this
+    at open time, in one place, and decide there whether to proceed
+    without memory and say so in the UI — that decision belongs to the
+    caller, not to this module.
     """
 
 
 def impronta_prodotto(prodotto: Any) -> str:
-    """Che cosa identifica l'articolo del **gestionale**, non la sua riga.
+    """Identity fingerprint of the management-software item, not its row.
 
-    Stesso criterio di `impronta_articolo` per il lato fornitore: dentro ci va
-    l'identità e nient'altro — **codice a barre e nome normalizzato**. Fuori
-    restano di proposito:
+    Same criterion as `impronta_articolo` on the supplier side: identity and
+    nothing else — barcode and normalized name. Deliberately excluded:
 
-    * il **numero di riga**, che è il difetto da cui nasce tutto questo modulo
-      (449 identificativi su 457 cambiano articolo fra i due export veri);
-    * il **prezzo** e la quantità suggerita, che cambiano ogni settimana sullo
-      stesso articolo: farli entrare vorrebbe dire rifare la domanda a ogni
-      ritocco di listino, cioè insegnare a spuntare senza leggere.
+    * the row number, the reason this module exists (row numbers are not
+      stable across weekly exports, see the module docstring);
+    * price and suggested quantity, which change weekly on the same item:
+      including them would mean re-asking the confirmation on every price-list
+      update, i.e. training the user to click through without reading.
 
-    ⚠ **Il codice a barre da solo non basta**, e il nome ci sta apposta. In
-    questo export gli EAN si accorciano fino a otto cifre (`59016458`) e sono
-    scritti a mano: un codice ribattuto sull'articolo sbagliato aggancerebbe la
-    conferma di ieri a merce diversa **in silenzio**, che è l'unico modo di
-    sbagliare che questo modulo deve rendere impossibile. Con il nome dentro,
-    quel caso fa scadere la conferma e la domanda torna — perdere una conferma
-    costa un clic, applicarne una sbagliata costa un ordine. E costa zero:
-    misurato sui due export veri, dei 90 codici presenti in tutti e due
-    **nessuno** ha cambiato descrizione.
+    The barcode alone isn't enough, hence the name. In this export EANs are
+    sometimes truncated to eight digits and hand-typed: a barcode mistyped
+    onto the wrong item would silently attach yesterday's confirmation to
+    different merchandise, which is the one failure mode this module must
+    rule out. With the name included, that case expires the confirmation
+    instead — losing a confirmation costs a click, applying a wrong one costs
+    an order.
 
-    Restituisce `""` quando non c'è né codice né nome: un articolo che non si
-    identifica non si ricorda (vedi `MagazzinoConferme.ricorda`).
+    Returns `""` when there is neither a code nor a name: an item that can't
+    be identified can't be remembered (see `MagazzinoConferme.ricorda`).
 
-    ⚠ Nota per chi aggancia: due righe dello stesso export con lo stesso codice
-    e lo stesso nome danno la **stessa** impronta — nell'export del 15 agosto
-    succede davvero, `DIXOR POLVERE CLASSICO 40MISURINI` compare due volte. È
-    voluto: sono lo stesso articolo, e la conferma data sull'una vale sull'altra.
-    Il suffisso che distingue le due righe in pagina è una faccenda della pagina.
+    Note for callers: two rows in the same export with the same code and name
+    give the same fingerprint on purpose — they are the same item, and a
+    confirmation on one applies to the other. The row-level suffix that tells
+    the two rows apart on the page is the page's concern, not this module's.
     """
 
     if not isinstance(prodotto, dict):
@@ -135,17 +123,17 @@ def impronta_prodotto(prodotto: Any) -> str:
 
 
 def codice_confrontabile(valore: Any) -> str:
-    """Un codice a barre ridotto a quello che si confronta: cifre e basta.
+    """Reduce a barcode to what actually gets compared: digits only.
 
-    Nell'export del gestionale gli EAN sono scritti a mano e arrivano in tutti i
-    modi: `'4009428623194'`, `4009428623194.0` quando il foglio li ha letti come
-    numeri, con spazi davanti, con un apostrofo iniziale. Due scritture dello
-    stesso codice devono dare la stessa chiave, altrimenti un'uguaglianza
-    dichiarata lunedì non si ritrova martedì **senza dare nessun errore**.
+    In the management-software export EANs are hand-typed and arrive in
+    several shapes: `'4009428623194'`, `4009428623194.0` when the sheet read
+    them as numbers, with leading spaces, with a leading apostrophe. Two
+    spellings of the same code must produce the same key, or an equality
+    declared one week won't be found the next — without raising any error.
 
-    Non si normalizza la lunghezza: un EAN-8 e un EAN-13 restano codici diversi,
-    ed è giusto — se sono lo stesso articolo lo dice un'uguaglianza, che è
-    esattamente lo strumento che questo modulo offre.
+    Length is not normalized: an EAN-8 and an EAN-13 remain different codes,
+    which is correct — whether they're the same item is exactly what an
+    equality declaration (see `unisci`) is for.
     """
 
     testo = str(valore or "").strip()
@@ -155,12 +143,12 @@ def codice_confrontabile(valore: Any) -> str:
 
 
 def _identifica_qualcosa(impronta: str) -> bool:
-    """Un'impronta fatta di soli separatori non identifica niente.
+    """A fingerprint made only of separators identifies nothing.
 
-    `impronta_articolo({})` restituisce `"|||"`, che è una stringa e sembra
-    un'impronta: registrarla vorrebbe dire agganciare quella conferma alla prima
-    riga che domani nascerà altrettanto vuota. Quando l'impronta ha più pezzi, il
-    **primo** non conta da solo: `"noce|||"` è un fornitore, non un articolo.
+    `impronta_articolo({})` returns `"|||"`, which is a string and looks like
+    a fingerprint; storing it would attach the confirmation to the next
+    equally empty row. When the fingerprint has several parts, the first
+    alone doesn't count: `"noce|||"` is a supplier, not an item.
     """
 
     pezzi = impronta.split("|")
@@ -170,47 +158,47 @@ def _identifica_qualcosa(impronta: str) -> bool:
 
 
 class MagazzinoConferme:
-    """Le conferme dell'utente, in un file SQLite che il chiamante sceglie.
+    """The user's confirmations, in a SQLite file the caller chooses.
 
-    **Una tabella sola, mai riscritta: si aggiunge una riga e si chiude quella
-    di prima.** L'alternativa — una tabella per le conferme in vigore e una per
-    lo storico — è stata scartata perché lo stesso fatto starebbe scritto in due
-    posti: ogni `ricorda` dovrebbe aggiornarli tutti e due, e il giorno in cui
-    uno dei due percorsi sbaglia il magazzino risponde «cosa avevi deciso prima»
-    da una tabella in cui quella riga non è mai arrivata. Qui la storia **sono**
-    le righe: `valida_dal` è l'istante in cui la risposta è entrata in vigore,
-    `valida_fino_a` quello in cui è stata sostituita o tolta, e `NULL` vuol dire
-    «vale adesso». Nessun `UPDATE` toglie mai contenuto: l'unico che esiste
-    scrive `valida_fino_a`, cioè **aggiunge** un fatto.
+    A single table, never rewritten: append a row, close the previous
+    one. The alternative — one table for current confirmations, one for
+    history — was rejected because the same fact would live in two places:
+    every `ricorda` would have to update both, and the day one path is missed
+    the store answers "what did you decide before" from a table that row
+    never reached. Here the rows are the history: `valida_dal` is when
+    the answer took effect, `valida_fino_a` when it was replaced or removed,
+    and `NULL` means "in effect now". No `UPDATE` ever removes content; the
+    only one there is sets `valida_fino_a`, i.e. it adds a fact.
 
-    Gli indici sono due, e ognuno difende una cosa:
+    Two indexes, each protecting one thing:
 
-    * `conferme_in_vigore`, unico e parziale su `(fornitore, articolo)` dove
-      `valida_fino_a IS NULL`: è insieme la strada di `cerca` e **l'invariante**
-      «al massimo una conferma in vigore per coppia», tenuta dal database e non
-      dal mio codice. Se un giorno una transazione qui dentro sbaglia, il file
-      non si riempie di due risposte contemporanee: la scrittura fallisce.
-    * `conferme_storia` su `(fornitore, articolo, valida_dal)`: la domanda
-      «che cosa avevo deciso prima, e quando» in ordine di tempo.
+    * `conferme_in_vigore`, a unique partial index on `(fornitore, articolo)`
+      where `valida_fino_a IS NULL`: both the lookup path for `cerca` and the
+      invariant "at most one active confirmation per pair", enforced by the
+      database rather than by this code. If a transaction here ever goes
+      wrong, the file doesn't end up with two simultaneous answers — the
+      write fails instead.
+    * `conferme_storia` on `(fornitore, articolo, valida_dal)`: answers "what
+      did I decide before, and when" in time order.
 
-    Concorrenza: il servizio è multi-thread (il polling della pagina e il filo
-    della pipeline). La connessione è una sola e un lucchetto interno serializza
-    le operazioni di questo oggetto; `PRAGMA journal_mode=WAL` e l'attesa sul
-    blocco tengono il resto, cioè un secondo magazzino aperto sullo stesso file
-    da un altro thread o da un altro processo. Ogni scrittura apre la
-    transazione con `BEGIN IMMEDIATE`: prende il blocco subito invece di
-    scoprire al `COMMIT` che un'altra l'ha preceduta, che è il modo classico in
-    cui due scritture SQLite si uccidono a vicenda senza poter più riprovare.
+    Concurrency: the service is multi-threaded (the page poller and the
+    pipeline thread). One connection, serialized by an internal lock;
+    `PRAGMA journal_mode=WAL` plus the busy-timeout handle the rest — a
+    second store opened on the same file from another thread or process.
+    Every write opens its transaction with `BEGIN IMMEDIATE`, taking the
+    lock up front instead of discovering at `COMMIT` that another write got
+    there first, which is the usual way two SQLite writers deadlock each
+    other with no way to retry.
     """
 
     def __init__(self, percorso: Path) -> None:
         self.percorso = Path(percorso)
         self._lock = threading.RLock()
         self._conn: sqlite3.Connection | None = None
-        # Che giornale il file ha davvero accettato. Su un disco di rete WAL non
-        # si può attivare e SQLite resta in `delete` **senza** dare errore: il
-        # magazzino continua a funzionare, ma chi indaga su una lentezza o su un
-        # blocco deve poterlo leggere invece di dedurlo.
+        # Which journal mode the file actually accepted. On a network drive
+        # WAL can silently fail to activate and SQLite stays in `delete`
+        # mode: the store keeps working, but anyone debugging a slowdown or
+        # a lock needs to be able to read this instead of guessing.
         self.giornale = ""
         try:
             self.percorso.parent.mkdir(parents=True, exist_ok=True)
@@ -222,20 +210,16 @@ class MagazzinoConferme:
             self._conn = sqlite3.connect(
                 str(self.percorso),
                 timeout=ATTESA_BLOCCO_S,
-                isolation_level=None,  # le transazioni le apro io, con BEGIN IMMEDIATE
+                isolation_level=None,  # transactions are opened explicitly, with BEGIN IMMEDIATE
                 check_same_thread=False,
             )
             self._conn.row_factory = sqlite3.Row
             self.giornale = str(self._conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]).lower()
-            # L'attesa sul blocco la mette `timeout=` qui sopra, e basta quello:
-            # un `PRAGMA busy_timeout` in più c'era, ed è stato tolto perché una
-            # controprova l'ha trovato **inerte** — spegnerlo non faceva fallire
-            # niente. Una riga che sembra una difesa e non lo è è peggio di una
-            # difesa che manca, perché la prossima persona la conta.
-            # `synchronous` resta il predefinito di SQLite e non si abbassa
-            # apposta: qui si scrivono poche righe alla settimana, e sono le
-            # risposte dell'utente. Guadagnare millisecondi rischiando di
-            # perderne una all'ultima scrittura sarebbe un pessimo affare.
+            # `timeout=` above is the busy-wait; no separate `PRAGMA
+            # busy_timeout` is needed on top of it.
+            # `synchronous` is left at SQLite's default on purpose: only a
+            # few rows are written per week (the user's answers), so trading
+            # durability for a few saved milliseconds isn't worth it.
             self._prepara()
         except sqlite3.Error as errore:
             self._chiudi_di_forza()
@@ -283,15 +267,13 @@ class MagazzinoConferme:
                 ON conferme (fornitore, articolo, valida_dal)
                 """
             )
-            # Le uguaglianze fra codici a barre. Stessa disciplina della tabella
-            # accanto — si aggiunge una riga e si chiude quella di prima, niente
-            # si cancella mai — perché il rischio è dello stesso genere e più
-            # grande: una conferma sbagliata rovina un prodotto presso un
-            # fornitore, un'uguaglianza sbagliata li rovina **tutti**, e ogni
-            # settimana. `articolo` e `offerta` sono le due impronte su cui la
-            # dichiarazione è stata fatta: non servono a ritrovarla, servono a
-            # sapere **guardando che cosa** qualcuno ha detto che i due codici
-            # erano lo stesso articolo.
+            # Barcode equalities. Same discipline as the table above — append
+            # and close, nothing ever deleted — because the risk is bigger
+            # here: a wrong confirmation affects one item at one supplier, a
+            # wrong equality affects every supplier, every week. `articolo`
+            # and `offerta` are the two fingerprints the declaration was made
+            # on; they play no part in the lookup, they record what evidence
+            # led someone to declare the two codes the same item.
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS uguaglianze (
@@ -332,12 +314,12 @@ class MagazzinoConferme:
         if self._conn is not None:
             try:
                 self._conn.close()
-            except sqlite3.Error:  # pragma: no cover - chiudere non deve mai far danno
+            except sqlite3.Error:  # pragma: no cover - closing must never raise
                 pass
             self._conn = None
 
     class _Transazione:
-        """`BEGIN IMMEDIATE` … `COMMIT`, oppure `ROLLBACK` se qualcosa va storto."""
+        """`BEGIN IMMEDIATE` ... `COMMIT`, or `ROLLBACK` if something goes wrong."""
 
         def __init__(self, conn: sqlite3.Connection) -> None:
             self._conn = conn
@@ -361,14 +343,12 @@ class MagazzinoConferme:
 
     @staticmethod
     def _chiave_fornitore(fornitore: str) -> str:
-        """Il fornitore si confronta senza maiuscole.
+        """Suppliers compare case-insensitively.
 
-        `NOCE` e `noce` sono lo stesso listino, e scrivere l'uno per poi
-        cercare l'altro farebbe sparire la conferma **senza un errore**: è il
-        genere di guasto che nessuno trova, perché somiglia a «non l'avevo mai
-        confermato». L'impronta dell'offerta invece resta com'è arrivata: chi la
-        rilegge la confronta con una calcolata allo stesso modo, e cambiarla
-        anche solo di maiuscole la renderebbe incomparabile.
+        `NOCE` and `noce` are the same price list; writing one and looking up
+        the other would silently drop the confirmation. The offer fingerprint,
+        by contrast, is kept as-is: it's compared against one computed the
+        same way, and changing its case would make it incomparable.
         """
 
         return str(fornitore or "").strip().casefold()
@@ -407,32 +387,31 @@ class MagazzinoConferme:
         motivo: str = "",
         quando: str,
     ) -> None:
-        """Registra la risposta dell'utente su una coppia (fornitore, articolo).
+        """Record the user's answer for a (supplier, item) pair.
 
-        Sostituisce quella di prima **conservando lo storico**: la riga in vigore
-        viene chiusa con `valida_fino_a = quando` e la nuova nasce con
-        `valida_dal = quando`. Chiudere e aprire nello stesso istante non è un
-        dettaglio: la storia di una coppia non ha buchi e non ha sovrapposizioni,
-        quindi «che cosa valeva il 12 agosto» ha una risposta sola.
+        Replaces the previous answer while keeping history: the active
+        row is closed with `valida_fino_a = quando` and the new one starts at
+        `valida_dal = quando`. Closing and opening at the same instant isn't
+        incidental: a pair's history has no gaps and no overlaps, so "what was
+        in effect on a given date" always has one answer.
 
-        `accettata=False` è una memoria come le altre, e anzi è quella che fa
-        risparmiare più fatica: «no, il piatto frutta di NOCE non è il mio
-        piatto dessert» detto una volta non deve tornare ogni lunedì.
+        `accettata=False` is a memory like any other, and the one that saves
+        the most repeated work: a "no, this isn't my item" only needs to be
+        said once.
 
-        `quando` è una stringa ISO che **passa il chiamante**. Qui dentro non si
-        chiama nessun orologio, e non è un vezzo: una memoria che si data da sola
-        non si può provare, e questo progetto ha già pagato quell'errore.
+        `quando` is an ISO string supplied by the caller; this method
+        never reads the clock itself, so a stored answer's timestamp can
+        always be verified independently.
 
-        **Riconfermare una risposta identica non scrive niente** — stessa
-        offerta, stessa decisione, stesso motivo — e `valida_dal` resta quello
-        della prima volta, perché è da allora che quella risposta vale. Serve
-        contro il chiamante: la pagina si autosalva ogni 450 ms, e senza questa
-        regola una sola conferma diventerebbe centinaia di righe di storico che
-        raccontano decisioni mai prese.
+        Reconfirming an identical answer writes nothing — same offer,
+        same decision, same reason — and `valida_dal` keeps its original
+        value, since that's when the answer first took effect. This guards
+        against the caller: the page autosaves every 450 ms, and without this
+        check one confirmation would turn into hundreds of history rows for
+        decisions never actually made.
 
-        Rifiuta con `ValueError` un'impronta che non identifica niente: una
-        conferma agganciata a `"|||"` combacerebbe domani con la prima riga
-        altrettanto vuota, cioè con merce a caso.
+        Raises `ValueError` for a fingerprint that identifies nothing: a
+        confirmation keyed on `"|||"` would match the next equally empty row.
         """
 
         chiave_fornitore = self._chiave_fornitore(fornitore)
@@ -492,31 +471,27 @@ class MagazzinoConferme:
             ) from errore
 
     def cerca(self, fornitore: str, articolo: str) -> dict | None:
-        """La conferma **in vigore** per quella coppia, o `None` se non c'è.
+        """The active confirmation for that pair, or `None` if there isn't one.
 
-        `None` vuol dire «di questo non ho memoria», non «no»: il no dell'utente
-        è una riga con `accettata` falsa, e le due cose portano a schermate
-        diverse.
+        `None` means "no memory of this", not "no": the user's "no" is a row
+        with `accettata` false, and the two lead to different screens.
 
-        ⚠ **La conferma si risponde sempre, anche quando l'articolo del
-        fornitore di oggi non è più quello confermato**, e la verifica la fa il
-        chiamante confrontando `offerta` con l'impronta della riga di adesso. Non
-        è pigrizia, è la scelta che protegge il caso vero: fra i due export sul
-        disco, **51 articoli Noce identici** — stesso codice a barre, stessa
-        descrizione — hanno cambiato impronta perché il listino è passato dal CSV
-        del sito al loro `.xls` e il codice articolo è passato da vuoto a
-        `0000000004795`. Se `cerca` avesse preteso l'impronta di oggi e avesse
-        risposto «scaduta», quella settimana la memoria si sarebbe svuotata in
-        blocco proprio mentre l'articolo era rimasto lo stesso: cioè il difetto
-        che questo magazzino esiste per chiudere.
+        The confirmation is always returned, even when today's supplier item
+        stops matching the confirmed one — the caller checks that by
+        comparing `offerta` against the current row's fingerprint. This isn't
+        an oversight: a supplier's price-list format or item codes can change
+        between exports while the item itself stays the same. If `cerca`
+        required today's fingerprint to match and answered "expired"
+        otherwise, that kind of format change would wipe the memory for
+        identical items — exactly the failure this store exists to prevent.
 
-        Rispondendo sempre, il chiamante può fare la cosa giusta in tutti e due i
-        casi: se l'impronta combacia applica la conferma; se non combacia ha in
-        mano **entrambe** le impronte e può dire all'utente che cosa è cambiato e
-        chiedergli una riconferma sola invece di ricominciare da zero. Il
-        magazzino non può decidere fra i due, perché la differenza fra «hanno
-        cambiato il formato del listino» e «gli hanno cambiato l'articolo sotto
-        il naso» sta nei dati della settimana, che qui dentro non ci sono.
+        By always returning the row, the caller can do the right thing in
+        both cases: apply the confirmation when the fingerprint matches, or,
+        when it doesn't, show the user both fingerprints and ask for a single
+        re-confirmation instead of starting over. The store itself can't
+        decide between "the price-list format changed" and "the supplier
+        swapped the item underneath us" — that distinction needs the current
+        week's data, which isn't available here.
         """
 
         chiave_fornitore = self._chiave_fornitore(fornitore)
@@ -531,24 +506,20 @@ class MagazzinoConferme:
         return self._riga(righe[0]) if righe else None
 
     def dimentica(self, fornitore: str, articolo: str, *, quando: str = "") -> bool:
-        """Toglie la conferma in vigore. `True` se ce n'era una.
+        """Remove the active confirmation. `True` if there was one.
 
-        Una mossa sola, ed è la mossa che deve costare meno di tutte: è l'unica
-        via d'uscita da una conferma sbagliata, e finché non è stata fatta quella
-        conferma continua a valere ogni settimana.
+        This is the only way out of a wrong confirmation, and it needs to be
+        cheap: until it's called, that confirmation keeps applying every week.
 
-        **La riga non si cancella, si chiude.** Se una conferma sbagliata ha già
-        prodotto un ordine sbagliato, buttare via la riga cancellerebbe l'unica
-        traccia che spiega quell'ordine: `esporta` continua a mostrarla, con la
-        sua data e il suo motivo.
+        The row is closed, not deleted. If a wrong confirmation already
+        produced a wrong order, deleting the row would remove the only trace
+        that explains it; `esporta` keeps showing it, with its date and reason.
 
-        `quando` è in più rispetto alla firma minima e resta facoltativo perché
-        `dimentica(fornitore, articolo)` deve funzionare così com'è, ma **chi ha
-        un orologio dovrebbe passarlo**: senza, la riga chiusa resta senza
-        l'istante in cui è stata tolta (`valida_fino_a` vuoto, cioè «tolta, non
-        so dire quando»), e un audit con un buco è un audit che va spiegato a
-        voce. Qui dentro l'orologio non si chiama, per la stessa ragione di
-        `ricorda`.
+        `quando` is optional so that `dimentica(fornitore, articolo)` keeps
+        working as-is, but callers that have a timestamp should pass it:
+        without it the closed row has no record of when it was removed
+        (`valida_fino_a` empty). The clock isn't read here, for the same
+        reason as in `ricorda`.
         """
 
         chiave_fornitore = self._chiave_fornitore(fornitore)
@@ -572,10 +543,10 @@ class MagazzinoConferme:
             ) from errore
 
     def tutte(self) -> list[dict]:
-        """Le conferme che valgono **adesso**, in ordine di fornitore e articolo.
+        """Confirmations active now, ordered by supplier then item.
 
-        È quello che serve al confronto della settimana e alla pagina che le
-        elenca per poterle togliere. Lo storico non c'è: sta in `esporta`.
+        What the weekly comparison and the page that lists them (to remove
+        them) need. No history here — that's `esporta`.
         """
 
         with self._lock:
@@ -586,20 +557,13 @@ class MagazzinoConferme:
         return [self._riga(riga) for riga in righe]
 
     def rifiuti(self) -> list[dict]:
-        """I «no» in vigore: «questa riga di questo fornitore non e' il mio articolo».
+        """Active "no" answers: "this row from this supplier is not my item".
 
-        E' l'altra meta' di `tutte()`, e sta qui e non nel servizio perche' la
-        regola che distingue un no da un si' e' di questo magazzino — una riga
-        con `accettata` falsa — e chi la ricopia fuori si porta dietro il dovere
-        di tenerla allineata.
+        The other half of `tutte()`. Kept here rather than duplicated by the
+        caller because the rule that tells a "no" apart — a row with
+        `accettata` false — belongs to this store.
 
-        ⚠ `ricorda` sa scrivere questa riga dal primo giorno, e il suo docstring
-        la nomina per nome. Fino al 21 agosto 2026 non la scriveva nessuno:
-        `conferme.db` aveva venti righe e `sum(accettata=0)` faceva zero. Il
-        programma sapeva ricordare solo i si', e chi doveva dire di no non aveva
-        nessun posto dove dirlo — quindi confermava.
-
-        L'ordine e' quello di `tutte()`: chi le legge insieme le confronta.
+        Same ordering as `tutte()`, so the two can be compared side by side.
         """
 
         with self._lock:
@@ -610,18 +574,17 @@ class MagazzinoConferme:
         return [self._riga(riga) for riga in righe]
 
     def esporta(self) -> list[dict]:
-        """**Tutto** quello che il magazzino sa, storico compreso, in JSON.
+        """Everything the store knows, history included, as JSON.
 
-        Un `.db` non si legge a occhio: senza questa via d'uscita, «che cosa ho
-        confermato» sarebbe una domanda a cui si risponde solo con uno strumento
-        che l'utente non ha. Qui ci sono anche le righe chiuse — sostituite o
-        tolte — perché sono la sola risposta a «che cosa avevo deciso prima, e
-        quando», e perché la conferma che ha prodotto un ordine sbagliato va
-        ritrovata **dopo** che è stata corretta.
+        A `.db` file isn't human-readable; without this, "what did I
+        confirm" would need a tool the user doesn't have. Closed rows —
+        replaced or removed — are included too, since they're the only
+        answer to "what did I decide before, and when", and a confirmation
+        that produced a wrong order needs to be findable after it's fixed.
 
-        L'ordine è stabile e i valori sono tutti tipi JSON (stringhe, booleani,
-        interi, `None`): due esportazioni dello stesso contenuto danno lo stesso
-        documento, e si possono confrontare fra una settimana e l'altra.
+        Ordering is stable and values are plain JSON types (strings, bools,
+        ints, `None`): two exports of the same content produce the same
+        document, so they can be diffed week to week.
         """
 
         with self._lock:
@@ -634,12 +597,12 @@ class MagazzinoConferme:
 
     @staticmethod
     def _coppia(codice_a: Any, codice_b: Any) -> tuple[str, str]:
-        """I due codici in ordine fisso: l'uguaglianza non ha un verso.
+        """The two codes in a fixed order: equality has no direction.
 
-        Senza quest'ordine `unisci(A, B)` e `unisci(B, A)` sarebbero due righe
-        diverse, l'indice unico non fermerebbe la seconda, e `separa(B, A)` non
-        troverebbe quella scritta come `(A, B)` — cioè un'uguaglianza sbagliata
-        che non si riesce a togliere.
+        Without this ordering, `unisci(A, B)` and `unisci(B, A)` would be two
+        different rows, the unique index wouldn't catch the second one, and
+        `separa(B, A)` wouldn't find the row stored as `(A, B)` — an equality
+        that can't be removed.
         """
 
         primo = codice_confrontabile(codice_a)
@@ -669,21 +632,22 @@ class MagazzinoConferme:
         motivo: str = "",
         quando: str,
     ) -> bool:
-        """Dichiara che due codici a barre sono lo stesso articolo.
+        """Declare that two barcodes are the same item.
 
-        Restituisce `True` se ha scritto qualcosa, `False` se quell'uguaglianza
-        era già in vigore: ridichiararla non tocca `valida_dal`, perché è da
-        allora che vale. Serve contro il chiamante, come in `ricorda`.
+        Returns `True` if it wrote a row, `False` if that equality was
+        already active — redeclaring it leaves `valida_dal` untouched, since
+        that's when it first took effect. Guards against the caller, as in
+        `ricorda`.
 
-        ⚠ Qui si registra **un lato solo del grafo**: che A e B siano lo stesso
-        articolo. Che allora anche C, già uguale a B, sia uguale ad A lo deduce
-        `classe`, e non si scrive da nessuna parte. È voluto: le righe scritte
-        sono le dichiarazioni umane, e devono restare quelle e solo quelle —
-        altrimenti togliendo A≡B resterebbe in giro un A≡C che nessuno ha mai
-        detto, e che nessuno saprebbe da dove è arrivato.
+        This stores one edge of the graph: that A and B are the same
+        item. That C, already equal to B, is therefore equal to A too is
+        derived by `classe`, not stored anywhere. This is deliberate: the
+        stored rows are the human declarations, and only those — otherwise
+        removing A≡B would leave an A≡C nobody actually declared, with no
+        record of where it came from.
 
-        Rifiuta due codici uguali (non dice niente) e un codice vuoto (non
-        identifica niente).
+        Rejects two equal codes (nothing to declare) and an empty code
+        (identifies nothing).
         """
 
         primo, secondo = self._coppia(codice_a, codice_b)
@@ -725,13 +689,12 @@ class MagazzinoConferme:
             ) from errore
 
     def separa(self, codice_a: Any, codice_b: Any, *, quando: str = "") -> bool:
-        """Toglie un'uguaglianza. `True` se ce n'era una in vigore.
+        """Remove an equality. `True` if one was active.
 
-        È la via d'uscita, e deve costare un clic: finché non è stata fatta,
-        quella dichiarazione entra in **ogni** confronto futuro e su **tutti** i
-        fornitori. La riga non si cancella, si chiude: se ha già prodotto un
-        ordine sbagliato, buttarla via cancellerebbe l'unica traccia che lo
-        spiega.
+        The only way out, and it needs to be cheap: until it's called, the
+        declaration applies to every future comparison and every
+        supplier. The row is closed, not deleted, for the same reason as in
+        `dimentica`.
         """
 
         primo, secondo = self._coppia(codice_a, codice_b)
@@ -754,10 +717,10 @@ class MagazzinoConferme:
             ) from errore
 
     def uguaglianze(self) -> list[dict]:
-        """Le dichiarazioni che valgono adesso, una riga per coppia dichiarata.
+        """Declarations active now, one row per declared pair.
 
-        È quello che la pagina elenca per poterle togliere: le **coppie**, non le
-        classi, perché si toglie quello che qualcuno ha detto.
+        What the page lists in order to remove them: pairs, not classes,
+        since what gets removed is what someone actually declared.
         """
 
         with self._lock:
@@ -768,17 +731,17 @@ class MagazzinoConferme:
         return [self._riga_uguaglianza(riga) for riga in righe]
 
     def classi(self) -> list[list[str]]:
-        """I gruppi di codici che valgono come lo stesso articolo.
+        """Groups of codes that count as the same item.
 
-        Le componenti connesse del grafo delle coppie dichiarate: A≡B e B≡C
-        fanno un gruppo di tre, e chi cerca A trova anche C. Ogni gruppo è
-        ordinato e i gruppi fra loro pure, così due letture dello stesso
-        contenuto danno lo stesso documento — è l'artefatto che la catena riceve
-        e confronta da una settimana all'altra.
+        The connected components of the declared-pairs graph: A≡B and B≡C
+        form one group of three, and looking up A also finds C. Each group is
+        sorted, and the groups themselves are sorted, so two reads of the same
+        content produce the same document — this is what the pipeline
+        consumes and diffs week to week.
 
-        Un gruppo di uno non esiste: un codice senza uguaglianze non è un gruppo,
-        è se stesso, e scriverlo vorrebbe dire mettere nell'artefatto 451 righe
-        che non dicono niente.
+        A group of one doesn't exist: a code with no equalities isn't a
+        group, it's just itself, and including it would add a row for every
+        item that says nothing.
         """
 
         vicini: dict[str, set[str]] = {}
@@ -805,11 +768,11 @@ class MagazzinoConferme:
         return gruppi
 
     def classe(self, codice: Any) -> list[str]:
-        """Tutti i codici che valgono come questo, **compreso questo**.
+        """All codes that count as this one, including this one.
 
-        Un codice senza uguaglianze restituisce se stesso: chi interroga
-        l'indice per EAN non deve avere un caso in meno da trattare.
-        Restituisce la lista vuota solo per un codice vuoto.
+        A code with no equalities returns itself: callers indexing by EAN
+        don't need a special case for it. Returns an empty list only for an
+        empty code.
         """
 
         chiave = codice_confrontabile(codice)
@@ -821,11 +784,11 @@ class MagazzinoConferme:
         return [chiave]
 
     def esporta_uguaglianze(self) -> list[dict]:
-        """**Tutto** quello che il magazzino sa sulle uguaglianze, storico compreso.
+        """Everything the store knows about equalities, history included.
 
-        Stessa ragione di `esporta`: un `.db` non si legge a occhio, e una
-        dichiarazione tolta va ritrovata **dopo** che è stata corretta, perché è
-        quella che spiega gli ordini di prima.
+        Same reason as `esporta`: a `.db` file isn't human-readable, and a
+        removed declaration needs to stay findable after it's fixed, since
+        it's what explains earlier orders.
         """
 
         with self._lock:
@@ -835,7 +798,7 @@ class MagazzinoConferme:
         return [self._riga_uguaglianza(riga) for riga in righe]
 
     def chiudi(self) -> None:
-        """Chiude il file. Si può chiamare due volte senza conseguenze."""
+        """Close the file. Safe to call twice."""
 
         with self._lock:
             self._chiudi_di_forza()

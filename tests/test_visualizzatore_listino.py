@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
-"""Sfogliare un listino come il programma l'ha letto.
+"""Browses a price list the way the program read it.
 
-⚠ **Perché questo file esiste.** Le prime prove del visualizzatore erano tutte
-di pagina (`app.js` in Node) e di servizio con un catalogo finto: nessuna
-toccava `catalog_search`. Tre controprove chirurgiche sono rimaste **verdi** —
-azzerare il conto delle righe scartate, lasciar abbinare una riga non
-ordinabile, togliere il fuoco sulla riga già abbinata — perché quel codice non
-lo eseguiva nessuno. È la stessa lezione di sempre su questo progetto: le
-mutazioni verdi trovano i test che sembrano coprire e non coprono.
+Exercises `catalog_search` directly. Earlier tests of the browser were all
+page-level (`app.js` in Node) or service-level against a fake catalog, so
+none of them actually ran this module — three targeted mutations (zeroing
+the discarded-row count, letting an unorderable row get matched, dropping
+the highlight on an already-matched row) stayed green because nothing
+exercised that code path.
 
-Le righe sono dichiarate qui e `_ensure_loaded` non fa niente: aprire i listini
-veri dal disco renderebbe la prova dipendente dall'ultima run, ed è proprio quel
-che questo progetto non fa.
+Rows are declared inline and `_ensure_loaded` is a no-op: reading real price
+lists from disk would make the test depend on the last run, which this
+project avoids everywhere else too.
 """
 
 from __future__ import annotations
@@ -45,8 +44,8 @@ def riga(source_row: int, ean: str, descrizione: str, prezzo: str | None = "1.15
     return voce
 
 
-# Le quattro righe DOVE di NOCE, più un separatore e una riga senza prezzo:
-# sono i due modi veri in cui una riga non è ordinabile.
+# Four real rows for supplier NOCE, plus a separator row with no price and a
+# row priced at zero: the two real ways a row ends up not orderable.
 RIGHE = [
     riga(4792, "8729145039080", "LUXA SAPONE EROGATORE CARE&PROTECT 250"),
     riga(4793, "8729014462339", "LUXA SAPONE EROGATORE GO FRESH ML.250", supplier_code="0000429062"),
@@ -58,7 +57,7 @@ RIGHE = [
 
 
 class CatalogoDichiarato(SupplierCatalog):
-    """Il catalogo vero, ma con le righe messe a mano invece che lette dai file."""
+    """The real catalog, with rows set by hand instead of read from files."""
 
     def __init__(self, righe: dict[str, list[dict[str, Any]]]) -> None:
         super().__init__()
@@ -81,7 +80,7 @@ class BancoDelVisualizzatore(unittest.TestCase):
 
 class IlContoDelleRigheEOnesto(BancoDelVisualizzatore):
     def test_le_righe_scartate_si_contano_sempre(self) -> None:
-        """Un listino che ne mostra quattro su sei senza dirlo nasconde."""
+        """A list showing 4 of 6 rows without saying so is hiding data."""
 
         pagina = self.sfoglia()
 
@@ -96,8 +95,8 @@ class IlContoDelleRigheEOnesto(BancoDelVisualizzatore):
         self.assertEqual(voce["motivo"], "SENZA_PREZZO")
 
     def test_un_prezzo_a_zero_non_e_ordinabile(self) -> None:
-        """È la difesa che il confronto applica da sempre: uno zero passa tutti
-        i filtri e poi **vince**, perché il più basso va davanti."""
+        """The same guard the comparison always applies: a zero price passes
+        every filter and would otherwise win, since the lowest price ranks first."""
 
         pagina = self.sfoglia(query="NEVAL")
 
@@ -114,8 +113,8 @@ class IlContoDelleRigheEOnesto(BancoDelVisualizzatore):
         self.assertEqual(self.sfoglia(query="0000429062")["trovate"], 1)
 
     def test_le_colonne_sono_quelle_su_cui_si_ordina(self) -> None:
-        """Non le colonne del foglio: quelle che decidono un abbinamento. Se una
-        è letta storta, qui si vede storta, ed è l'informazione che serve."""
+        """Not the sheet's own columns, but the fields a match is decided on.
+        If one is misread, it shows misread here, which is the useful signal."""
 
         voce = self.sfoglia(query="ORIGINAL")["righe"][0]
 
@@ -132,8 +131,8 @@ class IlContoDelleRigheEOnesto(BancoDelVisualizzatore):
 
 class LaPaginaSiApreDoveServe(BancoDelVisualizzatore):
     def test_il_fuoco_va_sulla_pagina_che_contiene_la_riga(self) -> None:
-        """Su ottomila righe, far cercare a mano una cosa che il programma sa
-        è il modo di non usare lo strumento."""
+        """Across eight thousand rows, making the user search by hand for
+        something the program already knows defeats the point of the tool."""
 
         pagina = self.sfoglia(quante=2, riga=4795)
 
@@ -142,7 +141,7 @@ class LaPaginaSiApreDoveServe(BancoDelVisualizzatore):
         self.assertEqual(pagina["rigaCercata"], "4795")
 
     def test_una_riga_che_la_ricerca_esclude_lo_dice(self) -> None:
-        """Invece di far cercare a vuoto in una pagina dove non c'è."""
+        """Instead of leaving the user to search a page where the row isn't."""
 
         pagina = self.sfoglia(query="NEVAL", riga=4794)
 
@@ -172,9 +171,8 @@ class LaRigaSceltaDiventaUnOfferta(BancoDelVisualizzatore):
         self.assertIs(offerta["available"], True)
 
     def test_una_riga_senza_prezzo_non_si_abbina(self) -> None:
-        """Metterla in ordine vorrebbe dire una quantità che non si sa
-        calcolare, ed è lo stesso rifiuto che il servizio oppone alle proposte
-        dell'analisi automatica."""
+        """Ordering it would mean a quantity that can't be computed, the same
+        rejection the service applies to matches proposed by the AI analysis."""
 
         with self.assertRaises(ValueError) as errore:
             self.catalogo.offerta_dalla_riga(CONFRONTO, "noce", 5000)
@@ -198,14 +196,14 @@ class LaRigaSceltaDiventaUnOfferta(BancoDelVisualizzatore):
 
 
 class LaFinestraNonDiventaUnVicoloCieco(unittest.TestCase):
-    """Un listino che non si legge non deve chiudere la porta agli altri.
+    """A price list that fails to load must not shut the door on the others.
 
-    ⚠ Fino al 21 agosto 2026 `sfoglia_listino` calcolava l'elenco dei fornitori
-    **dentro** la stessa espressione del risultato, cioe' dopo `sfoglia()`: se
-    quella alzava, l'elenco non nasceva, la rotta rispondeva 400 e in pagina la
-    tendina «Fornitore» restava vuota. L'unica cosa che si poteva fare era
-    chiudere — anche quando gli altri listini stavano benissimo. L'utente ci e'
-    rimasto dentro davvero.
+    `sfoglia_listino` must compute the supplier list before calling
+    `sfoglia()`, not as part of the same expression: if it computed the
+    supplier list after `sfoglia()` and that raised, the supplier list would
+    never be built, the route would answer 400, and the "Fornitore" dropdown
+    would stay empty with no way to pick a different supplier, even though
+    the other price lists load fine.
     """
 
     def setUp(self) -> None:
@@ -225,8 +223,8 @@ class LaFinestraNonDiventaUnVicoloCieco(unittest.TestCase):
             "suppliers": [{"id": "betulla", "name": "BETULLA"}, {"id": "cipresso", "name": "CIPRESSO"}],
             "products": [],
             "files": [
-                # Il caso vero: un documento che il lettore dedicato di BETULLA
-                # non sa aprire, attribuito comunque a BETULLA.
+                # A real case: a file BETULLA's dedicated reader can't open,
+                # attributed to BETULLA anyway.
                 {
                     "name": "OFFERTE AGOSTO 4.xlsx", "role": "supplier", "supplierId": "betulla",
                     "sourcePath": str(listini / "OFFERTE AGOSTO 4.xlsx"),
@@ -253,7 +251,7 @@ class LaFinestraNonDiventaUnVicoloCieco(unittest.TestCase):
         self.assertEqual(esito["righe"], [])
 
     def test_il_motivo_vero_arriva_in_finestra(self) -> None:
-        """«Nessun listino caricato per «betulla»» non diceva né che cosa né come."""
+        """A generic "no list loaded" message says neither what went wrong nor how to fix it."""
 
         messaggio = (self.store.sfoglia_listino("betulla").get("problema") or {}).get("messaggio", "")
 
@@ -261,7 +259,7 @@ class LaFinestraNonDiventaUnVicoloCieco(unittest.TestCase):
         self.assertIn("tendina", messaggio)
 
     def test_senza_fornitore_si_apre_il_primo_che_si_puo_sfogliare(self) -> None:
-        """Il pulsante di un prodotto senza offerte non porta nessun fornitore."""
+        """The button on a product with no offers doesn't carry any supplier."""
 
         esito = self.store.sfoglia_listino("")
 

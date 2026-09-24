@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""Le convenzioni dei fornitori stanno nel registro, non dentro il codice.
+"""Supplier conventions live in the adapter registry, not in code.
 
-Il programma finito gira da solo: quando un fornitore cambia una convenzione si
-aggiorna `references/adapters.json` e basta.  Una regola scritta a mano dentro
-una funzione vale per il listino di quella settimana e muore alla prima
-variazione, per giunta in silenzio.
+The program is meant to run unattended: when a supplier changes a
+convention, `references/adapters.json` gets updated and nothing else. A rule
+hard-coded inside a function only covers that week's price list and breaks
+silently at the next variation.
 
-Questo modulo e' l'unico che legge — e da questa fase anche scrive — quel
-registro per conto degli altri.  Fa due cose:
+This module is the only one that reads — and, from this stage on, writes —
+that registry on behalf of everything else. It does two things:
 
-1. applica i codici di riga dichiarati da un adattatore;
-2. riconosce lo schema di un documento confrontando l'impronta osservata con
-   le impronte dichiarate, e impara un adattatore nuovo senza perdere quello
-   di prima.
+1. applies the row codes an adapter declares;
+2. recognizes a document's schema by comparing its observed fingerprint
+   against the declared ones, and learns a new adapter without discarding
+   the previous one.
 
-La forma dichiarata dei codici di riga e' questa:
+The declared shape of row codes is:
 
     "row_markers": {
       "field": "discount_raw",
@@ -25,18 +25,18 @@ La forma dichiarata dei codici di riga e' questa:
       "reward_rows": {"means": "...", "orderable": false, "row_type": "OMAGGIO"}
     }
 
-`field` e' il campo del record normalizzato in cui il codice compare, non una
-colonna del foglio: cosi' la stessa regola vale per un lettore dedicato e per
-uno guidato da una mappatura.
+`field` is the field of the normalized record where the code appears, not a
+sheet column: that way the same rule works for both a dedicated reader and
+one driven by a field mapping.
 
-`reward_rows` e' per i fornitori che la riga premio **non la marcano**: la si
-riconosce solo dal testo, e a riconoscerlo e' gia' il motore delle promozioni
-(`promotions.looks_like_reward`), lo stesso giudizio con cui il ponte chiude un
-blocco.  Vale la pena averla perche' e' il caso che il commento di
-`applica_codici_di_riga` aveva previsto: sul canvass nuovo di LARICE le sei
-righe «IN OMAGGIO ...» hanno un prezzo vero e nessun codice, e cinque su sei
-ripetono l'EAN di un articolo gia' a listino a prezzo pieno.  Senza questa
-dichiarazione il confronto sceglie il prezzo del regalo.
+`reward_rows` is for suppliers who don't mark the free-goods row at all: it's
+recognized from the description text alone, using the same judgment the
+promotions engine already makes (`promotions.looks_like_reward`), the one
+that decides where the bridge closes a block. It's worth having because it
+covers exactly the case `applica_codici_di_riga` guards: a supplier's free
+"IN OMAGGIO ..." rows can carry a real price and no code, while repeating the
+barcode of a full-price item already on the price list. Without this
+declaration the comparison would pick the free-goods price.
 """
 
 from __future__ import annotations
@@ -55,58 +55,51 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-# Il registro **spedito**: sta sotto git, lo scrive Daniele, e a ogni avvio il
-# PC del negozio lo riporta a com'e' su GitHub con un `reset --hard`.
+# The shipped registry: tracked in git, and reset to the GitHub state on
+# every startup (`reset --hard`) on the store PC.
 REGISTRO = Path(__file__).resolve().parents[1] / "references" / "adapters.json"
 
-# Il registro **imparato**: quello che il programma si scrive da solo quando
-# riconosce un fornitore nuovo o quando qualcuno conferma uno schema variato.
+# The learned registry: what the program writes on its own when it
+# recognizes a new supplier or someone confirms a changed schema.
 #
-# Perche' e' un file a parte. Fino al 19 agosto 2026 l'imparato finiva dentro
-# `references/adapters.json`, cioe' dentro git, e il `reset --hard` dell'avvio
-# se lo mangiava: chi aveva appena insegnato un fornitore al programma se lo
-# ritrovava sconosciuto al doppio clic successivo, senza una parola. Qui invece
-# sta in `app/data/`, che git non traccia e il reset non tocca — insieme alle
-# altre memorie del programma, ed e' anche il motivo per cui la copia di
-# sicurezza che le salva salva anche questo.
+# Kept as a separate file, outside git and outside `app/data/`'s reset:
+# anything the program learns has to survive the startup `reset --hard` that
+# realigns the shipped registry with GitHub, the same way the program's other
+# state does — which is also why the backup that saves that state saves this
+# file too.
 NOME_REGISTRO_IMPARATO = "adattatori_imparati.json"
 REGISTRO_IMPARATO = Path(__file__).resolve().parents[1] / "app" / "data" / NOME_REGISTRO_IMPARATO
 
 
-# Il suffisso di un adattatore imparato SOPRA uno che il programma spedisce.
+# Suffix for an adapter learned ON TOP OF one the program ships.
 #
-# ⚠ Fino al 22 agosto 2026 una mappatura confermata su un fornitore gia'
-# spedito si scriveva con lo STESSO id, e a parita' di id vince l'imparato:
-# quello spedito spariva sotto, con tutto quello che porta e che la mappatura
-# guidata non chiede — le condizioni commerciali, gli alias delle intestazioni,
-# l'intestazione attesa sulla colonna dell'ordine, le posizioni delle colonne.
-# Non si poteva tornare indietro dal programma: bisognava aprire
-# `app/data/adattatori_imparati.json` e cancellare la voce a mano, e sul PC del
-# negozio e' successo davvero — tre voci scritte il 21 agosto alle 17:16,
-# `cipresso_v1`, `betulla_v1` e `offerte_v1`, tutte e tre sopra una spedita.
+# A learned adapter gets its own id, carrying the id it derives from:
+# `betulla_v1__locale`. The two coexist; whichever one actually reads the
+# document (`riconosci`) wins, and the shipped entry stays in place for the
+# day the learned one is no longer needed.
 #
-# Adesso l'imparato prende un id suo, che porta dentro quello da cui deriva:
-# `betulla_v1__locale`. I due convivono, il documento se lo prende quello che lo
-# legge davvero (`riconosci`), e lo spedito resta li' per il giorno in cui
-# l'imparato non serve piu'.
+# This matters because a learned entry sharing the shipped entry's exact id
+# would win ties and hide it — along with everything the guided mapping
+# doesn't ask for: commercial terms, header aliases, the expected header on
+# the order column, column positions. Recovering from that would mean editing
+# `app/data/adattatori_imparati.json` by hand to delete the entry.
 SUFFISSO_LOCALE = "__locale"
 
 
 def id_locale(identificativo: str) -> str:
-    """L'id con cui si scrive quello che si impara sopra un adattatore spedito."""
+    """The id under which something learned on top of a shipped adapter is written."""
 
     return f"{identificativo}{SUFFISSO_LOCALE}"
 
 
 def adattatore_base(identificativo: Any) -> str:
-    """L'id spedito da cui un adattatore imparato qui deriva, o l'id stesso.
+    """The shipped id a learned adapter derives from, or the id itself.
 
-    ⚠ Serve a tutti i punti del programma che decidono **per identificativo**:
-    i quattro lettori dedicati (`lettore_dedicato`), le colonne che si possono
-    correggere a mano (`colonne_corrette`) e gli espositori di Larice. Senza,
-    un `larice_v1__locale` perderebbe il lettore di Larice e con lui espositori
-    e soglie con omaggio — cioe' proprio il danno che questa separazione
-    esiste per evitare.
+    Used by every part of the program that decides by identifier: the
+    four dedicated readers (`lettore_dedicato`), the columns that can be
+    hand-corrected (`colonne_corrette`), and the Larice displays. Without
+    it, a `larice_v1__locale` would lose Larice's reader and, with it, its
+    displays and free-goods thresholds.
     """
 
     testo = str(identificativo or "")
@@ -116,23 +109,20 @@ def adattatore_base(identificativo: Any) -> str:
 
 
 def identificativo_da_scrivere(dichiarato: str, percorso: Path | None = None) -> str:
-    """Con quale id una voce imparata entra davvero nel registro.
+    """The id under which a learned entry actually enters the registry.
 
-    ⚠ Fino al 22 agosto 2026 una mappatura confermata si scriveva con l'id
-    dichiarato, e a parita' di id vince l'imparato: confermare la mappatura
-    guidata su un fornitore che il programma **spedisce** cancellava di fatto
-    la voce spedita, con tutto quello che porta e che la mappatura guidata non
-    chiede — le condizioni commerciali, gli alias, l'intestazione attesa sulla
-    colonna dell'ordine, le posizioni delle colonne.
+    A supplier the program ships gets the `__locale` suffix, so confirming
+    the guided mapping doesn't overwrite the shipped entry and everything it
+    carries that the guided mapping doesn't ask for — commercial terms,
+    aliases, the expected header on the order column, column positions.
 
-    Un fornitore imparato da zero, che nello spedito non c'e', continua ad
-    aggiornare la sua voce come sempre: li' non c'e' niente sotto da salvare.
+    A supplier learned from scratch, absent from the shipped registry, keeps
+    updating its own entry as before: there's nothing shipped underneath to
+    protect.
 
-    ⚠ Sta qui e non in `impara_adattatore` perche' la mappatura guidata non e'
-    l'unica strada che scrive nel registro: ci scrive anche chi sposta la
-    colonna d'ordine dalla pagina, e fino al 22 agosto 2026 quella strada
-    derivava l'id per conto suo — cioe' non lo derivava affatto, e si portava a
-    casa una fotocopia completa della voce spedita.
+    Lives here rather than in `impara_adattatore` because the guided mapping
+    isn't the only path that writes to the registry: moving the order column
+    from the page writes here too, and both must derive the id the same way.
     """
 
     identificativo = str(dichiarato or "").strip()
@@ -142,20 +132,21 @@ def identificativo_da_scrivere(dichiarato: str, percorso: Path | None = None) ->
 
 
 def voce_in_uso(identificativo: Any, voci: Iterable[dict[str, Any]]) -> dict[str, Any]:
-    """La voce che vale davvero per una decisione presa con quell'identificativo.
+    """The entry that actually applies to a decision recorded under that id.
 
-    Una decisione registrata la settimana scorsa dice `betulla_v1`; da allora
-    qualcuno puo' aver spostato la colonna d'ordine dalla pagina, e quella
-    mossa scrive `betulla_v1__locale`. Chi cerca l'id cosi' com'e' trova ancora
-    la voce spedita, con la colonna di prima — e scrive l'ordine dove non lo
-    vuole piu' nessuno.
+    A decision recorded last week can say `betulla_v1`; since then someone
+    may have moved the order column from the page, which writes
+    `betulla_v1__locale`. Looking up the bare id would still find the
+    shipped entry, with the old column, and write the order where nobody
+    wants it anymore.
 
-    E' la stessa regola di `_leggi_registro` sulla fusione dei due file e di
-    `riconosci` a parita' piena: fra le due versioni della stessa cosa vale la
-    piu' recente, quella che ha dato qualcuno che aveva il documento davanti.
+    Same rule as `_leggi_registro`'s merge of the two files, and as
+    `riconosci`'s tie-break: between two versions of the same thing, the more
+    recent one wins — the one someone gave with the document in front of
+    them.
 
-    Restituisce `{}` quando non c'e' niente: un registro che non conosce quella
-    decisione non e' un guasto da sollevare qui.
+    Returns `{}` when there's nothing: a registry that doesn't know that
+    decision isn't a failure to raise here.
     """
 
     cercato = str(identificativo or "").strip()
@@ -169,12 +160,12 @@ def voce_in_uso(identificativo: Any, voci: Iterable[dict[str, Any]]) -> dict[str
 
 
 def impronta_della_voce(voce: dict[str, Any]) -> str:
-    """L'impronta di una voce del registro cosi' com'e' scritta nel file.
+    """Fingerprint of a registry entry, as written in the file.
 
-    Serve a una domanda sola: «la voce spedita e' ancora quella su cui questa
-    voce imparata e' nata?».  Si calcola sul contenuto intero, note comprese:
-    distinguere una modifica «di sostanza» da una «di forma» vorrebbe dire
-    tenere un elenco di chiavi che nessuno aggiornerebbe.
+    Answers one question: is the shipped entry still the one this learned
+    entry was learned from? Computed over the whole content, notes included:
+    telling a "substantive" change from a "cosmetic" one would mean
+    maintaining a key list nobody would keep updated.
     """
 
     canonico = json.dumps(voce, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str)
@@ -182,38 +173,28 @@ def impronta_della_voce(voce: dict[str, Any]) -> str:
 
 
 def sopra_spedito_di(spedita: dict[str, Any]) -> dict[str, Any]:
-    """Il timbro che una voce imparata porta per dire su quale spedita e' nata."""
+    """The stamp a learned entry carries to say which shipped entry it was learned from."""
 
     return {"id": str(spedita.get("id") or ""), "impronta": impronta_della_voce(spedita)}
 
 
 def _motivo_del_superamento(imparata: dict[str, Any],
                             spedite_per_id: dict[str, dict[str, Any]]) -> str | None:
-    """Perche' una voce imparata non vale piu', o `None` se vale ancora.
+    """Why a learned entry no longer applies, or `None` if it still does.
 
-    ⚠ Dal 5 settembre 2026 **lo spedito piu' recente vince**.  Fino ad allora a
-    parita' di id vinceva l'imparato, sempre: un adattatore imparato male non
-    si correggeva spedendone uno nuovo, perche' l'imparato gli restava sopra, e
-    per toglierlo bisognava aprire `app/data/adattatori_imparati.json` sul PC
-    del negozio.  E' successo tre volte in due settimane — BETULLA e le offerte
-    CIPRESSO il 21 agosto, il canvass nuovo di LARICE il 4 settembre — e ogni
-    volta la correzione spedita e' rimasta inerte finche' qualcuno non e'
-    andato a cancellare la voce a mano.
+    The rule: an entry learned on top of a shipped one (same id, or with
+    `__locale`) applies as long as the shipped entry is the one it was
+    learned from. If the shipped entry changes — a correction reaches the
+    store through an update — the shipped entry wins and the learned one is
+    set aside. Confirming the guided mapping again puts it back in play,
+    stamped against the current shipped entry.
 
-    La regola: una voce imparata **sopra** una spedita (stesso id, o
-    `__locale`) vale finche' la spedita e' quella su cui e' stata imparata.  Se
-    la spedita cambia — cioe' Daniele l'ha corretta e l'aggiornamento l'ha
-    portata al negozio — vince la spedita e l'imparata si mette da parte.  Chi
-    la conferma di nuovo dalla mappatura guidata la rimette in gioco, con il
-    timbro della spedita di adesso.
+    An entry learned from scratch, with no shipped counterpart, is
+    unaffected by this rule: there's nothing more recent to compare against.
 
-    Una voce imparata **da zero**, che nello spedito non ha nessuna base, non
-    e' toccata da questa regola: li' non c'e' niente di piu' recente.
-
-    Una voce sopra una spedita che il timbro non ce l'ha — sono tutte quelle
-    imparate prima del 5 settembre 2026 — e' superata: e' esattamente l'elenco
-    che `documenti/PROMPT_PC_NEGOZIO_ADATTATORI.md` chiedeva di cancellare a
-    mano, e da qui in poi lo fa il programma.
+    An entry sitting on top of a shipped one but carrying no stamp is
+    treated as superseded: nothing says which version it was learned from,
+    so it can't be trusted to still match.
     """
 
     base = adattatore_base(imparata.get("id"))
@@ -243,10 +224,10 @@ def _scheda_della_superata(voce: dict[str, Any], motivo: str) -> dict[str, Any]:
 
 
 def adattatori_superati(percorso: Path | None = None) -> list[dict[str, Any]]:
-    """Le voci imparate che lo spedito ha superato, senza toccare niente.
+    """The learned entries the shipped registry has superseded, without touching anything.
 
-    `[]` anche quando uno dei due file non si legge: il motivo lo dice gia'
-    `motivo_registro_illeggibile`, e qui si risponde a un'altra domanda.
+    Returns `[]` when either file can't be read too: `motivo_registro_illeggibile`
+    already reports why, and this function answers a different question.
     """
 
     spedito_percorso = Path(percorso or REGISTRO)
@@ -269,15 +250,13 @@ def adattatori_superati(percorso: Path | None = None) -> list[dict[str, Any]]:
 
 
 def percorso_imparato(registro_spedito: Path | None = None) -> Path:
-    """Dov'e' l'imparato, dato dove sta lo spedito.
+    """Where the learned registry lives, given where the shipped one is.
 
-    Nell'installazione vera lo spedito sta in `references/` e l'imparato in
-    `app/data/`, con le altre memorie. Un registro che sta altrove — la copia
-    di lavoro di `impara_adattatore`, una prova in cartella temporanea — tiene
-    il suo imparato **accanto a se'**: una prova che scrivesse dentro
-    l'installazione si porterebbe dietro gli adattatori da un'esecuzione
-    all'altra, ed e' esattamente il difetto che ha reso rosse nove prove il 14
-    agosto 2026.
+    In the real install, the shipped registry lives in `references/` and the
+    learned one in `app/data/`, alongside the program's other state. A
+    registry living elsewhere — a working copy under test, a temp-folder
+    fixture — keeps its learned file next to itself instead: a test that
+    wrote into the real install would carry learned adapters across runs.
     """
 
     base = Path(registro_spedito or REGISTRO)
@@ -287,11 +266,11 @@ def percorso_imparato(registro_spedito: Path | None = None) -> Path:
 
 
 def identificativi_spediti(percorso: Path | None = None) -> set[str]:
-    """Gli id che stanno nel registro **spedito**, senza l'imparato.
+    """The ids in the shipped registry, excluding the learned one.
 
-    E' la domanda che serve a `impara_adattatore` per sapere se sta per
-    scrivere sopra qualcosa che il programma porta con se': quelli si imparano
-    accanto (`id_locale`), non addosso.
+    Lets `impara_adattatore` check whether it's about to write over
+    something the program ships: those get learned alongside it
+    (`id_locale`), not on top of it.
     """
 
     voci, errore = _voci_di_un_documento(Path(percorso or REGISTRO), quale="Registro degli adattatori")
@@ -301,11 +280,11 @@ def identificativi_spediti(percorso: Path | None = None) -> set[str]:
 
 
 def adattatore(adapter_id: str, percorso: Path | None = None) -> dict[str, Any]:
-    """La voce del registro con quell'identificativo, o {} se non c'e'.
+    """The registry entry with that id, or {} if there isn't one.
 
-    Un registro assente o illeggibile non ferma la lettura di un listino: le
-    regole opzionali semplicemente non vengono applicate, e chi ne dipende
-    davvero (il .xls Noce) lo dice per conto suo.
+    A missing or unreadable registry doesn't stop a price list from being
+    read: the optional rules simply don't apply, and whoever truly depends on
+    them (the Noce `.xls` reader) reports that on its own.
     """
 
     voci, _errore = _leggi_registro(percorso)
@@ -316,23 +295,21 @@ def adattatore(adapter_id: str, percorso: Path | None = None) -> dict[str, Any]:
 
 
 def mappatura_spedita(adapter_id: str, percorso: Path | None = None) -> dict[str, Any]:
-    """La `field_mapping` della voce **spedita** con quell'id, o `{}` se non c'e'.
+    """The shipped entry's `field_mapping` for that id, or `{}` if there isn't one.
 
-    ⚠ Spedita e non effettiva, ed e' la differenza che conta: l'imparato lo
-    scrive il programma, e la mappatura confermata dalla pagina si costruisce
-    da zero — non porta con se' `exclude_rows`. Chi confronta le due per
-    accorgersi che una regola si e' persa deve guardare quello che il programma
-    ha **ricevuto**, altrimenti perde la regola da tutt'e due le parti del
-    confronto e il controllo non scatta piu': misurato il 21 agosto 2026 sul
-    listino Noce, 11 righe lette invece di 9, due delle quali FOOD.
+    Shipped, not effective — that distinction matters: the learned mapping is
+    written by the program, while a mapping confirmed from the page is built
+    from scratch and doesn't carry `exclude_rows`. A check that wants to
+    notice a lost rule has to compare against the shipped mapping;
+    otherwise the rule is missing from both sides of the comparison and the
+    check never fires.
 
-    Sta qui e non nel catalogo perche' ogni lettura del registro passa da
-    `registro` (regola 4): il catalogo se ne apriva uno per conto suo, ed era
-    l'ultimo `json.load` rimasto fuori (6 settembre 2026).
+    Lives here rather than being read directly elsewhere, so every read of
+    the registry goes through this module.
 
-    Un registro assente o illeggibile risponde `{}`, come `adattatore`: chi
-    chiede questa mappatura la usa per un controllo in piu', e un file che non
-    si apre non deve spegnere il visualizzatore.
+    A missing or unreadable registry answers `{}`, like `adattatore`: this
+    mapping backs an extra check, and a file that won't open shouldn't turn
+    off the viewer.
     """
 
     if not str(adapter_id or ""):
@@ -350,27 +327,26 @@ def mappatura_spedita(adapter_id: str, percorso: Path | None = None) -> dict[str
 
 
 def codici_di_riga(fonte: dict[str, Any]) -> dict[str, Any]:
-    """I `row_markers` dichiarati da un adattatore o da una mappatura."""
+    """The `row_markers` declared by an adapter or a field mapping."""
 
     codici = (fonte or {}).get("row_markers")
     if not isinstance(codici, dict):
         return {}
-    # Un fornitore puo' dichiarare i codici, le righe premio, o tutt'e due:
-    # pretendere `codes` buttava via una dichiarazione fatta di sole righe
-    # premio senza dire niente a nessuno.
+    # A supplier can declare codes, reward rows, or both: requiring `codes`
+    # would silently discard a declaration made of reward rows alone.
     if not isinstance(codici.get("codes"), dict) and not isinstance(codici.get("reward_rows"), dict):
         return {}
     return codici
 
 
 def codici_ammessi(codici: dict[str, Any]) -> set[str]:
-    """I codici che il fornitore usa davvero: il resto è da segnalare."""
+    """The codes this supplier actually uses; anything else should be flagged."""
 
     return {str(chiave).strip().upper() for chiave in (codici.get("codes") or {})}
 
 
 def codice_della_riga(record: dict[str, Any], codici: dict[str, Any]) -> dict[str, Any] | None:
-    """Il codice dichiarato che marca questa riga, se ce n'e' uno."""
+    """The declared code that marks this row, if there is one."""
 
     campo = str(codici.get("field") or "discount_raw")
     valore = record.get(campo)
@@ -386,37 +362,34 @@ def codice_della_riga(record: dict[str, Any], codici: dict[str, Any]) -> dict[st
 
 
 def _riga_premio_dal_testo(record: dict[str, Any]) -> bool:
-    """Se la descrizione dice da sola che questa riga e' un premio.
+    """Whether the description alone marks this row as free goods.
 
-    Il giudizio non si riscrive qui: e' `promotions.looks_like_reward`, cioe' lo
-    stesso con cui `promotion_bridge._blocchi` decide che un blocco e' finito.
-    Due definizioni della stessa cosa divergono, e il giorno che divergono una
-    riga sarebbe premio per il motore delle offerte e merce per il confronto.
+    The judgment isn't reimplemented here: it's `promotions.looks_like_reward`,
+    the same one `promotion_bridge._blocchi` uses to decide a block has
+    ended. Two definitions of the same thing can drift apart, and a row
+    would then be a reward to the promotions engine and merchandise to the
+    comparison.
     """
 
     try:
-        from promotions import looks_like_reward  # noqa: PLC0415 - import tardivo voluto
-    except Exception:  # noqa: BLE001 - senza il motore si resta ai codici
+        from promotions import looks_like_reward  # noqa: PLC0415 - deliberate late import
+    except Exception:  # noqa: BLE001 - without the promotions engine, only the row codes apply
         return False
     return looks_like_reward(record.get("description"))
 
 
 def applica_codici_di_riga(records: list[dict[str, Any]], codici: dict[str, Any]) -> Counter[str]:
-    """Declassa le righe che il registro dichiara non ordinabili.
+    """Demote the rows the registry declares not orderable.
 
-    La riga non si butta: e' informazione — il premio di una soglia con
-    omaggio ha codice, EAN e descrizione veri — ma non e' merce acquistabile,
-    e non deve poter entrare in un ordine ne' pesare sulla scelta del
-    fornitore.
+    The row isn't dropped: it's information — the free-goods reward of a
+    threshold promotion carries a real code, barcode and description — but
+    it isn't purchasable merchandise, so it must not be able to enter an
+    order or weigh on which supplier wins.
 
-    ⚠ «Il giorno in cui il fornitore ci scrive il valore dell'omaggio, senza
-    questa regola diventerebbero ordinabili»: qui c'era scritto cosi', ed e'
-    successo il 4 settembre 2026.  Sul canvass nuovo di LARICE le sei righe
-    «IN OMAGGIO ...» hanno un prezzo vero (0,65 · 0,50 · 2,00 · 6,00 · 0,60) e
-    **nessun codice**, e cinque su sei ripetono l'EAN di un articolo gia' a
-    listino a prezzo pieno — l'EAN 8019580330416 sta a 0,68 come merce e a 0,65
-    come regalo.  Chi non ha un codice si dichiara con `reward_rows`, e la riga
-    la riconosce il motore delle promozioni dal testo.
+    A supplier can write a real price on a free-goods row and mark it with
+    no code at all, while its barcode repeats a full-price item already on
+    the list. That's what `reward_rows` is for: a row with no code declares
+    itself through the promotions engine reading its description text.
     """
 
     conteggio: Counter[str] = Counter()
@@ -429,16 +402,16 @@ def applica_codici_di_riga(records: list[dict[str, Any]], codici: dict[str, Any]
         dichiarato = codice_della_riga(record, codici)
         if (
             premio is not None
-            # Un codice che gia' declassa la riga resta com'e': dice di piu' di
-            # quanto sappia il testo, e portarlo via sarebbe una perdita.
+            # A code that already demotes the row is left as-is: it says more
+            # than the text alone knows, and overwriting it would lose that.
             and (dichiarato is None or dichiarato.get("orderable") is not False)
             and _riga_premio_dal_testo(record)
         ):
-            # Fra le due risposte vince «non ordinabile», e la direzione non e'
-            # simmetrica: scambiare un prodotto per un premio si vede subito —
-            # manca dal confronto — mentre scambiare un premio per un prodotto
-            # mette a listino un prezzo che non esiste, e si scopre dal
-            # fornitore.
+            # "Not orderable" wins between the two answers, and the direction
+            # isn't symmetric: mistaking a product for a reward is obvious
+            # (it's missing from the comparison), while mistaking a reward
+            # for a product puts a price on the list that doesn't exist, and
+            # only the supplier finds out.
             dichiarato = premio
         if not dichiarato or dichiarato.get("orderable") is not False:
             continue
@@ -450,30 +423,27 @@ def applica_codici_di_riga(records: list[dict[str, Any]], codici: dict[str, Any]
     return conteggio
 
 
-# ---------------------------------------------------------------------------
-# La memoria degli schemi: impronte, riconoscimento, scrittura versionata.
-# ---------------------------------------------------------------------------
+# Schema memory: fingerprints, recognition, versioned writes.
 
 
-# Le tre verifiche che nessun'altra parte del programma puo' fare al posto
-# nostro: se il prezzo e' diventato testo il confronto fra fornitori si
-# svuota in silenzio, ed e' la variazione che fa piu' danno.
+# The three fields no other part of the program can verify for us: if a
+# price turns into text, the comparison between suppliers silently goes
+# empty, which is the worst-case change.
 CAMPI_NUMERICI = ("unit_price_net", "unit_price_pre_discount", "pieces_per_carton")
 
-# Un adattatore con un lettore dedicato (BETULLA, Larice, il gestionale) non
-# dichiara una mappatura: pretendere lo stesso le verifiche che la riguardano
-# lo farebbe declassare a SCHEMA_VARIATO ogni settimana, e ogni settimana
-# costerebbe una chiamata all'AI per niente.
+# An adapter with a dedicated reader (BETULLA, Larice, the management
+# software) declares no field mapping: requiring the same checks for it
+# would demote it to `SCHEMA_VARIATO` every week, and every week would cost
+# a needless trip through manual remapping.
 NON_APPLICABILE = "l'adattatore non dichiara una mappatura: verifica non applicabile"
 
 
 def normalizza(valore: Any) -> str:
-    """Riduce un'intestazione alla sua sostanza, per poterla confrontare.
+    """Reduce a header to its substance, so it can be compared.
 
-    Lo stesso fornitore scrive «Cod.Art.», «COD ART» e «Cod. Art.» in tre
-    settimane diverse senza avvisare nessuno: confrontare le intestazioni
-    cosi' come sono vorrebbe dire non riconoscere piu' un listino per via di
-    un punto in piu'.
+    The same supplier can write "Cod.Art.", "COD ART" and "Cod. Art." across
+    different weeks with no warning: comparing headers verbatim would mean
+    failing to recognize a price list over one extra period.
     """
 
     testo = unicodedata.normalize("NFKD", str(valore or ""))
@@ -482,29 +452,29 @@ def normalizza(valore: Any) -> str:
 
 
 def impronta_intestazioni(valori: Iterable[Any]) -> list[str]:
-    """I token normalizzati di una riga: senza vuoti, senza doppioni, ordinati.
+    """Normalized tokens of a row: no blanks, no duplicates, sorted.
 
-    L'ordine delle colonne non e' identita': un fornitore che sposta una
-    colonna manda lo stesso listino.  Ordinare rende anche l'impronta stabile
-    da una lettura all'altra, che e' quello che serve per confrontarla.
+    Column order isn't identity: a supplier who reorders a column still
+    sends the same price list. Sorting also keeps the fingerprint stable
+    across reads, which is what makes it comparable.
     """
 
     return sorted({normalizza(valore) for valore in valori} - {""})
 
 
 def posizioni_delle_intestazioni(intestazioni: Iterable[Any]) -> dict[str, int]:
-    """Dove sta ogni intestazione, nella forma che `header_signature.columns` usa.
+    """Where each header sits, in the shape `header_signature.columns` uses.
 
-    E' il pezzo che rende verificabile una firma: l'insieme dei nomi dice che
-    il documento e' di quel fornitore, le posizioni dicono che il lettore
-    trovera' le colonne dove le va a prendere.  Serve a chi **scrive** una
-    firma — `impara_adattatore` — perche' la scriva nella stessa forma in cui
-    `_verifica_posizioni` la rilegge; averle scritte in due modi diversi
-    vorrebbe dire un adattatore imparato e poi mai piu' riconosciuto.
+    This is what makes a signature verifiable: the set of names says the
+    document belongs to that supplier, the positions say the reader will
+    find the columns where it goes looking. Used by whoever writes a
+    signature (`impara_adattatore`), so it writes the same shape
+    `_verifica_posizioni` reads back; writing it two different ways would
+    mean an adapter learned once and never recognized again.
 
-    Un nome ripetuto vale l'ultima posizione, esattamente come nella verifica:
-    su ACERO «COSTO IMPON.» compare in colonna 9 e in colonna 15, e le due
-    parti devono rispondere la stessa cosa.
+    A repeated name keeps its last position, matching the verification: on
+    ACERO, "COSTO IMPON." appears in both column 9 and column 15, and both
+    sides must agree on the same answer.
     """
 
     posizioni: dict[str, int] = {}
@@ -517,12 +487,12 @@ def posizioni_delle_intestazioni(intestazioni: Iterable[Any]) -> dict[str, int]:
 
 def impronta(sheet: str | None, header_row: int | None,
              data_start_row: int | None, intestazioni: Iterable[Any]) -> dict[str, Any]:
-    """L'impronta osservata di uno schema, con il suo `hash` per l'audit.
+    """The observed fingerprint of a schema, with its `hash` for auditing.
 
-    L'`hash` serve a dire in un messaggio «e' cambiato qualcosa» e a ritrovare
-    due letture identiche; **non** e' il criterio di identita', perche' una
-    colonna decorativa in piu' lo cambia e non cambia lo schema.  L'identita'
-    la decide l'insieme `required` in sottoinsieme.
+    The `hash` is for saying "something changed" in a message and for
+    matching two identical reads; it is not the identity criterion, since one
+    extra decorative column changes it without changing the schema. Identity
+    is decided by whether `required` is a subset of what's observed.
     """
 
     corpo = {
@@ -536,19 +506,18 @@ def impronta(sheet: str | None, header_row: int | None,
 
 
 def adattatori(percorso: Path | None = None) -> list[dict[str, Any]]:
-    """Tutte le voci del registro, `[]` se il registro manca o non si legge."""
+    """All registry entries, `[]` if the registry is missing or unreadable."""
 
     voci, _errore = _leggi_registro(percorso)
     return voci
 
 
 def adattatori_effettivi(percorso: Path | None = None) -> tuple[list[dict[str, Any]], str | None]:
-    """Le voci del registro effettivo **e** il motivo, in una lettura sola.
+    """The effective registry's entries and the failure reason, in one read.
 
-    Serve a chi deve fare due cose diverse a seconda che il registro sia
-    vuoto o rotto, senza aprire i file due volte. Chi vuole solo l'elenco usa
-    `adattatori()`; chi vuole solo il motivo usa
-    `motivo_registro_illeggibile()`.
+    For callers that need to behave differently for an empty vs. a broken
+    registry, without opening the files twice. `adattatori()` for just the
+    list, `motivo_registro_illeggibile()` for just the reason.
     """
 
     return _leggi_registro(percorso)
@@ -558,10 +527,10 @@ _NOMI_IN_MEMORIA: dict[str, tuple[tuple[Any, ...] | None, dict[str, str]]] = {}
 
 
 def _firma_dei_due_registri(spedito: Path) -> tuple[Any, ...] | None:
-    """Quanto basta per accorgersi che uno dei due file e' cambiato.
+    """Just enough to notice that one of the two files has changed.
 
-    `None` vuol dire «non lo so»: chi la usa per tenere qualcosa in memoria
-    deve rileggere invece di fidarsi.
+    `None` means "unknown": a caller caching something against this
+    signature must re-read rather than trust it.
     """
 
     firma: list[Any] = []
@@ -571,8 +540,8 @@ def _firma_dei_due_registri(spedito: Path) -> tuple[Any, ...] | None:
         except OSError:
             if documento == spedito:
                 return None
-            # L'imparato che non c'e' e' un caso normale, e va distinto da un
-            # imparato che c'e' ed e' vuoto.
+            # A missing learned file is the normal case, and must be
+            # distinguished from a learned file that exists but is empty.
             firma.append(None)
             continue
         firma.append((stato.st_mtime_ns, stato.st_size))
@@ -580,12 +549,12 @@ def _firma_dei_due_registri(spedito: Path) -> tuple[Any, ...] | None:
 
 
 def nomi_dichiarati_fra(adattatori_letti: Iterable[dict[str, Any]]) -> dict[str, str]:
-    """La stessa mappa, ma su adattatori gia' letti da qualcun altro.
+    """Same map, but over adapters already read by someone else.
 
-    Serve a chi il registro ce l'ha gia' aperto in mano — la mappatura guidata —
-    e non deve rileggerlo dal disco solo per sapere come si chiama un fornitore.
-    La regola del nome piu' corto sta scritta **qui**, in un posto solo: era
-    proprio la sua terza copia il difetto che il cantiere R8 ha chiuso.
+    For a caller that already has the registry open — the guided mapping —
+    and shouldn't re-read it from disk just to learn a supplier's name. The
+    shortest-name rule lives here, in one place, instead of being
+    duplicated at each call site.
     """
 
     nomi: dict[str, str] = {}
@@ -603,7 +572,7 @@ def nomi_dichiarati_fra(adattatori_letti: Iterable[dict[str, Any]]) -> dict[str,
 
 
 def nome_del_fornitore_fra(supplier_id: Any, adattatori_letti: Iterable[dict[str, Any]]) -> str:
-    """`nome_del_fornitore`, ma senza tornare sul disco: stesso ripiego."""
+    """`nome_del_fornitore`, without going back to disk: same fallback."""
 
     identificativo = str(supplier_id or "").strip()
     if not identificativo:
@@ -615,28 +584,25 @@ def nome_del_fornitore_fra(supplier_id: Any, adattatori_letti: Iterable[dict[str
 
 
 def nomi_dei_fornitori(percorso: Path | None = None) -> dict[str, str]:
-    """Come si chiama ogni fornitore, secondo il registro.
+    """The readable name of each supplier, per the registry.
 
-    Il nome leggibile stava scritto in **tre** punti del codice — il servizio,
-    il writer Node e la costruzione del confronto — e ne conosceva quattro: un
-    fornitore imparato compariva come «NUOVO_FORNITORE», con l'underscore, nei
-    messaggi, nei nomi dei file d'ordine e nello storico, mentre il registro ne
-    portava gia' il `display_name`. Qui la fonte e' una sola, ed e' la stessa da
-    cui il fornitore nasce.
+    A single source of truth, drawn from the same place a supplier is born:
+    its adapter's `display_name`.
 
-    ⚠ Quando piu' adattatori dichiarano lo stesso `supplier_id` — Noce ha il
-    CSV e l'Excel — vince il nome **piu' corto**: il piu' lungo descrive il
-    documento («NOCE listino Excel 97-2003»), non il fornitore.
+    When several adapters declare the same `supplier_id` — Noce has both a
+    CSV and an Excel adapter — the shortest name wins: the longer one
+    describes the document ("Noce Excel 97-2003 price list"), not the
+    supplier.
 
-    Il risultato si tiene in memoria finche' il file non cambia: questa mappa la
-    chiede una frase per prodotto, e sono centinaia per pagina.
+    Cached until the underlying file changes: this map gets requested once
+    per product, hundreds of times per page.
     """
 
     documento = Path(percorso or REGISTRO)
     chiave = str(documento)
-    # ⚠ La firma copre TUTTI E DUE i file: con la sola firma dello spedito, un
-    # fornitore appena imparato continuava a chiamarsi come prima finche' non
-    # si toccava un file che non c'entrava niente.
+    # The signature covers both files: a signature over the shipped file
+    # alone would miss a supplier just learned, until an unrelated file
+    # happened to change too.
     firma = _firma_dei_due_registri(documento)
     if firma is not None:
         memorizzato = _NOMI_IN_MEMORIA.get(chiave)
@@ -649,11 +615,11 @@ def nomi_dei_fornitori(percorso: Path | None = None) -> dict[str, str]:
 
 
 def nome_del_fornitore(supplier_id: Any, percorso: Path | None = None) -> str:
-    """Il nome leggibile di un fornitore, con il ripiego quando non si sa.
+    """The readable name of a supplier, with a fallback when it's unknown.
 
-    Il ripiego non e' l'identificativo tal quale: `nuovo_fornitore` diventa
-    «NUOVO FORNITORE», perche' l'underscore in mezzo a una frase si legge come
-    un errore del programma.
+    The fallback isn't the bare id: `nuovo_fornitore` becomes "NUOVO
+    FORNITORE", since an underscore in the middle of a sentence reads as a
+    program error.
     """
 
     identificativo = str(supplier_id or "").strip()
@@ -666,14 +632,14 @@ def nome_del_fornitore(supplier_id: Any, percorso: Path | None = None) -> str:
 
 
 def motivo_registro_illeggibile(percorso: Path | None = None) -> str | None:
-    """La frase da dire quando il registro non si apre, `None` se si apre.
+    """The message to show when the registry won't open, `None` if it does.
 
-    «Il registro non dichiara come si scrive l'ordine» e «il registro non si
-    legge» mandano l'utente in due posti diversi: la prima a dichiarare
-    `order_write`, la seconda ad aggiustare un JSON rotto.  Con `adattatori()`
-    che risponde `[]` in tutti e due i casi, chi avvisa diceva sempre la prima
-    frase — anche davanti a un file che non si apre (revisione avversariale
-    del 13 agosto 2026).
+    "The registry doesn't declare how to write the order" and "the registry
+    can't be read" send the user to two different places: the first to
+    declare `order_write`, the second to fix a broken JSON file. Since
+    `adattatori()` returns `[]` in both cases, a caller relying on it alone
+    would always report the first message, even in front of a file that
+    won't open.
     """
 
     _voci, errore = _leggi_registro(percorso)
@@ -681,7 +647,7 @@ def motivo_registro_illeggibile(percorso: Path | None = None) -> str | None:
 
 
 def _voci_di_un_documento(documento_percorso: Path, *, quale: str) -> tuple[list[dict[str, Any]], str | None]:
-    """Le voci di UN file di registro, e il motivo se non si è potuto aprire."""
+    """The entries of ONE registry file, and the reason if it couldn't be opened."""
 
     try:
         documento = json.loads(documento_percorso.read_text(encoding="utf-8"))
@@ -696,24 +662,24 @@ def _voci_di_un_documento(documento_percorso: Path, *, quale: str) -> tuple[list
 
 
 def _leggi_registro(percorso: Path | None) -> tuple[list[dict[str, Any]], str | None]:
-    """Le voci del registro e, quando non si e' potuto leggerlo, il motivo.
+    """The registry's entries and, when it couldn't be read, the reason.
 
-    Il registro effettivo e' fatto di due file: quello **spedito**
-    (`references/adapters.json`, sotto git) e quello **imparato**
-    (`app/data/adattatori_imparati.json`, fuori da git). A parita' di `id`
-    vince l'imparato, perche' e' la risposta piu' recente e l'ha data qualcuno
-    che aveva il documento davanti — **finche' la spedita e' quella su cui
-    l'imparato e' nato**.  Se la spedita e' cambiata dopo, vince la spedita e
-    l'imparata non entra: vedi `_motivo_del_superamento`.  Chi vuole sapere
-    quali sono chiede `adattatori_superati`; chi vuole toglierle dal file
-    chiama `metti_da_parte_le_superate`, che e' quello che fa la catena
-    all'inizio di ogni confronto.
+    The effective registry is made of two files: the shipped one
+    (`references/adapters.json`, under git) and the learned one
+    (`app/data/adattatori_imparati.json`, outside git). At equal `id`, the
+    learned entry wins — it's the more recent answer, given by someone with
+    the document in front of them — as long as the shipped entry is the
+    one it was learned from. If the shipped entry changed since, the
+    shipped entry wins and the learned one is excluded: see
+    `_motivo_del_superamento`. `adattatori_superati` reports which entries
+    that affects; `metti_da_parte_le_superate` removes them from the file,
+    which the pipeline runs at the start of every comparison.
 
-    L'imparato che manca e' la normalita' — un'installazione nuova non ha
-    imparato niente. L'imparato **rotto** invece si dice, ma non ferma: si
-    riconosce con il solo spedito e il motivo esce di qui, perche' un
-    riconoscimento fallito per un file illeggibile non deve somigliare a un
-    documento sconosciuto.
+    A missing learned file is normal — a fresh install has learned nothing.
+    A broken learned file is reported but doesn't block: recognition
+    falls back to the shipped registry alone, and the reason is surfaced
+    here, so a failed recognition caused by an unreadable file doesn't look
+    like an unknown document.
     """
 
     spedito_percorso = Path(percorso or REGISTRO)
@@ -736,18 +702,18 @@ def _leggi_registro(percorso: Path | None) -> tuple[list[dict[str, Any]], str | 
     if not per_id:
         return spedite, None
     fuse = [per_id.pop(str(voce.get("id") or ""), voce) for voce in spedite]
-    # Quelle imparate da zero, che nello spedito non ci sono: in coda, nello
-    # stesso ordine in cui sono state imparate.
+    # Entries learned from scratch, absent from the shipped registry: appended
+    # at the end, in the order they were learned.
     fuse.extend(voce for voce in attive if str(voce.get("id") or "") in per_id)
     return fuse, None
 
 
 def scrittura_ordine(adattatore: dict[str, Any]) -> dict[str, Any]:
-    """Come si scrive l'ordine dentro il listino di questo fornitore, se si sa.
+    """How the order is written into this supplier's price list, if known.
 
-    `{}` vuol dire «non si sa»: il fornitore entra nel confronto e ci resta,
-    ma per lui non nascera' nessuna copia da mandare, e questo va detto invece
-    di lasciarlo scoprire alla fine.
+    `{}` means "unknown": the supplier still enters and stays in the
+    comparison, but no order file will be generated for it — and that must
+    be reported rather than discovered at the end.
     """
 
     dichiarazione = (adattatore or {}).get("order_write")
@@ -755,13 +721,12 @@ def scrittura_ordine(adattatore: dict[str, Any]) -> dict[str, Any]:
 
 
 def fornitori_con_scrittura(percorso: Path | None = None) -> set[str]:
-    """I fornitori che il registro dichiara compilabili.
+    """The suppliers the registry declares fillable.
 
-    E' l'unica definizione di «compilabile» del programma: la usano il
-    lanciatore, per costruire la configurazione di scrittura, e
-    l'orchestratore, per avvisare quando un fornitore del confronto non c'e'
-    dentro.  Due elenchi che si allontanano vorrebbero dire un avviso che non
-    corrisponde a quello che poi succede davvero.
+    The program's single definition of "fillable": used by the launcher, to
+    build the write configuration, and by the orchestrator, to warn when a
+    supplier in the comparison isn't covered. Two lists drifting apart would
+    mean a warning that doesn't match what actually happens.
     """
 
     return {
@@ -772,11 +737,11 @@ def fornitori_con_scrittura(percorso: Path | None = None) -> set[str]:
 
 
 def fogli_del_profilo(profilo: dict[str, Any]) -> list[dict[str, Any]]:
-    """I fogli da esaminare, che un CSV non ha.
+    """The sheets to examine, which a CSV doesn't have.
 
-    Il profilo di un CSV e' piatto — niente `sheets` — mentre quello di un
-    foglio di calcolo ne porta uno per scheda.  Trattare il CSV come un foglio
-    solo evita di avere due motori di riconoscimento che possono divergere.
+    A CSV profile is flat — no `sheets` — while a spreadsheet profile has one
+    per tab. Treating a CSV as a single sheet avoids running two recognition
+    engines that could drift apart.
     """
 
     fogli = (profilo or {}).get("sheets")
@@ -786,17 +751,17 @@ def fogli_del_profilo(profilo: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def righe_di_intestazione(foglio: dict[str, Any]) -> list[dict[str, Any]]:
-    """Le righe del foglio che possono essere un'intestazione, come le vede il profilo.
+    """The sheet's rows that could be a header, as the profile sees them.
 
-    Si legge il profilo cosi' com'e': lo produce gia' l'inspector, e una
-    seconda lettura del file qui dentro sarebbe una seconda verita' sullo
-    stesso documento.
+    Reads the profile as-is: the inspector already produced it, and reading
+    the file a second time here would create a second truth about the same
+    document.
 
-    `header_candidates` sopravvive solo alle righe che contengono almeno una
-    parola di un elenco scritto nell'inspector: un fornitore che intitola le
-    colonne in modo tutto suo non arriverebbe mai fin qui.  Percio' se il
-    profilo porta `header_rows` — le prime righe non vuote cosi' come sono —
-    si usano quelle, che non dipendono da nessun elenco.
+    `header_candidates` only keeps rows containing at least one word from a
+    list hard-coded in the inspector: a supplier who titles columns their
+    own way would never make it this far. So when the profile carries
+    `header_rows` — the first non-empty rows, verbatim — those are used
+    instead, since they don't depend on any word list.
     """
 
     righe: list[dict[str, Any]] = []
@@ -811,20 +776,20 @@ def righe_di_intestazione(foglio: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _quota(colonna: dict[str, Any], tipo: str, scarto: int = 0) -> float:
-    """La frazione di celle non vuote di quel tipo, **come sono scritte**.
+    """The fraction of non-empty cells of that type, as written.
 
-    `scarto` toglie dal conto le celle che non sono dati — in pratica quella
-    dell'intestazione, che e' testo e sta nella stessa colonna dei numeri.
+    `scarto` excludes cells that aren't data from the count — in practice the
+    header cell, which is text sitting in the same column as the numbers.
 
-    Qui una formula conta come formula, e non e' un dettaglio: questa quota
-    serve alle impronte per forma delle colonne, cioe' a dire **di chi e'** un
-    documento, e com'e' scritta una colonna e' un tratto d'identita' come un
-    altro.  Il listino LARICE non ha una sola formula; ACERO ne ha 18.644 e
-    le stesse colonne calcolate.  Contando le formule per il loro risultato,
-    ACERO prendeva 0,76 sull'impronta di LARICE e si presentava come una
-    sua variazione — un fornitore vero scambiato per un altro fornitore vero.
-    Un'impronta che volesse accettarle lo dichiara da se': `any_of` legge il
-    nome del tipo, e «formula» e' un tipo come gli altri.
+    A formula counts as a formula here, which matters: this ratio feeds the
+    column-shape fingerprints that decide whose document this is, and how
+    a column is written is an identity trait like any other. One supplier's
+    price list has no formulas at all; another's has thousands, in the same
+    calculated columns. Counting formulas by their computed result would
+    make the two fingerprints converge and present one supplier's document
+    as a variation of the other's. A fingerprint that wants to accept
+    formulas declares that itself: `any_of` reads the type name, and
+    "formula" is a type like any other.
     """
 
     non_vuote = max(1, int(colonna.get("nonempty") or 0) - max(0, scarto))
@@ -832,21 +797,21 @@ def _quota(colonna: dict[str, Any], tipo: str, scarto: int = 0) -> float:
 
 
 def _quota_leggibile(colonna: dict[str, Any], tipo: str, scarto: int = 0) -> float:
-    """La frazione di celle che **valgono** quel tipo, formule comprese.
+    """The fraction of cells that evaluate to that type, formulas included.
 
-    ⚠ Una cella scritta `=SUM(E4*(1-5%))` in una colonna di prezzi vale 1,52,
-    ed e' quello che legge chi apre il documento con `data_only=True`.  Il
-    profilo lo apre con `data_only=False` e ci trova il testo della formula:
-    finche' la colonna dei prezzi di GINEPRO contava «formula» su 4132 celle,
-    `tipi_plausibili` la dichiarava **0% numerica** e quel fornitore sarebbe
-    tornato SCHEMA_VARIATO ogni settimana — una mappatura a mano per sempre.
-    Due parti dello stesso programma guardavano la stessa cella e ne dicevano
-    due cose diverse.
+    A cell written `=SUM(E4*(1-5%))` in a price column evaluates to a number,
+    which is what a reader opening the document with `data_only=True` sees.
+    The profile opens it with `data_only=False` and finds the formula text
+    instead: without this, a price column made entirely of formulas would
+    show as 0% numeric, and that supplier would be declassed to
+    `SCHEMA_VARIATO` every week — a permanent hand mapping. Two parts of the
+    same program would be looking at the same cell and disagreeing about it.
 
-    Il valore in cache lo censisce `inspect_sources.censisci_valori_delle_formule`
-    in `formula_values`.  Una formula che restituisce **testo** resta testo: la
-    verifica continua a bocciare una colonna di prezzi diventata testo, che e'
-    la ragione per cui esiste.
+    The cached evaluated value is what
+    `inspect_sources.censisci_valori_delle_formule` records in
+    `formula_values`. A formula that evaluates to text stays text: the
+    check still fails a price column that turned into text, which is the
+    reason it exists.
     """
 
     non_vuote = max(1, int(colonna.get("nonempty") or 0) - max(0, scarto))
@@ -864,11 +829,12 @@ def _colonne_per_indice(foglio: dict[str, Any]) -> dict[int, dict[str, Any]]:
 
 
 def _punteggio_forma(firma: dict[str, Any], foglio: dict[str, Any]) -> tuple[float, list[str]]:
-    """Il punteggio di un'impronta per forma delle colonne.
+    """Score of a column-shape fingerprint.
 
-    Larice non ha nessuna riga di intestazione: le sue colonne si riconoscono
-    da come sono popolate.  Senza questa strada la regola di Larice resterebbe
-    scritta nel codice, che e' esattamente cio' che questa fase toglie.
+    Larice's price list has no header row at all: its columns are recognized
+    from how they're populated. Without this path, Larice's rule would have
+    to live in code, which is exactly what this schema-registry approach
+    replaces.
     """
 
     intervallo = foglio.get("active_range") or {}
@@ -879,13 +845,12 @@ def _punteggio_forma(firma: dict[str, Any], foglio: dict[str, Any]) -> tuple[flo
     richieste = [indice for indice in (firma.get("required_columns") or []) if isinstance(indice, int)]
     if any(indice not in colonne for indice in richieste):
         return 0.0, []
-    # ⚠ Le colonne che devono essere **vuote**. Sono la meta' che mancava a
-    # un'impronta per forma: «ci sono prezzi, pezzi e codici a barre» lo dicono
-    # quasi tutti i listini del mondo, e senza un tratto negativo il foglio
-    # delle offerte — che ha A-F piene, G e H vuote e la sola parola ORDINE
-    # sopra — si prendeva il listino di un altro fornitore (misurato il 21
-    # agosto 2026 su due fogli costruiti apposta). Una colonna vuota non
-    # compare fra quelle del profilo: e' cosi' che si dice «non c'e' niente».
+    # The columns that must be empty. Almost any price list in the world
+    # has prices, quantities and barcodes; without a negative trait too, a
+    # promotions sheet with columns A-F filled, G and H empty and just the
+    # word "ORDINE" above them would match a different supplier's price
+    # list. An empty column doesn't appear among the profile's columns at
+    # all: that's how "nothing is here" gets expressed.
     assenti = [indice for indice in (firma.get("absent_columns") or []) if isinstance(indice, int)]
     if any(indice in colonne for indice in assenti):
         return 0.0, []
@@ -901,21 +866,21 @@ def _punteggio_forma(firma: dict[str, Any], foglio: dict[str, Any]) -> tuple[flo
         minimo = verifica.get("min_nonempty")
         if isinstance(minimo, int) and int(colonna.get("nonempty") or 0) < minimo:
             continue
-        # Il tetto: serve dove a identificare la colonna e' il fatto che porti
-        # UNA cosa sola. Nel foglio delle offerte la colonna H ha la sola
-        # parola ORDINE, e se ne compare una seconda l'inizio dei prodotti non
-        # e' piu' deducibile — il lettore alzerebbe, e alzerebbe dentro la
-        # catena, fermando il ricalcolo di tutti i fornitori invece di
-        # riportare questo documento davanti a chi lo puo' guardare.
+        # The ceiling: for columns identified by carrying just ONE thing. On
+        # the promotions sheet column H holds only the word "ORDINE", and a
+        # second occurrence would make the start of the product rows
+        # undeducible — the reader would raise inside the pipeline, stopping
+        # the recompute for every supplier instead of surfacing this one
+        # document for review.
         massimo = verifica.get("max_nonempty")
         if isinstance(massimo, int) and int(colonna.get("nonempty") or 0) > massimo:
             continue
         rapporto = verifica.get("type_ratio")
         if isinstance(rapporto, dict):
             somma = sum(_quota(colonna, str(tipo)) for tipo in (rapporto.get("any_of") or []))
-            # Il confronto e' `>` e non `>=`: era cosi' prima che la regola
-            # uscisse dal codice e cambiarlo qui sposterebbe di nascosto la
-            # soglia di un riconoscimento gia' collaudato sui listini veri.
+            # Strictly `>`, not `>=`: matches the threshold this rule already
+            # had before it moved out of code, tuned against real price
+            # lists; changing it here would silently move that threshold.
             if not somma > float(rapporto.get("min_exclusive", 0.0)):
                 continue
         attesi = verifica.get("examples_include")
@@ -930,7 +895,7 @@ def _punteggio_forma(firma: dict[str, Any], foglio: dict[str, Any]) -> tuple[flo
 
 
 def _candidati(voci: list[dict[str, Any]], fogli: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Gli adattatori che potrebbero essere questo documento, con quanto ci somigliano."""
+    """The adapters this document could be, with how well each matches."""
 
     trovati: list[dict[str, Any]] = []
     for ordine, voce in enumerate(voci):
@@ -967,33 +932,32 @@ def _candidati(voci: list[dict[str, Any]], fogli: list[dict[str, Any]]) -> list[
                     "voce": voce, "ordine": ordine, "kind": "shape", "foglio": foglio,
                     "confidence": round(min(massimo, punteggio), 2),
                     "obbligatorie": len(forma.get("required_columns") or []), "prove": prove,
-                    # Senza intestazioni l'impronta osservata resta quella del
-                    # foglio: dire «nessuna riga di intestazione» e' un dato,
-                    # inventarne una sarebbe una bugia.
+                    # With no header row, the observed fingerprint stays that
+                    # of the sheet: reporting "no header row" is a fact,
+                    # inventing one would be a lie.
                     "impronta": impronta(foglio.get("name"), None, None, []),
                 })
                 break
     return trovati
 
 
-# Quante intestazioni obbligatorie possono mancare a un adattatore perche' il
-# documento resti «il suo, meno questa cosa qui» invece di un documento
-# sconosciuto. Due: una cella svuotata per sbaglio, o una colonna che il
-# fornitore ha smesso di intitolare. Da tre in su non si sta piu' riconoscendo
-# niente, si sta indovinando.
+# How many required headers can be missing from an adapter for the document
+# to still count as "its own, minus this one thing" instead of unknown. Two:
+# an accidentally emptied cell, or a column the supplier stopped titling.
+# From three on, this stops being recognition and becomes guessing.
 MASSIMO_OBBLIGATORIE_MANCANTI = 2
 
-# E quante devono restarci comunque. Dire «e' il listino di BETULLA» avendone
-# viste due su cinque sarebbe una bugia detta con sicurezza, che e' peggio di
-# «non lo riconosco».
+# And how many must still be present regardless. Claiming "this is BETULLA's
+# price list" having seen two headers out of five would be confidently
+# wrong, which is worse than saying "not recognized".
 MINIMO_OBBLIGATORIE_PRESENTI = 3
 
 
 def lettera_di_colonna(numero: Any) -> str:
-    """Da numero 1-based a lettera, come la mostra un foglio di calcolo.
+    """1-based number to letter, as shown in a spreadsheet.
 
-    Serve per parlare a chi ha il documento aperto davanti: «la colonna C» si
-    trova, «la colonna 3» si conta.
+    For talking to someone with the document open: "column C" is found,
+    "column 3" is counted.
     """
 
     try:
@@ -1010,14 +974,14 @@ def lettera_di_colonna(numero: Any) -> str:
 
 
 def _nome_leggibile(voce: dict[str, Any], token: str) -> str:
-    """Come si chiama quell'intestazione nel documento, non nell'impronta.
+    """This header's name in the document, not in the fingerprint.
 
-    L'impronta porta i token normalizzati — «ordine», «codart» — perche' e' con
-    quelli che si confronta. Ma a chi deve cercare la cella nel foglio va detto
-    il nome che ci vedra' scritto, e quello sta altrove nella stessa voce: nella
-    mappatura dei campi o nell'intestazione attesa sulla colonna dell'ordine.
-    Quando non c'e' da nessuna parte si mostra il token in maiuscolo: brutto,
-    ma vero.
+    The fingerprint carries normalized tokens ("ordine", "codart"), since
+    that's what gets compared. But someone looking for the cell in the
+    sheet needs the name they'll actually see, and that's stored elsewhere
+    in the same entry: the field mapping, or the expected header on the
+    order column. When it's nowhere, the uppercased token is shown instead —
+    ugly, but accurate.
     """
 
     fonti: list[Any] = []
@@ -1037,24 +1001,24 @@ def _nome_leggibile(voce: dict[str, Any], token: str) -> str:
 
 def _mancato_per_un_pelo(voci: list[dict[str, Any]],
                          fogli: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """L'adattatore a cui manca **poco** per essere questo documento, se c'e'.
+    """The adapter this document is almost a match for, if there is one.
 
-    ⚠ Non e' un candidato e non lo diventa: lo stato resta AMBIGUO e nessun
-    listino viene letto con un adattatore a cui manca un pezzo. Cambia solo
-    quello che il programma dice di sapere.
+    Not a candidate, and never becomes one: the state stays `AMBIGUO` and no
+    price list is read with an adapter that's missing a piece. This only
+    changes what the program reports knowing.
 
-    Il caso vero, il 22 agosto 2026 sul PC del negozio: il listino BETULLA e'
-    uscito AMBIGUO perche' qualcuno l'aveva aperto in Excel e risalvato con la
-    cella C1 svuotata — la parola ORDINE non c'era piu'. Le altre quattro
-    obbligatorie c'erano tutte, e tutte al loro posto. Il programma aveva tutto
-    per dirlo e ha detto «Nessuna firma nota sufficiente»; chi l'ha letto ha
-    confermato a mano la mappatura guidata e si e' portato a casa un adattatore
-    imparato sopra quello spedito.
+    A real scenario this guards: a price list can come back `AMBIGUO` because
+    someone opened it in Excel and resaved it with one header cell emptied
+    by accident — the other required headers are all present, in their
+    usual place. The program has everything it needs to say so instead of
+    just "no known signature matched", which invites confirming the guided
+    mapping by hand and ending up with a redundant learned adapter on top
+    of a perfectly good shipped one.
 
-    La difesa contro il falso riconoscimento e' la **posizione**: le
-    obbligatorie che ci sono devono stare dove il registro dice che stiano.
-    Un documento di un altro fornitore che per caso condivide tre nomi di
-    colonna non li ha quasi mai anche negli stessi posti.
+    The defense against a false match here is position: the required
+    headers that are present must sit where the registry says they sit. A
+    document from a different supplier that happens to share three column
+    names almost never has them in the same positions too.
     """
 
     migliore: dict[str, Any] | None = None
@@ -1095,11 +1059,11 @@ def _mancato_per_un_pelo(voci: list[dict[str, Any]],
 
 
 def dettagli_del_mancato_per_un_pelo(trovato: dict[str, Any]) -> list[dict[str, str]]:
-    """Che cosa manca, in una forma che si puo' mostrare senza rifare il conto.
+    """What's missing, shaped so a caller can show it without redoing the work.
 
-    La frase qui sotto la usano la catena e i registri; la pagina compone la
-    sua, con gli accenti veri che questo file non usa. Perche' le due non
-    divergano, i **dati** sono uno solo e stanno qui.
+    The pipeline and its logs use the sentence built below; the page builds
+    its own, with proper accented characters this file doesn't use. So the
+    two don't diverge, the underlying data has one source, here.
     """
 
     voce = trovato["voce"]
@@ -1113,7 +1077,7 @@ def dettagli_del_mancato_per_un_pelo(trovato: dict[str, Any]) -> list[dict[str, 
 
 
 def _frase_del_mancato_per_un_pelo(trovato: dict[str, Any]) -> str:
-    """«È il suo, meno questa cosa qui» — detto a chi ha il file davanti."""
+    """"It's their list, minus this one thing" — said to someone with the file open."""
 
     voce = trovato["voce"]
     nome = str(voce.get("display_name") or voce.get("supplier_id") or voce.get("id") or "").strip()
@@ -1136,7 +1100,7 @@ def _frase_del_mancato_per_un_pelo(trovato: dict[str, Any]) -> str:
 
 
 def _rango_completo(candidato: dict[str, Any]) -> tuple[Any, ...]:
-    """Quanto bene un candidato descrive il documento, in ordine di importanza."""
+    """How well a candidate describes the document, in order of importance."""
 
     return (candidato["confidence"], candidato["senza_guasti"],
             candidato["obbligatorie"], -candidato["ordine"])
@@ -1144,35 +1108,28 @@ def _rango_completo(candidato: dict[str, Any]) -> tuple[Any, ...]:
 
 def _versione_imparata_a_parita(scelto: dict[str, Any],
                                 candidati: list[dict[str, Any]]) -> dict[str, Any]:
-    """Fra lo spedito e quello imparato QUI SOPRA, a parita' piena vince l'imparato.
+    """Between a shipped adapter and one learned ON TOP OF IT, an exact tie goes to the learned one.
 
-    E' il principio scritto del registro — «a parita' di `id` vince l'imparato,
-    perche' e' la risposta piu' recente e l'ha data qualcuno che aveva il
-    documento davanti» — che fino al 22 agosto 2026 valeva per la fusione dei
-    due file ma non per questa scelta: qui vinceva chi veniva prima
-    nell'elenco, cioe' sempre lo spedito.
+    This is the registry's general principle — "at equal `id`, the learned
+    entry wins, since it's the more recent answer, given by someone with the
+    document in front of them" — applied here too, to candidate selection and
+    not just to merging the two files.
 
-    ⚠ La conseguenza non era teorica: teneva chiusa la strada della colonna
-    d'ordine. Chi la sposta dalla pagina si porta a casa una voce che legge il
-    documento esattamente come la spedita e cambia solo dove si scrive
-    l'ordine, quindi le due pareggiano su tutto — misurato sul listino BETULLA
-    vero, confidenza 0,99 e cinque obbligatorie tutte e due — e la voce nuova
-    restava inerte.
+    Without this, moving the order column from the page would produce an
+    entry that reads the document exactly like the shipped one and only
+    changes where the order is written; the two would tie on every score,
+    and the newer entry would never actually get picked.
 
-    Vale **solo dentro la stessa famiglia**, cioe' fra `betulla_v1` e il suo
-    `betulla_v1__locale`. Fra due adattatori di fornitori diversi che pareggiano
-    non c'e' un piu' recente e un meno recente: c'e' solo l'ordine del
-    registro, e quello resta com'era. Il caso non si presenta su nessuno dei
-    tredici listini del repo — contato il 22 agosto 2026: un candidato per
-    documento, zero parita' — e allargare qui una regola per un caso che
-    nessuno ha misurato costerebbe piu' di quanto renda.
+    Applies only within the same family, i.e. between `betulla_v1` and
+    its `betulla_v1__locale`. Between two different suppliers' adapters that
+    tie, there's no older or newer one — just registry order, which stays as
+    it is.
 
-    Che cosa si perde, e va saputo: una voce imparata vecchia continua a
-    vincere anche quando quella spedita migliora, se le due tornano a
-    pareggiare. Non a ogni miglioramento — solo a uno che non cambia l'esito
-    delle verifiche — e si rimedia cancellando la voce da
-    `app/data/adattatori_imparati.json`, che da quando lo spedito non sparisce
-    piu' e' un'operazione che non perde niente.
+    What this trades away: an old learned entry keeps winning even after the
+    shipped one improves, as long as the two still tie. Not on every
+    improvement — only one that doesn't change how the checks come out — and
+    the fix is deleting the entry from `app/data/adattatori_imparati.json`,
+    which loses nothing now that the shipped entry never disappears.
     """
 
     identificativo = str(scelto["voce"].get("id") or "")
@@ -1192,19 +1149,19 @@ def _versione_imparata_a_parita(scelto: dict[str, Any],
 
 
 def riconosci(profilo: dict[str, Any], percorso: Path | None = None) -> dict[str, Any]:
-    """Dice a quale adattatore corrisponde un documento, e perche'.
+    """Say which adapter matches a document, and why.
 
-    Il nome del file non entra mai in questa decisione: Noce manda
-    documenti chiamati `formattato_104233.xls`, che non dicono niente a
-    nessuno, e un fornitore che rinomina il proprio listino non deve diventare
-    un fornitore nuovo.
+    The filename never enters this decision: some suppliers send documents
+    named things like `formattato_104233.xls`, which say nothing to anyone,
+    and a supplier renaming their own price list shouldn't become a new
+    supplier.
 
-    Una colonna in piu' rispetto a quelle dichiarate, di per se', non declassa
-    niente: finisce in `unknown_headers` e in una frase di evidenza.  Un
-    fornitore che aggiunge una colonna decorativa non deve costare una chiamata
-    AI ogni settimana.  A declassare e' semmai una delle verifiche
-    deterministiche: per chi legge per posizione una colonna in piu' sposta
-    tutto il resto, e infatti se ne accorge `posizioni_intestazioni`.
+    One extra column beyond the declared ones doesn't demote anything by
+    itself: it goes into `unknown_headers` and an evidence line. A supplier
+    adding a decorative column shouldn't cost a manual remapping every week. What
+    can demote is one of the deterministic checks: for a reader that reads
+    by position, an extra column shifts everything after it, and
+    `posizioni_intestazioni` catches that.
     """
 
     voci, errore = _leggi_registro(percorso)
@@ -1213,18 +1170,18 @@ def riconosci(profilo: dict[str, Any], percorso: Path | None = None) -> dict[str
     fogli = fogli_del_profilo(profilo)
     candidati = _candidati(voci, fogli)
     if not candidati:
-        # ⚠ «Nessuna firma nota sufficiente» e' vero e non e' tutto quello che
-        # il programma sa: a un adattatore possono mancare una o due
-        # intestazioni obbligatorie su cinque, e le altre stare esattamente
-        # dove lui dice. Quello non e' un documento sconosciuto, e' «il suo,
-        # meno questa cosa qui» — e chi legge la frase deve poterlo capire
-        # senza aprire il file e contare le colonne.
+        # "No known signature matched" is true but not the whole story: an
+        # adapter can be missing one or two required headers out of five,
+        # with the rest exactly where it says they'd be. That's not an
+        # unknown document, it's "its own, minus this one thing" — and
+        # whoever reads the message should understand that without opening
+        # the file and counting columns.
         pelo = _mancato_per_un_pelo(voci, fogli)
         if pelo is None:
             return _nessun_candidato("Nessuna firma nota sufficiente")
         esito = _nessun_candidato(_frase_del_mancato_per_un_pelo(pelo))
-        # Lo stato resta AMBIGUO: si dice quello che manca, non si legge il
-        # listino con un adattatore a cui manca un pezzo.
+        # State stays `AMBIGUO`: report what's missing, don't read the price
+        # list with an adapter that's missing a piece.
         quasi = pelo["voce"]
         esito["quasi_adapter_id"] = quasi.get("id")
         esito["quasi_supplier_name"] = str(
@@ -1235,29 +1192,29 @@ def riconosci(profilo: dict[str, Any], percorso: Path | None = None) -> dict[str
         esito["missing_headers"] = list(pelo["mancanti"])
         return esito
 
-    # ⚠ Le verifiche si fanno su TUTTI i candidati, non solo sul vincitore, e
-    # il perche' e' la ragione per cui esistono i `__locale`. Da quando una
-    # mappatura confermata su un fornitore spedito si scrive accanto invece che
-    # addosso, lo stesso documento puo' avere due adattatori che gli somigliano:
-    # quello spedito e quello imparato qui. Fra i due deve prendersi il
-    # documento **quello che lo legge davvero** — il foglio giusto, la riga
-    # giusta, le colonne al loro posto — non quello che viene prima
-    # nell'elenco. Sono al massimo una manciata di candidati: il conto si paga.
+    # Checks run on ALL candidates, not just the winner, which is the reason
+    # `__locale` entries exist: since a mapping confirmed on a shipped
+    # supplier is written alongside it instead of over it, the same document
+    # can have two adapters resembling it — the shipped one and the one
+    # learned here. Between the two, the one that should win is whichever
+    # actually reads the document — the right sheet, the right row, columns
+    # in place — not whichever comes first in the registry list. There are at
+    # most a handful of candidates, so the cost is worth paying.
     for candidato in candidati:
         candidato["verifiche"] = verifica_deterministica(
             candidato["voce"], candidato["foglio"], candidato["impronta"], fogli,
         )
         candidato["senza_guasti"] = all(verifica["ok"] for verifica in candidato["verifiche"])
-    # A parita' di confidenza vince chi passa le verifiche; poi chi dichiara
-    # piu' intestazioni obbligatorie, che e' lo schema piu' specifico, quindi
-    # quello che descrive meglio il documento.  A parita' ancora, l'ordine del
-    # registro: fra due adattatori di fornitori DIVERSI che pareggiano su tutto
-    # non c'e' niente di meglio da guardare, e quello scritto prima e' quello
-    # che il programma sa di aver spedito.
+    # At equal confidence, whoever passes the checks wins; then whoever
+    # declares more required headers, the more specific schema and so the
+    # better description of the document. Still tied, registry order: between
+    # two DIFFERENT suppliers' adapters that tie on everything, there's
+    # nothing better to compare, so the one declared first is the one the
+    # program knows it shipped first.
     scelto = max(candidati, key=_rango_completo)
-    # ⚠ Fra le due versioni della STESSA cosa la regola e' un'altra: vedi qui
-    # sotto.  Va applicata dopo, perche' guarda le altre voci in gara e non si
-    # puo' dire di un candidato da solo.
+    # Between two versions of the SAME thing the rule is different: see
+    # below. Applied after, since it looks at the other competing entries
+    # and can't be decided from one candidate alone.
     scelto = _versione_imparata_a_parita(scelto, candidati)
     voce = scelto["voce"]
     foglio = scelto["foglio"]
@@ -1311,7 +1268,7 @@ def riconosci(profilo: dict[str, Any], percorso: Path | None = None) -> dict[str
 
 
 def _nessun_candidato(motivo: str) -> dict[str, Any]:
-    """Il documento resta da interpretare: lo dice, invece di scegliere a caso."""
+    """The document is still unresolved: say so, rather than pick at random."""
 
     return {
         "state": "AMBIGUO",
@@ -1328,16 +1285,16 @@ def _nessun_candidato(motivo: str) -> dict[str, Any]:
 def verifica_deterministica(adattatore: dict[str, Any], foglio: dict[str, Any],
                             impronta_osservata: dict[str, Any],
                             fogli: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
-    """Le verifiche che sostituiscono la chiamata AI sul percorso veloce.
+    """The checks that replace a manual review on the fast path.
 
-    Un'impronta che combacia dice che il documento e' di quel fornitore, non
-    che il lettore ci puo' lavorare: la colonna del prezzo puo' essere
-    diventata testo, il foglio puo' essersi spostato, le colonne possono
-    essersi scambiate di posto, il listino puo' essere vuoto.  Sono le cose
-    che, senza questo controllo, entrerebbero in silenzio.
+    A matching fingerprint says the document belongs to that supplier, not
+    that the reader can actually work with it: the price column may have
+    turned into text, the sheet may have moved, columns may have swapped
+    places, the price list may be empty. These are exactly the things that
+    would otherwise fail silently.
 
-    `fogli` serve alla sola verifica del foglio: `sheet: "FIRST"` vuol dire
-    «il primo foglio del documento», e per saperlo bisogna vederli tutti.
+    `fogli` is used only by the sheet check: `sheet: "FIRST"` means "the
+    document's first sheet", and answering that requires seeing them all.
     """
 
     mappatura = adattatore.get("field_mapping") if isinstance(adattatore.get("field_mapping"), dict) else {}
@@ -1351,24 +1308,25 @@ def verifica_deterministica(adattatore: dict[str, Any], foglio: dict[str, Any],
     else:
         verifiche = [{"name": nome, "ok": True, "detail": NON_APPLICABILE}
                      for nome in ("colonne_attese", "riga_intestazione", "foglio")]
-    # Un listino vuoto riguarda anche gli adattatori con un lettore dedicato:
-    # e' l'unico modo in cui un fornitore sparisce dal confronto senza che
-    # niente vada storto.
+    # An empty price list matters for dedicated-reader adapters too: it's the
+    # only way a supplier can drop out of the comparison without anything
+    # actually going wrong.
     verifiche.append(_verifica_righe_dati(mappatura, firma, foglio, impronta_osservata))
-    # I tipi si verificano anche senza mappatura: dove stanno i campi numerici
-    # lo dicono comunque `header_aliases` e `column_map`.  Saltare la verifica
-    # per chi ha un lettore dedicato la toglieva proprio ai tre fornitori piu'
-    # grossi del confronto, cioe' dove un prezzo diventato testo fa piu' danno.
+    # Types are checked even without a field mapping: `header_aliases` and
+    # `column_map` still say where the numeric fields are. Skipping this
+    # check for dedicated-reader adapters would exempt exactly the three
+    # biggest suppliers in the comparison — where a price turning into text
+    # does the most damage.
     verifiche.append(_verifica_tipi(adattatore, mappatura, foglio, impronta_osservata))
     verifiche.append(_verifica_posizioni(firma, foglio, impronta_osservata))
     return verifiche
 
 
 def _valori_intestazione(foglio: dict[str, Any], impronta_osservata: dict[str, Any]) -> list[Any]:
-    """La riga di intestazione riconosciuta, nell'ordine in cui sta nel foglio.
+    """The recognized header row, in the order it appears in the sheet.
 
-    Serve la posizione, non il solo insieme dei token: una colonna dichiarata
-    per nome si ritrova nel profilo solo sapendo in che colonna sta.
+    Position is needed, not just the set of tokens: a column declared by
+    name is only found in the profile by knowing which column it's in.
     """
 
     riga = impronta_osservata.get("header_row")
@@ -1381,28 +1339,24 @@ def _valori_intestazione(foglio: dict[str, Any], impronta_osservata: dict[str, A
 
 
 def _indice_di_colonna(valori: list[Any], nome: Any) -> int | None:
-    """La colonna, 1-based, che porta quel nome — o quel numero, o quella lettera.
+    """The 1-based column that carries this name — or number, or letter.
 
-    Il numero viene per primo perche' e' gia' la risposta: una mappatura
-    dichiara una colonna **per numero** quando quella colonna un nome non ce
-    l'ha o ce l'ha uguale a un'altra — su ACERO «COSTO IMPON.» compare due
-    volte, in colonna 9 e in colonna 15, e per nome il prezzo non si puo'
-    indicare affatto.  E' la stessa regola che applica chi legge davvero
-    (`prepare_manifest_sources.column_number`: un intero >= 1 e' il numero di
-    colonna e basta).  Finche' questo ramo tornava `None`, `tipi_plausibili`
-    non trovava la colonna, si dichiarava non applicabile, e un prezzo
-    diventato testo passava come SCHEMA_NOTO 0.99 con zero offerte.
+    Number is tried first because it's already the answer: a mapping
+    declares a column by number when that column has no name of its own
+    or shares one with another — on ACERO "COSTO IMPON." appears twice, in
+    columns 9 and 15, so the price can't be pointed to by name at all. This
+    matches the rule the real reader applies
+    (`prepare_manifest_sources.column_number`: a true integer >= 1 is simply
+    the column number).
 
-    ⚠ Vale per gli interi VERI: una stringa di cifre («9», «09») per chi
-    legge davvero e' un nome di colonna come un altro, e qui deve valere lo
-    stesso — rispondere «colonna 9» a una domanda che il lettore rifiutera'
-    vorrebbe dire dichiarare verificato un documento che non verra' mai letto
-    (revisione avversariale del 13 agosto 2026).
+    Only true integers count: a digit string ("9", "09") is a column name
+    like any other to the real reader, and must be treated the same way
+    here — answering "column 9" to a lookup the reader would refuse would
+    mean declaring a document verified that will never actually be read.
 
-    Il nome viene prima della lettera di proposito: «UM» e «QT» sono
-    intestazioni vere di CIPRESSO e sarebbero anche lettere di colonna
-    plausibili.  Cercare prima fra le intestazioni evita di leggere la colonna
-    567 al posto della terza.
+    Name is tried before letter on purpose: "UM" and "QT" are real headers
+    on one supplier's price list and would also be plausible column letters.
+    Checking headers first avoids reading column 567 instead of the third.
     """
 
     if isinstance(nome, bool):
@@ -1432,11 +1386,11 @@ def _verifica_colonne_attese(mappatura: dict[str, Any], foglio: dict[str, Any],
     if not isinstance(colonne, dict) or not colonne:
         return {"name": nome, "ok": True, "detail": "la mappatura non dichiara colonne: verifica non applicabile"}
     osservate = set(impronta_osservata.get("headers") or [])
-    # Una mappatura puo' dichiarare una colonna per nome oppure, quando quella
-    # colonna un nome non ce l'ha, per numero: e' la forma che documenta
-    # `prepare_manifest_sources`, ed e' il caso di quasi tutte le colonne
-    # d'ordine, che arrivano vuote.  Cercare «6» fra le intestazioni non la
-    # troverebbe mai, e il fornitore resterebbe da interpretare per sempre.
+    # A mapping can declare a column by name or, when the column has no
+    # name, by number — the form `prepare_manifest_sources` documents, used
+    # for almost every order column, which arrives blank. Searching for "6"
+    # among the headers would never find it, leaving the supplier
+    # permanently unresolved.
     attese: set[str] = set()
     per_numero: list[int] = []
     for valore in colonne.values():
@@ -1488,11 +1442,11 @@ def _verifica_foglio(mappatura: dict[str, Any], foglio: dict[str, Any],
     if atteso is None:
         return {"name": nome, "ok": True, "detail": "la mappatura non dichiara un foglio: verifica non applicabile"}
     if str(atteso).strip().upper() == "FIRST":
-        # «FIRST» non vuol dire «il primo che combacia»: chi legge davvero il
-        # documento — `prepare_manifest_sources.selected_sheet` — prende il
-        # foglio numero uno e basta.  Se lo schema e' stato riconosciuto in un
-        # foglio piu' in la', per esempio perche' il fornitore ha aggiunto una
-        # copertina, il lettore aprirebbe la copertina e non il listino.
+        # "FIRST" doesn't mean "the first one that matches": the real reader
+        # (`prepare_manifest_sources.selected_sheet`) always opens sheet
+        # number one. If the schema was recognized on a later sheet — say the
+        # supplier added a cover sheet — the reader would open the cover
+        # sheet, not the price list.
         if not fogli:
             return {"name": nome, "ok": True,
                     "detail": "la mappatura vuole il primo foglio del documento, che non è stato osservato"}
@@ -1532,17 +1486,18 @@ def _verifica_righe_dati(mappatura: dict[str, Any], firma: dict[str, Any], fogli
 
 
 def _verifica_marcatore_dei_dati(marcatore: Any, foglio: dict[str, Any]) -> dict[str, Any]:
-    """Il separatore che dichiara l'inizio dei dati e' ancora dov'era?
+    """Is the marker that declares where data starts still where it was?
 
-    Il profilo non porta tutte le righe del documento, quindi «non l'ho
-    trovato» qui non vuol dire «non c'e'»: chi lo cerca davvero e' il lettore,
-    su tutto il file, e li' un marcatore mancante ferma la lettura.  Quello che
-    si puo' dire da qui si dice, e il resto si dichiara invece di far credere
-    una verifica che non e' stata fatta.
+    The profile doesn't carry every row of the document, so "not found here"
+    doesn't mean "not there": the real reader searches the whole file, and a
+    missing marker stops reading there. This check reports what it can and
+    declares the rest inconclusive, rather than pretending to have verified
+    something it hasn't.
 
-    Un caso pero' e' decidibile subito, ed e' quello che conta: se nelle righe
-    profilate il testo compare **piu' di una volta**, l'inizio dei dati e'
-    gia' ambiguo e il documento non va letto senza guardarlo.
+    One case is decidable right away, and it's the one that matters: if the
+    marker text appears more than once in the profiled rows, the start
+    of the data is already ambiguous and the document shouldn't be read
+    without a human look.
     """
 
     nome = "righe_dati"
@@ -1587,10 +1542,10 @@ def _verifica_marcatore_dei_dati(marcatore: Any, foglio: dict[str, Any]) -> dict
 
 
 def righe_visibili_del_foglio(foglio: dict[str, Any]) -> list[dict[str, Any]]:
-    """Tutte le righe che il profilo porta di questo foglio, senza doppioni.
+    """Every row the profile carries for this sheet, deduplicated.
 
-    Non sono tutte le righe del documento e non pretendono di esserlo: sono
-    quelle su cui una verifica fatta sul profilo puo' dire qualcosa.
+    Not every row of the document, and not meant to be: just the ones a
+    check working off the profile can say something about.
     """
 
     per_numero: dict[int, dict[str, Any]] = {}
@@ -1612,43 +1567,42 @@ def righe_visibili_del_foglio(foglio: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def posizione_del_campo(adattatore: dict[str, Any], mappatura: dict[str, Any], campo: str) -> Any:
-    """Dove il registro dichiara che sta un campo, o `None` se non lo dice.
+    """Where the registry declares a field to be, or `None` if it doesn't say.
 
-    Il valore torna com'e' scritto: una lettera di colonna («R»), un numero
-    1-based, o il nome dell'intestazione («Descr.Commerciale»). Chi lo usa lo
-    risolve sul documento che ha in mano — sono tre modi di dire la stessa cosa,
-    e il registro li usa tutti e tre a seconda del fornitore.
+    The value comes back as written: a column letter ("R"), a 1-based
+    number, or a header name ("Descr.Commerciale"). The caller resolves it
+    against the document it has — three ways of saying the same thing, and
+    the registry uses all three depending on the supplier.
 
-    E' la versione pubblica di `_dove_sta_il_campo`, che serviva solo alla
-    verifica dei tipi: la stessa dichiarazione dice anche al writer dove
-    controllare che la riga di destinazione porti il prodotto giusto.
+    Public version of `_dove_sta_il_campo`, which the type check uses: the
+    same declaration also tells the writer where to check that the
+    destination row carries the right product.
     """
 
     return _dove_sta_il_campo(adattatore or {}, mappatura or {}, campo)
 
 
 def indice_della_colonna(valori: list[Any], dichiarata: Any) -> int | None:
-    """La colonna, 1-based, che quella dichiarazione indica su questo foglio.
+    """The 1-based column that declaration points to on this sheet.
 
-    Versione pubblica di `_indice_di_colonna`, con le stesse regole: un intero
-    vero e' gia' il numero di colonna, un nome si cerca fra le intestazioni, e
-    solo per ultima si prova la lettera.  Serve a chi deve **mostrare** dove il
-    programma andra' a leggere — la pagina Importa — e deve rispondere la
-    stessa cosa che risponde chi legge davvero, non una seconda regola scritta
-    altrove.
+    Public version of `_indice_di_colonna`, same rules: a true integer is
+    already the column number, a name is looked up among the headers, and
+    only last is a letter tried. For callers that need to show where the
+    program will read from — the Import page — and must answer exactly what
+    the real reader would, not a second rule written elsewhere.
     """
 
     return _indice_di_colonna(list(valori or []), dichiarata)
 
 
 def _dove_sta_il_campo(adattatore: dict[str, Any], mappatura: dict[str, Any], campo: str) -> Any:
-    """Dove il registro dice che sta un campo, comunque lo dichiari.
+    """Where the registry says a field is, whichever way it declares it.
 
-    Tre fornitori su sei non hanno una `field_mapping` perche' hanno un lettore
-    dedicato, ma dove stanno le loro colonne il registro lo dice lo stesso:
-    BETULLA con `header_aliases` («Cessione»), Larice con `column_map` («O»).
-    Sono dichiarazioni gia' scritte, e usarle e' l'unico modo perche' la
-    verifica dei tipi valga anche per loro.
+    Several suppliers have no `field_mapping` because they use a dedicated
+    reader, but the registry still says where their columns are: BETULLA via
+    `header_aliases` ("Cessione"), Larice via `column_map` ("O"). Those
+    declarations already exist, and using them is the only way the type
+    check also covers those suppliers.
     """
 
     colonne = mappatura.get("columns")
@@ -1677,18 +1631,17 @@ def _verifica_tipi(adattatore: dict[str, Any], mappatura: dict[str, Any], foglio
             continue
         indice = _indice_di_colonna(valori, dichiarata)
         colonna = colonne.get(indice) if indice is not None else None
-        # Una colonna che non si trova la segnala gia' `colonne_attese`: dirlo
-        # due volte non aggiunge niente a chi legge l'esito.
+        # A column that can't be found is already flagged by
+        # `colonne_attese`: reporting it twice adds nothing for the reader.
         if colonna is None:
             continue
-        # La cella dell'intestazione sta nella stessa colonna dei prezzi ed e'
-        # testo: contarla fa scendere la quota dei numeri, e su un listino di
-        # poche righe la fa scendere sotto meta'.  Un listino corto non e' un
-        # listino sbagliato.
+        # The header cell sits in the same column as the prices and is text:
+        # counting it lowers the numeric ratio, and on a short price list it
+        # can push it below half. A short price list isn't a broken one.
         intestata = indice <= len(valori) and str(valori[indice - 1] or "").strip() != ""
-        # Una colonna dichiarata per numero si legge male scritta cosi' com'e'
-        # («unit_price_net (9)»): chi legge l'esito deve capire che il 9 e' una
-        # colonna e non un valore.
+        # A column declared by number reads poorly written verbatim
+        # ("unit_price_net (9)"): the reader needs to see that 9 is a column,
+        # not a value.
         per_numero = isinstance(dichiarata, int) and not isinstance(dichiarata, bool)
         dove = f"colonna {dichiarata}" if per_numero or str(dichiarata).strip().isdigit() else str(dichiarata)
         misure.append((f"{campo} ({dove})", _quota_leggibile(colonna, "number", int(intestata))))
@@ -1706,27 +1659,26 @@ def _verifica_tipi(adattatore: dict[str, Any], mappatura: dict[str, Any], foglio
 
 def _verifica_posizioni(firma: dict[str, Any], foglio: dict[str, Any],
                         impronta_osservata: dict[str, Any]) -> dict[str, Any]:
-    """Le intestazioni stanno ancora dove il lettore le va a prendere?
+    """Are the headers still where the reader goes to pick them up?
 
-    Tre adattatori — BETULLA, il gestionale, Larice — hanno un lettore dedicato
-    che legge **per posizione**: `read_betulla` prende il prezzo da `row[5]`, non
-    dalla colonna intitolata «Cessione».  L'insieme delle intestazioni non
-    basta a difenderli, ed e' stato misurato: con una colonna in piu' in testa
-    al listino vero il percorso veloce dichiarava SCHEMA_NOTO 0.99 e il lettore
-    restituiva 12,00 euro al posto di 3,98; con due colonne scambiate — stesso
-    insieme di nomi, nessuna intestazione nuova — restituiva 6,00 al posto di
-    1,25.  Nessun avviso, per una settimana intera di ordini.
+    Several adapters (BETULLA, the management-software export, Larice) use a
+    dedicated reader that reads by position: it takes the price from a
+    fixed row index, not from the column titled "Cessione". The set of
+    headers alone doesn't protect them: with one extra column inserted at
+    the front of a real price list, the fast path declared `SCHEMA_NOTO`
+    with confidence 0.99 and the reader returned the wrong price entirely,
+    with no warning for a whole week of orders.
 
-    Percio' la firma di quegli adattatori dichiara anche **dove** sta ogni
-    intestazione, e qui si confronta.  Un adattatore nativo la cui mappatura
-    risolve tutto per nome puo' non dichiarare niente, e la verifica esce non
-    applicabile.  Gli adattatori **imparati** invece la dichiarano sempre
-    (`impara_adattatore` la scrive d'ufficio), anche quando i campi si
-    risolvono per nome: la colonna dove si scrive l'ordine resta posizionale
-    — per QUERCIA e' la lettera «N» — e una colonna aggiunta in testa la
-    sposterebbe senza cambiare nessun nome.  Il prezzo e' un declassamento a
-    SCHEMA_VARIATO (cioe' una conferma in piu') quando il fornitore aggiunge
-    una colonna innocua: e' il costo scelto per chiudere la trappola BETULLA.
+    So those adapters' signatures also declare where each header sits,
+    and that's what this check compares. A native adapter whose mapping
+    resolves everything by name can declare nothing here, and the check is
+    a no-op. Learned adapters always declare it
+    (`impara_adattatore` writes it unconditionally), even when fields
+    resolve by name: the column where the order is written stays
+    positional, and a column inserted ahead of it would shift it without
+    changing any name. The cost is a demotion to `SCHEMA_VARIATO` (one extra
+    confirmation) whenever a supplier adds a harmless column — the price
+    chosen to close this class of silent mismatch for good.
     """
 
     nome = "posizioni_intestazioni"
@@ -1738,9 +1690,9 @@ def _verifica_posizioni(firma: dict[str, Any], foglio: dict[str, Any],
     if not valori:
         return {"name": nome, "ok": False,
                 "detail": "nessuna riga di intestazione osservata: le posizioni dichiarate non si possono verificare"}
-    # La stessa funzione che usa chi scrive la firma: se le due parti contassero
-    # le posizioni in due modi diversi, un adattatore imparato risulterebbe
-    # fuori posto sul documento da cui e' stato imparato.
+    # Same function used by whoever writes the signature: if the two sides
+    # counted positions differently, a learned adapter would show as out of
+    # place on the very document it was learned from.
     osservate = posizioni_delle_intestazioni(valori)
     fuori_posto: list[str] = []
     malformate: list[str] = []
@@ -1749,10 +1701,10 @@ def _verifica_posizioni(firma: dict[str, Any], foglio: dict[str, Any],
         if not atteso:
             continue
         if isinstance(attesa, bool) or not isinstance(attesa, int):
-            # Una posizione che non e' un numero intero non si puo' verificare,
-            # e saltarla direbbe «tutto al suo posto» di una dichiarazione mai
-            # guardata.  `True` passava proprio cosi', perche' in Python e' un
-            # intero (revisione avversariale del 13 agosto 2026).
+            # A position that isn't an integer can't be verified, and
+            # skipping it would report "all in place" for a declaration
+            # that was never actually checked. `bool` is rejected
+            # explicitly because `True` is an `int` in Python.
             malformate.append(f"«{token}» dichiara una posizione che non è un numero intero")
             continue
         trovata = osservate.get(atteso)
@@ -1771,40 +1723,40 @@ def _verifica_posizioni(firma: dict[str, Any], foglio: dict[str, Any],
             "detail": f"tutte le {len(dichiarate)} intestazioni dichiarate sono nella colonna prevista"}
 
 
-# Quanto si aspetta il proprio turno prima di scrivere nel registro, e dopo
-# quanto un turno che nessuno ha restituito si considera abbandonato. Il secondo
-# numero e' quello che conta: un processo ucciso a meta' — l'antivirus, la
-# chiusura della finestra, il PC spento — lascerebbe il registro chiuso per
-# sempre, e un programma che non impara piu' e non lo dice e' peggio del difetto
-# che questo lucchetto esiste per chiudere.
+# How long to wait for a turn before writing to the registry, and after how
+# long an unreturned turn counts as abandoned. The second number is the one
+# that matters: a process killed mid-write (antivirus, window closed, PC
+# powered off) would otherwise leave the registry locked forever, and a
+# program that silently stops learning is worse than the race this lock
+# exists to close.
 ATTESA_DEL_TURNO = 5.0
 TURNO_ABBANDONATO = 20.0
 
 
 @contextlib.contextmanager
 def _turno_di_scrittura(documento_percorso: Path):
-    """Un processo per volta dentro il giro leggi-modifica-riscrivi.
+    """One process at a time inside the read-modify-write cycle.
 
-    ⚠ La scrittura del file e' atomica da sempre — temporaneo con `os.replace`,
-    quindi chi legge trova il registro vecchio o quello nuovo, mai uno monco.
-    Quello che non era protetto e' il **giro intero**: due scritture che si
-    accavallano leggono lo stesso documento di partenza, e la seconda a
-    riscrivere cancella la voce della prima. Misurato il 22 agosto 2026: dieci
-    scritture insieme, e nel registro ne restava **una**.
+    Writing the file itself has always been atomic — temp file plus
+    `os.replace`, so a reader finds the old registry or the new one, never a
+    half-written one. What wasn't protected is the whole cycle: two
+    overlapping writes read the same starting document, and the second one
+    to finish overwrites the first one's entry. Measured directly: ten
+    concurrent writes left just one entry in the registry.
 
-    Non e' un caso di laboratorio. Il servizio e' un `ThreadingHTTPServer`,
-    `impara_adattatore` gira come processo a se' durante il ricalcolo, e ogni
-    comparatore avviato dalla stessa cartella scrive lo **stesso**
-    `app/data/adattatori_imparati.json` — i percorsi dei dati si scelgono
-    all'avvio, quello del registro no.
+    Not a lab-only scenario. The service is a `ThreadingHTTPServer`,
+    `impara_adattatore` runs as its own process during the recompute, and
+    every comparator started from the same folder writes the same
+    `app/data/adattatori_imparati.json` — data paths are chosen per run, the
+    registry's path isn't.
 
-    Il lucchetto e' un file creato con `O_EXCL`, che e' l'unica primitiva che
-    funziona uguale su Windows e su macOS. Porta dentro chi lo tiene e da
-    quando, cosi' un turno abbandonato si riconosce e si toglie invece di
-    bloccare tutto per sempre. Se dopo `ATTESA_DEL_TURNO` non si e' ottenuto e
-    non risulta abbandonato, **si scrive lo stesso**: il caso peggiore torna a
-    essere quello di prima, non uno peggiore, e un adattatore che l'utente ha
-    appena confermato non deve andare perso perche' un altro processo e' lento.
+    The lock is a file created with `O_EXCL`, the one primitive that behaves
+    the same on Windows and macOS. It records who holds it and since when,
+    so an abandoned turn can be recognized and cleared instead of blocking
+    everything forever. If `ATTESA_DEL_TURNO` elapses without acquiring it
+    and it isn't abandoned, the write proceeds anyway: the worst case
+    reverts to the pre-lock race, not something worse, and an adapter the
+    user just confirmed shouldn't be lost because another process is slow.
     """
 
     lucchetto = documento_percorso.with_name(documento_percorso.name + ".lock")
@@ -1818,10 +1770,10 @@ def _turno_di_scrittura(documento_percorso: Path):
             try:
                 eta = time.time() - lucchetto.stat().st_mtime
             except OSError:
-                continue  # e' appena sparito: si riprova subito a prenderlo
+                continue  # just disappeared: try to acquire it again right away
             if eta > TURNO_ABBANDONATO:
-                # Chi lo teneva non c'e' piu'. `missing_ok`: se nel frattempo
-                # l'ha tolto lui, va bene lo stesso.
+                # Whoever held it is gone. `missing_ok`: fine if they removed
+                # it in the meantime.
                 lucchetto.unlink(missing_ok=True)
                 continue
             if time.monotonic() >= scadenza:
@@ -1829,8 +1781,8 @@ def _turno_di_scrittura(documento_percorso: Path):
             time.sleep(0.02)
             continue
         except OSError:
-            # Cartella non scrivibile, disco pieno: non e' questo il posto in
-            # cui fermare l'apprendimento di un adattatore.
+            # Unwritable folder, full disk: not the place to block learning
+            # for an adapter.
             break
         with os.fdopen(descrittore, "w", encoding="utf-8") as flusso:
             flusso.write(f"{os.getpid()} {time.time()}\n")
@@ -1844,25 +1796,24 @@ def _turno_di_scrittura(documento_percorso: Path):
 
 
 def scrivi_adattatore(voce: dict[str, Any], percorso: Path | None = None) -> dict[str, Any]:
-    """Scrive una voce nel registro senza perdere quella di prima.
+    """Write an entry to the registry without discarding the previous one.
 
-    Il programma finito gira da solo: quando l'utente conferma uno schema
-    nuovo, quello vecchio non deve sparire.  Se la settimana dopo il
-    riconoscimento peggiora, l'unico modo per capire che cosa e' cambiato e'
-    avere ancora sotto gli occhi la versione precedente.
+    The program runs unattended: when the user confirms a new schema, the
+    old one must not disappear. If recognition gets worse the following
+    week, the only way to see what changed is to still have the previous
+    version to compare against.
 
-    La scrittura passa da un file temporaneo nella stessa cartella e da
-    `os.replace`: un'interruzione a meta' lascerebbe il registro monco, e con
-    il registro monco il programma non riconosce piu' nessun fornitore.
+    Written via a temp file in the same folder and `os.replace`: an
+    interruption mid-write would leave the registry truncated, and a
+    truncated registry stops recognizing every supplier.
 
-    ⚠ Si scrive **sempre e solo** nel registro imparato
-    (`app/data/adattatori_imparati.json`), mai in quello spedito: quello sta
-    sotto git e l'avvio del PC del negozio lo riporta indietro a ogni doppio
-    clic. La versione e la storia (`schema_version`, `previous_versions`) si
-    contano pero' sul registro **effettivo**, spedito compreso: il primo
-    schema imparato sopra un adattatore spedito e' la sua seconda versione,
-    non la prima, e chi legge la storia deve trovarci dentro anche quella da
-    cui si e' partiti.
+    Always writes only to the learned registry
+    (`app/data/adattatori_imparati.json`), never to the shipped one: that
+    one is under git, and the store PC resets it on every startup. Version
+    and history (`schema_version`, `previous_versions`) are counted against
+    the effective registry, shipped entry included: the first schema
+    learned on top of a shipped adapter is its second version, not its
+    first, so the history includes the version it started from.
     """
 
     if not isinstance(voce, dict):
@@ -1872,15 +1823,16 @@ def scrivi_adattatore(voce: dict[str, Any], percorso: Path | None = None) -> dic
         raise ValueError("La voce da scrivere nel registro non ha un «id»")
 
     documento_percorso = percorso_imparato(percorso)
-    # ⚠ Il `with` copre il giro INTERO — leggi, modifica, riscrivi — non la sola
-    # scrittura del file, che era gia' atomica. Vedi `_turno_di_scrittura`.
+    # The `with` covers the WHOLE cycle — read, modify, write — not just
+    # the file write itself, which was already atomic. See
+    # `_turno_di_scrittura`.
     with _turno_di_scrittura(documento_percorso):
         if documento_percorso.exists():
             try:
                 documento = json.loads(documento_percorso.read_text(encoding="utf-8"))
             except (OSError, ValueError) as errore:
-                # Riscrivere da zero un registro che non si riesce a leggere
-                # vorrebbe dire buttare via tutti gli altri adattatori.
+                # Rewriting a registry that can't be read from scratch would
+                # mean discarding every other adapter in it.
                 raise ValueError(f"Il registro degli adattatori non è leggibile: {errore}") from errore
             if not isinstance(documento, dict) or not isinstance(documento.get("adapters"), list):
                 raise ValueError("Il registro degli adattatori non ha l'elenco «adapters»")
@@ -1893,19 +1845,19 @@ def scrivi_adattatore(voce: dict[str, Any], percorso: Path | None = None) -> dic
              if isinstance(esistente, dict) and esistente.get("id") == identificativo),
             None,
         )
-        # La spedita da cui questa voce deriva, se c'e'. Serve due volte: come
-        # versione di partenza quando l'imparato non ha ancora niente, e come
-        # timbro — «sono nata sopra questa» — che decide fin quando la voce
-        # vale (vedi `_motivo_del_superamento`). Uno spedito che c'e' ma non si
-        # legge ferma la scrittura invece di far ripartire la versione da uno:
-        # ricominciare da capo vorrebbe dire buttare via la storia di un
-        # adattatore senza dirlo a nessuno.
+        # The shipped entry this one derives from, if any. Needed twice: as
+        # the starting version when the learned entry has nothing yet, and
+        # as the stamp — "born on top of this one" — that decides how long
+        # the entry stays valid (see `_motivo_del_superamento`). A shipped
+        # entry that exists but can't be read blocks the write instead of
+        # silently restarting the version count from one: starting over
+        # would discard an adapter's history without telling anyone.
         #
-        # ⚠ `adattatore_base`: la prima versione di un `betulla_v1__locale` e' la
-        # spedita `betulla_v1`. Cercare l'id intero la farebbe nascere come
-        # versione uno e senza storia, e chi rileggesse la voce fra un mese non
-        # troverebbe piu' da dove si era partiti — che e' l'unica cosa che
-        # permette di capire che cosa e' cambiato.
+        # `adattatore_base`: the first version of a `betulla_v1__locale` is
+        # the shipped `betulla_v1`. Looking up the full id would make it
+        # start as version one with no history, and rereading the entry a
+        # month later would lose the starting point — the one thing that
+        # lets anyone see what changed.
         spedita_base: dict[str, Any] = {}
         spedito_percorso = Path(percorso or REGISTRO)
         if spedito_percorso.is_file():
@@ -1960,16 +1912,16 @@ def scrivi_adattatore(voce: dict[str, Any], percorso: Path | None = None) -> dic
 
 def metti_da_parte_le_superate(percorso: Path | None = None,
                                quando: str | None = None) -> list[dict[str, Any]]:
-    """Sposta le voci imparate che lo spedito ha superato fuori da `adapters`.
+    """Move learned entries the shipped registry has superseded out of `adapters`.
 
-    Non si cancellano: finiscono in `adapters_messi_da_parte` nello stesso
-    file, con la data e il motivo, perche' quello che il titolare aveva mappato a
-    mano e' informazione — dice che cosa vedeva nel listino — e va potuto
-    rileggere.  Da `adapters` invece devono uscire, altrimenti ogni confronto
-    ripeterebbe lo stesso avviso per sempre.
+    They aren't deleted: they land in `adapters_messi_da_parte` in the same
+    file, with a date and reason, since what the operator mapped by hand is
+    information — it shows what they saw in the price list — and should
+    stay readable. They do have to leave `adapters`, though, or every
+    comparison would repeat the same warning forever.
 
-    Torna le schede delle voci spostate, `[]` se non c'era niente da spostare
-    o se uno dei due file non si legge: qui si sposta, non si diagnostica.
+    Returns cards for the entries moved, `[]` if there was nothing to move
+    or either file can't be read: this function moves, it doesn't diagnose.
     """
 
     spedito_percorso = Path(percorso or REGISTRO)
@@ -2012,11 +1964,11 @@ def metti_da_parte_le_superate(percorso: Path | None = None,
 
 
 def _scrivi_documento(documento_percorso: Path, documento: dict[str, Any]) -> None:
-    """Sostituisce il registro in un colpo solo, a fine riga LF.
+    """Replace the registry in one shot, with LF line endings.
 
-    Il registro sta sotto git con fine riga LF: riscriverlo in CRLF farebbe
-    apparire modificato l'intero file, e il diff che una persona deve leggere
-    prima di accettare uno schema nuovo diventerebbe illeggibile.
+    The registry is tracked in git with LF endings: rewriting it in CRLF
+    would make the whole file show as changed, and the diff a person has to
+    read before accepting a new schema would become unreadable.
     """
 
     documento_percorso.parent.mkdir(parents=True, exist_ok=True)

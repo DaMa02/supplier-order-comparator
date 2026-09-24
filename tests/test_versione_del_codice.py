@@ -1,18 +1,14 @@
-"""Il programma si accorge di non essere più quello che sta girando.
+"""The program detects when it is no longer the one currently running.
 
-La storia sta in `app/versione_del_codice.py`: un server acceso alle 09:42, il
-codice aggiornato due volte nel pomeriggio, e alle 20:19 un `AttributeError`
-in inglese davanti a un utente che dal browser non poteva farci niente.
+Covers the decision logic in `app/versione_del_codice.py`, focused on the two
+failure modes that matter:
 
-Qui si prova la parte che decide, e si provano soprattutto i due modi di
-sbagliare che contano:
-
-1. **dire che è cambiato quando non è cambiato** — fermerebbe ogni settimana
-   una run buona, ed è il motivo per cui un file illeggibile non conta come
-   prova;
-2. **guardare i file sbagliati** — `references/adapters.json` cambia di
-   mestiere a ogni schema imparato, e se entrasse nella fotografia l'avviso
-   comparirebbe da solo dopo ogni ricalcolo.
+1. false positive (reporting a change when there isn't one) — this would
+   block a good run every week, which is why an unreadable file doesn't
+   count as evidence of change;
+2. watching the wrong files — `references/adapters.json` changes on every
+   learned schema, and including it in the snapshot would trigger the
+   warning after every recompute.
 """
 
 from __future__ import annotations
@@ -42,12 +38,12 @@ class LaFotografia(unittest.TestCase):
         self.assertIn("app/versione_del_codice.py", scattata)
 
     def test_non_prende_i_dati_ne_il_generato_ne_le_librerie_di_terzi(self) -> None:
-        """Se qui entrasse un file che cambia di mestiere, l'avviso partirebbe da solo.
+        """Including a file that changes on its own would trigger the warning by itself.
 
-        ⚠ Si prova la **regola**, non la cartella di oggi: in `vendor`, in
-        `__pycache__` e in `app/data` non c'è oggi un solo `.py`, quindi
-        guardare la fotografia vera non distinguerebbe niente e il test
-        sembrerebbe coprire senza coprire.
+        Tests the rule, not today's folder contents: `vendor`, `__pycache__`
+        and `app/data` currently hold no `.py` file, so checking the real
+        snapshot wouldn't distinguish anything and the test would look like
+        it covers this case without actually covering it.
         """
 
         da_guardare = versione_del_codice._e_da_guardare
@@ -102,7 +98,7 @@ class QuandoIlCodiceCambia(unittest.TestCase):
         self.assertIn("app/modulo_tolto.py", versione_del_codice.file_cambiati(prima))
 
     def test_un_file_che_non_si_e_riusciti_a_leggere_non_e_una_prova(self) -> None:
-        """Non sapere non è sapere che è cambiato: qui si fermerebbe una run buona."""
+        """Not knowing isn't knowing it changed: this would otherwise block a good run."""
 
         prima = self.riferimento()
         prima["app/server.py"] = None
@@ -139,19 +135,19 @@ class QuandoIlCodiceCambia(unittest.TestCase):
 
 class LaFotografiaDellAvvio(unittest.TestCase):
     def test_e_stata_scattata_all_import(self) -> None:
-        """Se fosse tardiva fotograferebbe il disco di dopo, e non vedrebbe niente."""
+        """If taken late, it would snapshot the disk as it is afterward and see nothing."""
 
         self.assertTrue(versione_del_codice.ALL_AVVIO)
         self.assertIn("app/pipeline_jobs.py", versione_del_codice.ALL_AVVIO)
 
     def test_l_orchestratore_la_scatta_all_avvio_e_non_alla_prima_run(self) -> None:
-        """Il momento in cui si guarda il disco è tutto.
+        """The moment the disk is read matters.
 
-        Se `pipeline_jobs` importasse questo modulo **dentro** la funzione, la
-        fotografia sarebbe di quando l'utente preme il pulsante — cioè di dopo
-        il cambiamento — e non vedrebbe mai niente. Si prova nel modo in cui la
-        cosa è vera davvero: in un processo nuovo, appena importato
-        l'orchestratore, il modulo dev'essere già caricato.
+        If `pipeline_jobs` imported this module inside the function, the
+        snapshot would be taken when the user clicks the button — i.e. after
+        the change — and would never see anything. Tested the way it's
+        actually true: in a fresh process, the module must already be loaded
+        right after the orchestrator is imported.
         """
 
         codice = (
@@ -168,7 +164,7 @@ class LaFotografiaDellAvvio(unittest.TestCase):
 
 
 class FirmaTests(unittest.TestCase):
-    """La firma serve a rispondere «è lo stesso programma?» in una stringa."""
+    """The signature answers "is this the same program?" as a single string."""
 
     def test_la_stessa_fotografia_da_la_stessa_firma(self) -> None:
         fotografia = {"app/server.py": "aaa", "app/launcher.py": "bbb"}
@@ -190,11 +186,11 @@ class FirmaTests(unittest.TestCase):
         )
 
     def test_illeggibile_non_si_confonde_con_assente_ne_con_leggibile(self) -> None:
-        """`None` vuol dire «non si è potuto leggere», e non è un valore come gli altri.
+        """`None` means "couldn't be read", not a value like any other.
 
-        Se l'illeggibile collassasse sull'assente, due programmi diversi
-        potrebbero dichiarare la stessa firma per un errore di lettura — cioè
-        il lanciatore riuserebbe un server che non è quello dei sorgenti.
+        If unreadable collapsed into absent, two different programs could
+        claim the same signature after a read error, and the launcher would
+        reuse a server that isn't running these sources.
         """
 
         assente = versione_del_codice.firma({"app/server.py": "aaa"})
@@ -214,9 +210,8 @@ class FirmaTests(unittest.TestCase):
 
 
 class EseguibileGitTests(unittest.TestCase):
-    """Il ripiego del rilievo [43]: prima il percorso assoluto di Git per
-    Windows, poi il PATH, e se manca tutto lo stesso comando nudo di sempre —
-    che non deve poter peggiorare rispetto a prima di questa correzione.
+    """Fallback order: the absolute Git-for-Windows path, then `PATH`, then
+    the bare command — which must not behave worse than before this fix.
     """
 
     def test_usa_il_percorso_assoluto_se_c_e(self) -> None:
@@ -235,11 +230,11 @@ class EseguibileGitTests(unittest.TestCase):
             self.assertEqual(versione_del_codice._eseguibile_git(), "/usr/bin/git")
 
     def test_se_manca_tutto_il_ripiego_e_lo_stesso_comando_nudo_di_prima(self) -> None:
-        """Il caso peggiore: né il percorso assoluto né il PATH trovano git.
+        """Worst case: neither the absolute path nor `PATH` finds git.
 
-        Prima del rilievo [43] il comando lanciato era `"git"` nudo: questo è
-        esattamente lo stesso caso, non uno nuovo. Se questo test tornasse
-        qualcos'altro, il ripiego avrebbe reso le cose peggiori di prima.
+        Falls back to the bare `"git"` command, the same as before this fix.
+        If this test returned anything else, the fallback would have made
+        things worse than before.
         """
 
         percorso_inesistente = Path("/questo/percorso/non/esiste/git.exe")
@@ -251,9 +246,9 @@ class EseguibileGitTests(unittest.TestCase):
 
 
 class PubblicataTests(unittest.TestCase):
-    """`pubblicata()` ha una cache globale valida per tutto il processo
-    (`_data_pubblicata`, `_data_gia_cercata`): senza azzerarla ad ogni prova,
-    la seconda prova di questa classe leggerebbe il risultato della prima.
+    """`pubblicata()` caches its result process-wide (`_data_pubblicata`,
+    `_data_gia_cercata`): reset it before each test, or the second test in
+    this class would read the first one's result.
     """
 
     def setUp(self) -> None:
@@ -302,10 +297,10 @@ class PubblicataTests(unittest.TestCase):
 
 
 class RiusoDelServerTests(unittest.TestCase):
-    """Un server sano non basta: deve eseguire **questi** sorgenti.
+    """A healthy server isn't enough: it must be running these exact sources.
 
-    Prima bastava che rispondesse, e chi riapriva il `.cmd` dopo un
-    aggiornamento tornava sul programma di prima credendo di averlo riavviato.
+    Without this check, reopening the `.cmd` after an update could reuse the
+    old server, mistaking a response for a restart.
     """
 
     def setUp(self) -> None:
@@ -324,10 +319,8 @@ class RiusoDelServerTests(unittest.TestCase):
         )
 
     def test_un_server_senza_firma_e_vecchio_e_non_si_riusa(self) -> None:
-        """È il caso vero del 17 agosto: acceso il 15, quattro consegne prima.
-
-        Un server precedente a questa difesa non dichiara niente, e l'assenza
-        **è** la risposta: è vecchio di sicuro.
+        """A server predating this safeguard reports nothing at all, and the
+        absence itself is the answer: it's definitely old.
         """
 
         self.assertFalse(self.launcher.e_lo_stesso_programma({"ok": True}, "abc"))

@@ -1,17 +1,9 @@
-"""«Quest'offerta si puo' ordinare» ha una risposta sola.
+"""Whether an offer can be ordered must have exactly one implementation.
 
-Fino al 20 agosto 2026 la regola — `offer.get("available") is not False` —
-aveva la sua autorita' in `server.offer_is_available` e **due copie scritte a
-mano**: `server._offerta_piu_conveniente` e, la piu' cara,
-`pipeline_jobs._ripulisci_stato`, cioe' la funzione che decide quali quantita'
-azzerare dopo un ricalcolo.  Il suo docstring dichiara di dover «seguire la
-stessa riga di confine» di `validate_snapshot`: un accordo fra copie, tenuto in
-piedi a mano.
-
-Il giorno in cui la regola cresce — «un'offerta senza `sourceRow` non e'
-utilizzabile» — chi la scrive nel servizio e la dimentica nella catena ottiene
-un ricalcolo che NON azzera una quantita' su un'offerta che la compilazione poi
-rifiuta, e il sintomo si vede una settimana dopo e altrove.
+`offer_is_available` is the single source of truth: `server`, `pipeline_jobs`
+and `promotion_bridge` import it rather than reimplementing the rule. If the
+rule were copied by hand in more than one place, the copies could drift and
+the mismatch would only surface later, somewhere else in the pipeline.
 """
 
 from __future__ import annotations
@@ -32,6 +24,9 @@ import server  # noqa: E402
 
 
 class UnaAutoritaSola(unittest.TestCase):
+    """`server`, `pipeline_jobs` and `promotion_bridge` must all call the same
+    `offerta` functions, never a local copy of the same rule."""
+
     def test_il_servizio_e_la_catena_chiamano_la_stessa_funzione(self) -> None:
         self.assertIs(server.offer_is_available, offerta.offer_is_available)
         self.assertIs(pipeline_jobs.offer_is_available, offerta.offer_is_available)
@@ -41,24 +36,18 @@ class UnaAutoritaSola(unittest.TestCase):
         self.assertIs(server.find_offer, offerta.find_offer)
 
     def test_il_parser_dei_numeri_del_servizio_e_quello_dell_offerta_sono_lo_stesso(self) -> None:
-        """`offer_pricing` legge prezzi: se leggesse i numeri in modo diverso
-
-        dal resto del servizio, due copie ci sarebbero comunque — sotto un
-        altro nome."""
+        """`offer_pricing` parses prices with the same number parser as the
+        rest of the service, not a separate copy."""
 
         self.assertIs(server.number, offerta.numero)
 
     def test_nessun_altro_file_riscrive_la_regola_a_mano(self) -> None:
-        """La prova che vale davvero: e' quella che diventa rossa il giorno in
+        """Fails if any file besides `offerta.py` reimplements the
+        availability check instead of importing it.
 
-        cui qualcuno ricopia i sette caratteri invece di importare.
-
-        ⚠ Cerca tutt'e due le facce, `is not False` e `is False`. La prima
-        versione guardava solo la prima, e non vedeva la copia che stava in
-        `promotion_bridge.detect` scritta al negativo — cioe' lo stesso accordo
-        fra copie sotto un'altra faccia, dentro la funzione che decide quali
-        offerte concorrono alle soglie delle promozioni. Trovata dalla verifica
-        avversariale del 20 agosto 2026, con la prova verde.
+        Checks both `is not False` and `is False` forms, since the rule can
+        be written either way (e.g. negated inside `promotion_bridge.detect`,
+        which decides which offers count toward promotion thresholds).
         """
 
         regola = re.compile(r"""get\(\s*["']available["']\s*\)\s*is\s+(not\s+)?False""")
@@ -73,17 +62,17 @@ class UnaAutoritaSola(unittest.TestCase):
         self.assertEqual(colpevoli, [], "la regola è di nuovo scritta a mano: importala da `offerta`")
 
     def test_anche_il_ponte_delle_promozioni_chiama_la_stessa_funzione(self) -> None:
-        """`detect` decide quali offerte concorrono alle soglie: una regola che
+        """`detect` decides which offers count toward promotion thresholds,
+        so it must use the same availability rule as the rest of the service."""
 
-        cresce nel servizio e non li' sbaglia un omaggio."""
-
-        import promotion_bridge  # noqa: PLC0415 - serve solo qui
+        import promotion_bridge  # noqa: PLC0415 - only needed here
 
         self.assertIs(promotion_bridge.offer_is_available, offerta.offer_is_available)
         self.assertIs(promotion_bridge.offer_supplier_id, offerta.offer_supplier_id)
 
     def test_offerta_non_importa_ne_il_servizio_ne_la_catena(self) -> None:
-        """Un modulo condiviso che risalisse a chi lo usa sarebbe un anello."""
+        """`offerta` is a shared module; it must not import its own callers,
+        or the import graph would form a cycle."""
 
         testo = (SKILL_ROOT / "app" / "offerta.py").read_text(encoding="utf-8")
         for vietato in ("import server", "import pipeline_jobs", "from server", "from pipeline_jobs"):
@@ -91,8 +80,11 @@ class UnaAutoritaSola(unittest.TestCase):
 
 
 class LeTreDomande(unittest.TestCase):
+    """Covers `offer_is_available`, `offer_supplier_id`, `offer_pricing` and
+    `find_offer`: the shared helpers other modules import from `offerta`."""
+
     def test_il_campo_assente_vale_disponibile(self) -> None:
-        # I listini letti prima che il campo esistesse non lo scrivono.
+        # Price lists read before the field existed never write it.
         self.assertTrue(offerta.offer_is_available({"supplierId": "betulla"}))
         self.assertTrue(offerta.offer_is_available({"available": True}))
         self.assertFalse(offerta.offer_is_available({"available": False}))
@@ -100,10 +92,9 @@ class LeTreDomande(unittest.TestCase):
         self.assertFalse(offerta.offer_is_available("betulla"))
 
     def test_un_valore_che_non_e_ne_vero_ne_falso_non_toglie_l_offerta(self) -> None:
-        """`is not False`, non `truthy`: e' la regola scritta, e cambiarla in
-
-        `bool(...)` renderebbe non ordinabile un'offerta con `available: 0`
-        o `available: ""` — cioe' un dato sporco diventerebbe una decisione."""
+        """Checks `is not False`, not truthiness: `bool(...)` would make an
+        offer with `available: 0` or `available: ""` non-orderable, turning
+        dirty data into a decision."""
 
         self.assertTrue(offerta.offer_is_available({"available": 0}))
         self.assertTrue(offerta.offer_is_available({"available": ""}))

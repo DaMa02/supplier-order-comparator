@@ -1,23 +1,24 @@
-"""Il passo che accende la Fase 5: `scripts/valuta_shortlist.py`.
+"""Tests for `scripts/valuta_shortlist.py`, the AI evaluation step.
 
-Quello che si difende qui e' il contratto con l'orchestratore, non la qualita'
-delle risposte del modello — quella la misura il banco di prova.
+What's covered here is the contract with the orchestrator, not the quality
+of the model's answers — that's measured by the benchmark instead.
 
-- **Gli stati senza decisione si omettono dal file, non si inventano**: un
-  guasto di rete non deve diventare un `UNRESOLVED` indistinguibile da «il
-  modello non ha saputo».
-- **I due file si scrivono sempre**, anche quando la fase e' degradata: un
-  `ai_decisions.json` della run precedente rimasto sul disco verrebbe letto
-  come fresco.
-- **Il rapporto e' la sola contabilita' che qualcuno leggera'**, ed e' la fonte
-  indipendente di `merge_match_decisions.py --decisions-attese`.
-- **Il degrado e' un valore di ritorno**: nessuna chiave, rete giu', tetto
-  raggiunto escono con esito 5 e i file al loro posto, non con un'eccezione.
-- **L'impronta del caso attraversa i due script**: quella scritta qui dal caso
-  mandato al modello e quella ricalcolata dal merge sulla shortlist devono
-  coincidere. E' l'unico test che se ne accorge, se i due percorsi divergono.
+- States without a decision are omitted from the file, never invented: a
+  network fault must not become an `UNRESOLVED` indistinguishable from "the
+  model didn't know".
+- Both output files are always written, even when the phase is degraded: an
+  `ai_decisions.json` left over from the previous run would otherwise be
+  read as fresh.
+- The report is the only accounting anyone will read, and it's the
+  independent source for `merge_match_decisions.py --decisions-attese`.
+- Degradation is a return value: no key, network down, spend cap reached all
+  exit with code 5 and the files in place, not with an exception.
+- The case fingerprint travels across both scripts: the one written here
+  from the case sent to the model must match the one the merge step
+  recomputes from the shortlist. This is the only test that would notice if
+  the two computations diverged.
 
-Nessun test tocca la rete: il trasporto e' iniettato.
+No test touches the network: the transport is injected.
 """
 
 from __future__ import annotations
@@ -66,7 +67,7 @@ def voce(
         (512, "PANTERA BALSAMO 200", 0.42),
     ),
 ) -> dict[str, Any]:
-    """Una voce di `semantic_shortlists.json` come la scrive la catena vera."""
+    """An entry of `semantic_shortlists.json`, shaped like the real pipeline writes it."""
 
     return {
         "gestionale_source_row": riga,
@@ -79,7 +80,7 @@ def voce(
                 "source_row": r,
                 "ean": f"800{r}",
                 "description": d,
-                # I listini veri portano il prezzo **come stringa**.
+                # Real price lists carry the price as a string.
                 "unit_price_net": "3.9800",
                 "score": s,
                 "shared_tokens": ["PANTERA"],
@@ -109,11 +110,11 @@ def contenuto(azione: str, source_row: Any, confidenza: str = "ALTA", motivo: st
 
 
 def trasporto(risposte: dict[str, Any]):
-    """Un trasporto che risponde in base all'**articolo cercato**.
+    """A fake transport that answers based on the item being queried.
 
-    Il valore puo' essere: il contenuto JSON di una risposta buona, una coppia
-    `(codice, corpo)` da restituire cosi' com'e', o un'eccezione da sollevare —
-    che e' come si prova la rete giu' senza toccarla."""
+    Each value can be: the JSON content of a good response, a `(status,
+    body)` pair to return as-is, or an exception to raise — which is how a
+    network failure is simulated without touching the network."""
 
     def chiamata(url: str, corpo: dict, intestazioni: dict, timeout: float):
         domanda = corpo["messages"][-1]["content"]
@@ -141,10 +142,10 @@ def esegui(
     modifiche: dict[str, Any] | None = None,
     crea_client=None,
 ) -> tuple[int, Any, Any, str]:
-    """Lancia `main` in processo, con il client iniettato. Niente rete.
+    """Call `main` in-process, with the client injected. No network involved.
 
-    Restituisce codice d'uscita, decisioni, rapporto e quello che ha stampato.
-    `None` al posto di un file vuol dire che quel file non e' stato scritto."""
+    Returns exit code, decisions, report and whatever was printed. `None` in
+    place of a file means that file wasn't written."""
 
     percorso_shortlists = cartella / "semantic_shortlists.json"
     percorso_shortlists.write_bytes(
@@ -173,8 +174,8 @@ def esegui(
                 "--shortlists", str(percorso_shortlists),
                 "--output", str(decisioni),
                 "--rapporto", str(rapporto),
-                # Sempre in una cartella temporanea: la memoria predefinita e'
-                # `app/data/memoria_ai.json`, e i test non toccano i dati veri.
+                # Always a temp directory: the default memory file is
+                # `app/data/memoria_ai.json`, and tests must not touch real data.
                 "--memoria", str(cartella / "memoria_ai.json"),
             ],
             crea_client=crea,
@@ -188,8 +189,8 @@ def esegui(
 
 
 class DallIngressoAiCasiTests(unittest.TestCase):
-    """La voce della shortlist diventa il caso che il modello vede. Se questa
-    traduzione sbaglia, il modello risponde bene alla domanda sbagliata."""
+    """A shortlist entry becomes the case the model sees. If this translation
+    is wrong, the model answers correctly to the wrong question."""
 
     def test_la_voce_diventa_il_caso_con_i_campi_giusti(self) -> None:
         caso = caso_dalla_voce(voce(), 0)
@@ -201,40 +202,42 @@ class DallIngressoAiCasiTests(unittest.TestCase):
         self.assertAlmostEqual(caso.candidati[0].score, 0.81)
 
     def test_il_candidato_non_porta_ne_ean_ne_prezzo(self) -> None:
-        """Voluto: l'EAN e' la verita' di riferimento del banco di prova e
-        mostrarlo renderebbe falsa ogni misura gia' fatta; il prezzo non c'entra
-        con l'identita' del prodotto. Se un giorno qualcuno li aggiunge, deve
-        rompere questo test e non una misura."""
+        """Deliberate: the EAN is the ground truth the benchmark relies on, so
+        showing it to the model would invalidate every past measurement; the
+        price has nothing to do with product identity. If either is ever
+        added, it must break this test, not silently skew a measurement."""
         campi = set(vars(caso_dalla_voce(voce(), 0).candidati[0]))
         self.assertEqual(campi, {"source_row", "description", "score"})
 
     def test_le_descrizioni_non_si_normalizzano(self) -> None:
-        """Il testo va al modello **e** dentro l'impronta. Toglierci gli spazi
-        qui e non nel merge farebbe fallire il confronto su ogni caso, cioe'
-        butterebbe una run intera."""
+        """The text goes both to the model and into the fingerprint. Stripping
+        spaces here but not in the merge step would fail the comparison on
+        every case, discarding an entire run."""
         caso = caso_dalla_voce(voce(descrizione="  PANTERA  250  "), 0)
         self.assertEqual(caso.descrizione, "  PANTERA  250  ")
 
     def test_un_caso_senza_candidati_non_va_al_modello(self) -> None:
-        """`ClientAI` solleva su un caso senza candidati, ed e' giusto: chiedere
-        di scegliere fra niente e' un uso sbagliato dell'API. Sono sei su 948
-        nella run vera, quindi non e' un caso di scuola."""
+        """`ClientAI` raises on a case with no candidates, and rightly so:
+        asking it to choose among nothing is a misuse of the API. Six out of
+        948 cases in the real run have no candidates, so this isn't a
+        textbook case."""
         casi, senza = casi_dalle_shortlist([voce(), voce(riga=13, candidati=())])
         self.assertEqual([c.gestionale_source_row for c in casi], [12])
         self.assertEqual([c.gestionale_source_row for c in senza], [13])
 
     def test_una_coppia_duplicata_si_ferma_qui(self) -> None:
-        """Piu' avanti diventerebbe una «decisione duplicata» di
-        `merge_match_decisions.py`, cioe' manderebbe a cercare il guasto nel
-        file sbagliato."""
+        """Downstream this would surface as a "duplicate decision" in
+        `merge_match_decisions.py`, sending whoever debugs it to look in the
+        wrong file."""
         with self.assertRaises(ValueError) as errore:
             casi_dalle_shortlist([voce(), voce()])
         self.assertIn("più di una volta", str(errore.exception))
 
     def test_gli_ingressi_malformati_sono_un_guasto_non_un_caso_saltato(self) -> None:
-        """La shortlist la scrive `build_semantic_shortlists.py`: una voce
-        storta vuol dire che qualcosa a monte si e' rotto, e proseguire in
-        silenzio toglierebbe prodotti dal confronto senza dirlo."""
+        """The shortlist is written by `build_semantic_shortlists.py`: a
+        malformed entry means something upstream broke, and silently
+        continuing would drop products from the comparison without saying
+        so."""
         casi_storti = {
             "voce non oggetto": ["non un oggetto"],
             "riga assente": [{**voce(), "gestionale_source_row": None}],
@@ -251,14 +254,15 @@ class DallIngressoAiCasiTests(unittest.TestCase):
             "punteggio non numerico": [
                 {**voce(), "candidates": [{"source_row": 1, "description": "X", "score": "molto"}]}
             ],
-            # `float(True)` fa 1.0 in silenzio, e un punteggio booleano
-            # entrerebbe nell'impronta come punteggio pieno.
+            # `float(True)` silently gives 1.0, and a boolean score would
+            # enter the fingerprint as a perfect score.
             "punteggio booleano": [
                 {**voce(), "candidates": [{"source_row": 1, "description": "X", "score": True}]}
             ],
-            # `int(float("inf"))` solleva `OverflowError`, che non è fra quelle
-            # che `main` cattura: erano un traceback, esito 1 e nessuno dei due
-            # file scritto. `NaN` finiva bene per caso.
+            # `int(float("inf"))` raises `OverflowError`, which `main` doesn't
+            # catch: that means a traceback, exit code 1, and neither file
+            # written. `NaN`, by contrast, must be caught explicitly — it
+            # would otherwise pass silently.
             "riga infinita": [{**voce(), "gestionale_source_row": float("inf")}],
             "riga non numerabile": [{**voce(), "gestionale_source_row": float("nan")}],
         }
@@ -267,9 +271,10 @@ class DallIngressoAiCasiTests(unittest.TestCase):
                 casi_dalle_shortlist(shortlists)
 
     def test_una_riga_scritta_come_stringa_si_accetta(self) -> None:
-        """JSON scritto da un altro programma può portare `"12"`: non e' un
-        guasto. `12.5` invece lo e', perche' `int()` lo troncherebbe in
-        silenzio e una riga sbagliata di uno e' il difetto della 6a."""
+        """JSON written by another program can carry `"12"`: that isn't a
+        fault. `12.5` is, because `int()` would silently truncate it, and a
+        row off by one is exactly the kind of bug the row-verification guard
+        exists to catch."""
         caso = caso_dalla_voce({**voce(), "gestionale_source_row": "12"}, 0)
         self.assertEqual(caso.gestionale_source_row, 12)
 
@@ -279,7 +284,7 @@ class DallIngressoAiCasiTests(unittest.TestCase):
 
 
 class IlFileDelleDecisioniTests(unittest.TestCase):
-    """Che cosa finisce nel file, e soprattutto che cosa non ci finisce."""
+    """What ends up in the decisions file, and above all what doesn't."""
 
     def test_una_decisione_per_caso_deciso_nel_formato_del_merge(self) -> None:
         with tempfile.TemporaryDirectory() as temporanea:
@@ -303,8 +308,9 @@ class IlFileDelleDecisioniTests(unittest.TestCase):
         self.assertEqual(rapporto["casi_decisi"], 1)
 
     def test_ogni_decisione_porta_l_impronta_del_caso_mandato_al_modello(self) -> None:
-        """L'impronta e' l'unica cosa che lega una decisione a cio' che il
-        modello aveva davanti: senza, un file di un'altra run passa liscio."""
+        """The fingerprint is the only thing that ties a decision to what the
+        model actually had in front of it: without it, a file from another
+        run would pass unnoticed."""
         una = voce()
         with tempfile.TemporaryDirectory() as temporanea:
             _codice, decisioni, _rapporto, _schermo = esegui(
@@ -324,9 +330,9 @@ class IlFileDelleDecisioniTests(unittest.TestCase):
         self.assertEqual(decisioni[0]["ai_articolo_mostrato"], "PANTERA SHAMPOO 250ML RICCI NEW")
 
     def test_gli_stati_senza_decisione_non_producono_nessuna_riga(self) -> None:
-        """Scrivere un `UNRESOLVED` finto al posto di un guasto di rete
-        cancellerebbe la differenza fra «il modello non ha saputo» e «non ho
-        potuto chiedere» — e la seconda si rimedia rilanciando."""
+        """Writing a fake `UNRESOLVED` in place of a network fault would erase
+        the difference between "the model didn't know" and "I couldn't ask"
+        — and the latter is fixed by simply rerunning."""
         with tempfile.TemporaryDirectory() as temporanea:
             codice, decisioni, rapporto, _schermo = esegui(
                 Path(temporanea),
@@ -360,8 +366,8 @@ class IlFileDelleDecisioniTests(unittest.TestCase):
         self.assertIsNone(decisioni[0]["source_row"])
 
     def test_il_file_e_una_lista_anche_quando_e_vuota(self) -> None:
-        """`merge_match_decisions.py` pretende una lista: un file assente o un
-        oggetto lo fanno uscire 2 e 3."""
+        """`merge_match_decisions.py` requires a list: a missing file or an
+        object makes it exit 2 and 3 respectively."""
         with tempfile.TemporaryDirectory() as temporanea:
             codice, decisioni, rapporto, _schermo = esegui(
                 Path(temporanea), [voce(candidati=())], trasporto_finto=trasporto({})
@@ -369,19 +375,21 @@ class IlFileDelleDecisioniTests(unittest.TestCase):
         self.assertEqual(decisioni, [])
         self.assertEqual(rapporto["casi_senza_candidati"], 1)
         self.assertEqual(rapporto["coppie_senza_candidati"], [[12, "betulla"]])
-        # E siccome quell'unico caso non si e' potuto nemmeno tentare, la fase
-        # e' degradata: vedi la prova qui sotto.
+        # And since that one case couldn't even be attempted, the phase is
+        # degraded: see the test below.
         self.assertEqual(codice, USCITA_DEGRADATO)
 
     def test_nessun_candidato_da_nessuna_parte_non_e_un_successo(self) -> None:
-        """Il caso che la prima versione dichiarava «valutato tutto quello che
-        c'era da valutare» uscendo 0, e che la revisione ha smontato eseguendolo.
+        """The case where a naive implementation declares "evaluated
+        everything there was to evaluate" and exits 0, when in fact nothing
+        was evaluated.
 
-        Non serve la rete giu' e non serve una chiave sbagliata: basta che un
-        adattatore cambi e un listino esca senza prezzi.
-        `build_semantic_shortlists.py` scarta quelle righe e scrive centinaia di
-        voci con `candidates: []`; la fase AI non valuta niente e, senza questo
-        controllo, tutta la catena arrivava in fondo con esito 0."""
+        No network failure and no bad key needed: it's enough for an adapter
+        to change and a price list to come out without prices.
+        `build_semantic_shortlists.py` discards those rows and writes
+        hundreds of entries with `candidates: []`; the AI phase evaluates
+        nothing, and without this check the whole chain would reach the end
+        with exit code 0."""
         with tempfile.TemporaryDirectory() as temporanea:
             codice, decisioni, rapporto, _schermo = esegui(
                 Path(temporanea),
@@ -395,10 +403,10 @@ class IlFileDelleDecisioniTests(unittest.TestCase):
         self.assertIn("un listino non si è caricato", rapporto["motivo_degrado"])
 
     def test_una_coda_vuota_invece_e_un_successo(self) -> None:
-        """La differenza che il controllo qui sopra deve saper fare. Se l'EAN ha
-        risolto tutto, `semantic_shortlists.json` e' una **lista vuota**: non
-        c'era lavoro, e dichiararsi degradati manderebbe l'orchestratore a
-        rifare una fase che non aveva niente da fare."""
+        """The distinction the check above has to make. If EAN matching
+        resolved everything, `semantic_shortlists.json` is an empty list:
+        there was no work, and reporting degradation would send the
+        orchestrator to redo a phase that had nothing to do."""
         with tempfile.TemporaryDirectory() as temporanea:
             codice, decisioni, rapporto, _schermo = esegui(
                 Path(temporanea), [], trasporto_finto=trasporto({})
@@ -409,10 +417,10 @@ class IlFileDelleDecisioniTests(unittest.TestCase):
         self.assertEqual(rapporto["casi_ricevuti"], 0)
 
     def test_gli_esiti_fuori_ordine_non_producono_nessuna_decisione(self) -> None:
-        """L'accoppiamento caso-esito si appoggia all'ordine, che il client
-        promette. Se quella promessa saltasse, ogni decisione finirebbe
-        sull'articolo sbagliato con la sua brava confidenza `ALTA`: meglio zero
-        decisioni che 948 attribuite a caso."""
+        """Pairing a case with its outcome relies on ordering, which the
+        client promises. If that promise broke, every decision would land on
+        the wrong item with its `ALTA` confidence intact: better zero
+        decisions than 948 attributed at random."""
 
         class ClientCheMescola:
             contabilita = {"chiamate": 2, "costo_usd": 0.0, "per_stato": {}, "dalla_memoria": 0}
@@ -431,11 +439,12 @@ class IlFileDelleDecisioniTests(unittest.TestCase):
         self.assertIn("fuori posto", rapporto["motivo_degrado"])
 
     def test_un_esito_in_meno_ferma_tutto_invece_di_accoppiare_a_caso(self) -> None:
-        """L'ordine non basta: `zip` si ferma al più corto e non dice niente.
-        La prova qui sopra passa una lista della stessa lunghezza, quindi il
-        controllo che conta gli esiti non l'aveva percorso nessuno — la
-        mutazione che lo toglie restava verde. Un client che ne restituisce
-        nove su dieci farebbe sparire in silenzio decisioni già pagate."""
+        """Ordering alone isn't enough: `zip` stops at the shorter sequence
+        without saying anything. The test above passes an outcome list of
+        the same length, so it never exercises the count check — a mutation
+        removing that check would still pass. A client that returns nine
+        results out of ten would silently drop decisions already paid
+        for."""
 
         class ClientCheNePerdeUno:
             contabilita = {"chiamate": 1, "costo_usd": 0.0, "per_stato": {}, "dalla_memoria": 0}
@@ -454,13 +463,14 @@ class IlFileDelleDecisioniTests(unittest.TestCase):
         self.assertIn("1 esiti per 2 casi", rapporto["motivo_degrado"])
 
     def test_ogni_decisione_dichiara_con_che_cosa_e_stata_presa(self) -> None:
-        """L'impronta dice che il caso è lo stesso, non con che cosa è stato
-        giudicato. Se il listino di un fornitore non cambia, il caso **è**
-        identico e una decisione della settimana scorsa passa l'impronta: senza
-        questi tre campi, una presa con il prompt `v1` — che sbagliava 5 `ALTA`
-        e non aveva la verifica avversariale — entrerebbe in un ordine di oggi
-        senza che niente lo dica. Qui si scrivono; a confrontarli con la
-        configurazione viva sarà l'orchestratore."""
+        """The fingerprint says the case is the same, not what it was judged
+        with. If a supplier's price list doesn't change, the case is
+        identical and a decision from a previous week passes the
+        fingerprint check: without these three fields, a decision made with
+        an older prompt version — one without the adversarial check, say —
+        would enter today's order with nothing saying so. They're written
+        here; comparing them against the live configuration is the
+        orchestrator's job."""
         with tempfile.TemporaryDirectory() as temporanea, mock.patch.dict(
             os.environ, {"OPENROUTER_MODEL": "prova/modello-di-prova"}
         ):
@@ -477,7 +487,7 @@ class IlFileDelleDecisioniTests(unittest.TestCase):
 
 
 class EsitoFinto:
-    """Un esito che porta la decisione del suo caso, per provare l'ordine."""
+    """A fake outcome carrying its case's decision, to test ordering."""
 
     stato = "OK"
 
@@ -494,13 +504,13 @@ class EsitoFinto:
 
 
 class IlRapportoTests(unittest.TestCase):
-    """Il rapporto e' la sola contabilita' che qualcuno leggera': il programma
-    finito gira da solo, e i log non li legge nessuno."""
+    """The report is the only accounting anyone will read: the finished
+    program runs unattended, and nobody reads the logs."""
 
     def test_i_conteggi_tornano_e_casi_decisi_e_la_lunghezza_del_file(self) -> None:
-        """`casi_decisi` e' il numero che l'orchestratore passera' a
-        `--decisions-attese`: se non fosse la lunghezza del file, la
-        riconciliazione fallirebbe su una run sana."""
+        """`casi_decisi` is the number the orchestrator passes to
+        `--decisions-attese`: if it weren't the file's length, reconciliation
+        would fail on a healthy run."""
         with tempfile.TemporaryDirectory() as temporanea:
             _codice, decisioni, rapporto, _schermo = esegui(
                 Path(temporanea),
@@ -518,10 +528,10 @@ class IlRapportoTests(unittest.TestCase):
         self.assertFalse(rapporto["degradato"])
 
     def test_i_due_conteggi_per_stato_sono_diversi_e_non_e_una_svista(self) -> None:
-        """`per_stato` ha una voce per caso; quello del client comprende anche
-        il secondo giro avversariale, che parte su ogni `ACCEPT`. Sommare il
-        secondo e leggerlo come «casi» darebbe un numero piu' grande del
-        lavoro fatto."""
+        """`per_stato` has one entry per case; the client's own counter also
+        includes the second, adversarial pass, which runs on every `ACCEPT`.
+        Summing the latter and reading it as "cases" would overstate the
+        actual amount of work done."""
         with tempfile.TemporaryDirectory() as temporanea:
             _codice, _decisioni, rapporto, _schermo = esegui(
                 Path(temporanea),
@@ -547,8 +557,8 @@ class IlRapportoTests(unittest.TestCase):
         self.assertGreaterEqual(rapporto["durata_s"], 0.0)
 
     def test_il_rapporto_dichiara_la_configurazione_viva_non_una_copia_scritta(self) -> None:
-        """Se il modello lo decide una variabile d'ambiente, il rapporto deve
-        dire quello vero: e' la sola traccia di quale modello ha risposto."""
+        """If an environment variable picks the model, the report must say the
+        real one: it's the only record of which model actually answered."""
         with tempfile.TemporaryDirectory() as temporanea, mock.patch.dict(
             os.environ, {"OPENROUTER_MODEL": "prova/modello-di-prova"}
         ):
@@ -577,11 +587,11 @@ class IlRapportoTests(unittest.TestCase):
         self.assertIn("ERRORE_RETE", rapporto["motivo_degrado"])
 
     def test_le_decisioni_si_scrivono_prima_del_rapporto(self) -> None:
-        """L'ordine stava in un commento e non lo difendeva nessuno: scambiare
-        le due righe restava verde. Se il processo muore fra i due,
-        l'orchestratore deve trovare un **rapporto mancante** — cioè
-        accorgersene — invece di un rapporto che dichiara 942 decisioni accanto
-        al file della run scorsa."""
+        """The write order is a contract, not just a comment: swapping the two
+        writes must be caught by a test, not left undefended. If the process
+        dies in between, the orchestrator must find a missing report — and
+        so notice the failure — instead of a report claiming 942 decisions
+        next to the previous run's stale file."""
         scritti: list[str] = []
         vero = valuta_shortlist.scrivi_json
 
@@ -596,9 +606,9 @@ class IlRapportoTests(unittest.TestCase):
         self.assertEqual(scritti, ["ai_decisions.json", "ai_rapporto.json"])
 
     def test_il_rapporto_della_run_precedente_non_sopravvive(self) -> None:
-        """Se la scrittura del rapporto fallisce, quello di ieri non deve
-        restare accanto alle decisioni di oggi: il commento diceva «chi legge
-        trova un rapporto mancante e se ne accorge», e non era vero."""
+        """If writing the report fails, yesterday's must not stay next to
+        today's decisions — a stale report next to fresh decisions would
+        defeat the "missing report signals failure" guarantee above."""
         with tempfile.TemporaryDirectory() as temporanea:
             cartella = Path(temporanea)
             vecchio = cartella / "ai_rapporto.json"
@@ -616,10 +626,9 @@ class IlRapportoTests(unittest.TestCase):
         self.assertIsNone(rapporto)
 
     def test_il_rapporto_si_stampa_anche_a_schermo(self) -> None:
-        """Il merge ha già la sua prova che il riepilogo si stampa sempre. Qui
-        non c'era, e «nessuno leggerà i log» vale soprattutto per chi lancia la
-        fase a mano: senza questi numeri non sa se ne mancavano due o
-        novecento."""
+        """The merge step already has its own test for this. "Nobody reads the
+        logs" matters most for whoever runs the phase by hand: without these
+        numbers they can't tell if two cases were missing or nine hundred."""
         with tempfile.TemporaryDirectory() as temporanea:
             _codice, _decisioni, rapporto, schermo = esegui(
                 Path(temporanea),
@@ -635,9 +644,9 @@ class IlRapportoTests(unittest.TestCase):
         self.assertEqual(stampato["parallelismo"], rapporto["parallelismo"])
 
     def test_il_rapporto_non_contiene_mai_la_chiave(self) -> None:
-        """La chiave passa nelle intestazioni di ogni chiamata: basta un
-        messaggio d'errore che riporti la richiesta perche' finisca in un file
-        che poi qualcuno allega a un rapporto."""
+        """The key travels in every call's headers: a single error message
+        that echoes the request back is enough for it to end up in a file
+        someone later attaches to a report."""
         with tempfile.TemporaryDirectory() as temporanea:
             _codice, decisioni, rapporto, schermo = esegui(
                 Path(temporanea),
@@ -654,9 +663,9 @@ class IlRapportoTests(unittest.TestCase):
 
 
 class IlDegradoEUnValoreDiRitornoTests(unittest.TestCase):
-    """«Se OpenRouter non risponde il programma tira dritto» e' una decisione
-    presa: la fase degradata esce con i file al loro posto e un codice che lo
-    dice, non con un'eccezione e nessun artefatto."""
+    """"If OpenRouter doesn't answer, the program keeps going" is a
+    deliberate choice: a degraded phase exits with the files in place and a
+    code that says so, not with an exception and no artifacts."""
 
     def test_senza_chiave_i_file_ci_sono_lo_stesso_ed_esce_cinque(self) -> None:
         with tempfile.TemporaryDirectory() as temporanea:
@@ -684,9 +693,9 @@ class IlDegradoEUnValoreDiRitornoTests(unittest.TestCase):
         self.assertIn("TETTO_CHIAMATE", rapporto["per_stato"])
 
     def test_un_guasto_imprevisto_scrive_lo_stesso_i_due_file(self) -> None:
-        """Senza questa rete l'orchestratore si troverebbe un traceback e
-        nessun artefatto — e il `resolved_matches.json` della run precedente
-        resterebbe sul disco a farsi leggere come fresco."""
+        """Without this safety net the orchestrator would get a traceback and
+        no artifacts — and the previous run's `resolved_matches.json` would
+        stay on disk to be read as fresh."""
 
         def esplode(configurazione, memoria):
             raise RuntimeError("il client non si costruisce")
@@ -726,9 +735,10 @@ class IlDegradoEUnValoreDiRitornoTests(unittest.TestCase):
 
 
 class LaVerificaAvversarialeArrivaFinQuiTests(unittest.TestCase):
-    """Il secondo giro non e' un dettaglio del client: e' quello che rende
-    `ALTA` degno di fiducia, ed e' la ragione per cui `merge_match_decisions.py`
-    fa entrare un `ALTA` in ordine senza chiedere niente a nessuno."""
+    """The second, adversarial pass isn't a client implementation detail: it's
+    what makes `ALTA` trustworthy, and the reason
+    `merge_match_decisions.py` lets an `ALTA` decision into an order without
+    asking anyone."""
 
     def test_un_accept_non_confermato_scende_a_unresolved(self) -> None:
         chiamate: list[list[int]] = []
@@ -736,7 +746,7 @@ class LaVerificaAvversarialeArrivaFinQuiTests(unittest.TestCase):
         def chiamata(url, corpo, intestazioni, timeout):
             righe = righe_mostrate(corpo)
             chiamate.append(righe)
-            # Il secondo giro mostra un candidato solo: e' quello.
+            # The second pass shows a single candidate: that's how it's identified.
             if len(righe) == 1:
                 return risposta_ok(contenuto("REJECT", None, "ALTA", "non è lo stesso formato"))
             return risposta_ok(contenuto("ACCEPT", 441))
@@ -752,10 +762,10 @@ class LaVerificaAvversarialeArrivaFinQuiTests(unittest.TestCase):
 
 
 class LaCliVeraTests(unittest.TestCase):
-    """Lo script lanciato come lo lancera' l'orchestratore: un sottoprocesso.
+    """The script run the way the orchestrator runs it: as a subprocess.
 
-    Nessuna di queste prove tocca la rete — o l'ingresso e' malformato, o non
-    c'e' nessun caso con candidati da mandare."""
+    None of these tests touch the network — either the input is malformed,
+    or there's no case with candidates to send."""
 
     def lancia(self, argomenti: list[str]) -> subprocess.CompletedProcess[bytes]:
         return subprocess.run(
@@ -764,8 +774,8 @@ class LaCliVeraTests(unittest.TestCase):
         )
 
     def test_i_tre_percorsi_sono_obbligatori(self) -> None:
-        """`--rapporto` facoltativo riaprirebbe da un'altra porta il difetto
-        che la 6a ha appena chiuso: basterebbe dimenticarlo."""
+        """Making `--rapporto` optional would reopen, from another angle, the
+        same gap `--decisions-attese` closes: forgetting it would be enough."""
         with tempfile.TemporaryDirectory() as temporanea:
             cartella = Path(temporanea)
             shortlists = cartella / "sl.json"
@@ -797,10 +807,9 @@ class LaCliVeraTests(unittest.TestCase):
         self.assertNotIn("Traceback", esito.stderr.decode("utf-8"))
 
     def test_l_uscita_e_utf8_qualunque_sia_la_console(self) -> None:
-        """Su Windows un processo che scrive su una pipe usa cp1252, e qui
-        passano le descrizioni vere dei prodotti: basta un `CAFFÈ` perche'
-        l'orchestratore legga byte che non sono UTF-8. Trovato da un test
-        della 6a, non da una run."""
+        """On Windows a process writing to a pipe uses cp1252, and real
+        product descriptions pass through here: a single `CAFFÈ` is enough
+        to hand the orchestrator bytes that aren't UTF-8."""
         with tempfile.TemporaryDirectory() as temporanea:
             cartella = Path(temporanea)
             shortlists = cartella / "sl.json"
@@ -817,11 +826,13 @@ class LaCliVeraTests(unittest.TestCase):
         self.assertIn("CAFFÈ MISCELA PERÙ", esito.stdout.decode("utf-8"))
 
     def test_senza_casi_da_valutare_scrive_i_due_file_ed_esce_zero(self) -> None:
-        """La catena deve poter proseguire anche quando l'EAN ha risolto tutto:
-        `build_review_data.py` senza `--resolved` produce un confronto monco.
+        """The chain must be able to continue even when EAN matching resolved
+        everything: `build_review_data.py` without `--resolved` produces an
+        incomplete comparison.
 
-        La coda vuota e' una **lista vuota**, non una lista di voci senza
-        candidati: quella e' un listino che non si e' caricato, ed esce 5."""
+        An empty queue is an empty list, not a list of entries with no
+        candidates: the latter means a price list failed to load, and exits
+        5."""
         with tempfile.TemporaryDirectory() as temporanea:
             cartella = Path(temporanea)
             shortlists = cartella / "sl.json"
@@ -842,16 +853,16 @@ class LaCliVeraTests(unittest.TestCase):
         self.assertFalse(contabilita["degradato"])
 
     def test_un_uscita_non_scrivibile_esce_due_e_non_finge_di_aver_deciso(self) -> None:
-        """Esito 2, non 0: i due file non ci sono. Uscire 0 direbbe
-        all'orchestratore «valutato tutto quello che c'era da valutare», e il
-        `ai_decisions.json` della run precedente resterebbe sul disco a farsi
-        leggere come fresco — che è il guasto contro cui è scritta metà di
-        questa CLI. La mutazione che sostituiva 2 con 0 restava verde."""
+        """Exit code 2, not 0: neither file was written. Exiting 0 would tell
+        the orchestrator "evaluated everything there was", and the previous
+        run's `ai_decisions.json` would stay on disk to be read as fresh —
+        exactly the failure half of this CLI exists to guard against. A
+        mutation replacing 2 with 0 would otherwise go unnoticed."""
         with tempfile.TemporaryDirectory() as temporanea:
             cartella = Path(temporanea)
             shortlists = cartella / "sl.json"
             shortlists.write_bytes(json.dumps([voce(candidati=())], ensure_ascii=False).encode("utf-8"))
-            # Una cartella al posto del file: `write_bytes` solleva `OSError`.
+            # A directory in place of the file: `write_bytes` raises `OSError`.
             impossibile = cartella / "dec.json"
             impossibile.mkdir()
             esito = self.lancia([
@@ -867,9 +878,8 @@ class LaCliVeraTests(unittest.TestCase):
         self.assertFalse(rapporto_scritto)
 
     def test_la_memoria_predefinita_e_quella_del_programma(self) -> None:
-        """Un caso identico non si paga due volte, nemmeno fra una run e
-        l'altra: il valore predefinito e' il file vero, non una cartella
-        temporanea."""
+        """An identical case isn't paid for twice, not even across runs: the
+        default value is the real file, not a temp directory."""
         args = valuta_shortlist.parse_args([
             "--shortlists", "a.json", "--output", "b.json", "--rapporto", "c.json",
         ])
@@ -878,11 +888,13 @@ class LaCliVeraTests(unittest.TestCase):
 
 
 class LImprontaAttraversaLaCatenaTests(unittest.TestCase):
-    """I due percorsi che calcolano l'impronta — qui dal caso mandato al
-    modello, nel merge dalla shortlist di oggi — devono dare lo stesso numero.
+    """The two code paths that compute the fingerprint — here from the case
+    sent to the model, in the merge step from today's shortlist — must
+    produce the same value.
 
-    E' l'unico test che se ne accorge se divergono: dentro `valuta_shortlist` e
-    dentro `merge_match_decisions` ciascuno e' coerente con se stesso."""
+    This is the only test that would notice if they diverged: taken alone,
+    `valuta_shortlist` and `merge_match_decisions` are each internally
+    consistent."""
 
     def prepara(
         self,
@@ -955,7 +967,7 @@ class LImprontaAttraversaLaCatenaTests(unittest.TestCase):
         return cartella / "ai_decisions.json"
 
     def giro(self, cartella: Path, shortlists: list[dict[str, Any]], descrizione: str):
-        """Un giro intero: `valuta_shortlist` scrive, `merge` ricalcola."""
+        """A full round trip: `valuta_shortlist` writes, `merge` recomputes."""
         codice, decisioni, _rapporto, _schermo = esegui(
             cartella, shortlists, trasporto_finto=trasporto({descrizione: contenuto("ACCEPT", 441)})
         )
@@ -964,10 +976,11 @@ class LImprontaAttraversaLaCatenaTests(unittest.TestCase):
         return self.merge(cartella, shortlists, cartella / "ai_decisions.json", 1)
 
     def test_il_punteggio_scritto_come_testo_non_rompe_il_confronto(self) -> None:
-        """`voce()` dice già che i listini veri portano il prezzo come stringa.
-        Il giorno che un adattatore fa lo stesso col punteggio, i due che
-        calcolano l'impronta leggono `0.81` e `"0.81"`: è per questo che
-        `_confrontabile` esiste, e nessuna prova ce lo faceva passare."""
+        """`voce()` already shows that real price lists carry the price as a
+        string. If an adapter ever does the same with the score, the two
+        fingerprint computations would read `0.81` and `"0.81"`: this is
+        exactly why `_confrontabile` exists, and no other test exercised it
+        end to end."""
         una = voce()
         una["candidates"][0]["score"] = "0.81"
         una["candidates"][1]["score"] = "0.42"
@@ -977,9 +990,9 @@ class LImprontaAttraversaLaCatenaTests(unittest.TestCase):
         self.assertEqual(risolti[0]["suppliers"]["betulla"]["status"], "SEMANTICO_PROPOSTO")
 
     def test_gli_spazi_e_le_accentate_non_rompono_il_confronto(self) -> None:
-        """`test_le_descrizioni_non_si_normalizzano` prova che di qua non si
-        tocca niente; questo prova che di là nemmeno. Sono le due metà della
-        stessa regola, e ce n'era una sola."""
+        """`test_le_descrizioni_non_si_normalizzano` proves this side leaves
+        the text untouched; this proves the other side does too. They're the
+        two halves of the same invariant."""
         descrizione = "  CAFFÈ  MISCELA  PERÙ  250G  "
         with tempfile.TemporaryDirectory() as temporanea:
             esito, risolti = self.giro(Path(temporanea), [voce(descrizione=descrizione)], descrizione)
@@ -987,11 +1000,11 @@ class LImprontaAttraversaLaCatenaTests(unittest.TestCase):
         self.assertEqual(risolti[0]["suppliers"]["betulla"]["status"], "SEMANTICO_PROPOSTO")
 
     def test_la_riga_scritta_come_testo_non_rompe_il_confronto(self) -> None:
-        """`numero_di_riga` accetta `"12"`, ma nel merge `shortlist_index` e la
-        chiave del ciclo restavano com'erano nel file mentre le decisioni
-        venivano normalizzate a intero: la coppia non si legava più, ogni
-        decisione diventava «senza riscontro» ed usciva 3 — cioè l'orchestratore
-        mandava a ripagare la fase AI su una run sana."""
+        """`numero_di_riga` accepts `"12"`, but in the merge step
+        `shortlist_index` and the loop key must be normalized the same way
+        the decisions are, to an integer: otherwise the pair stops matching,
+        every decision becomes "unmatched" and the merge exits 3 — sending
+        the orchestrator to repay for the AI phase on a healthy run."""
         with tempfile.TemporaryDirectory() as temporanea:
             esito, risolti = self.giro(
                 Path(temporanea), [{**voce(), "gestionale_source_row": "12"}],
@@ -1001,15 +1014,16 @@ class LImprontaAttraversaLaCatenaTests(unittest.TestCase):
         self.assertEqual(risolti[0]["suppliers"]["betulla"]["status"], "SEMANTICO_PROPOSTO")
 
     def test_una_coppia_semantica_senza_shortlist_non_passa_per_valutata(self) -> None:
-        """Il secondo dei due rilievi bloccanti. Con 500 shortlist su 948
-        coppie, la fase AI ne valuta 500, ne dichiara 500, il merge ne trova
-        500 e tutto riconcilia — perché le due parti contano la stessa cosa
-        mancante. Quattrocentoquarantotto prodotti sparivano con esito 0."""
+        """The second of two blocking gaps. With 500 shortlists out of 948
+        pairs, the AI phase evaluates 500, declares 500, the merge step
+        finds 500, and everything reconciles — because both sides are blind
+        to the same missing pairs. Without this check, 448 products would
+        silently vanish while the pipeline exits 0."""
         with tempfile.TemporaryDirectory() as temporanea:
             cartella = Path(temporanea)
             shortlists = [voce()]
             percorso = self.decidi(cartella, shortlists)
-            # Il matching dichiara due coppie semantiche, le shortlist una.
+            # The matching file declares two semantic pairs, the shortlist only one.
             esito, risolti = self.merge(
                 cartella, shortlists, percorso, 1,
                 matching_in_piu=[{
@@ -1039,15 +1053,15 @@ class LImprontaAttraversaLaCatenaTests(unittest.TestCase):
         self.assertEqual(match["selected"]["source_row"], 441)
 
     def test_la_stessa_decisione_su_una_shortlist_di_un_altra_run_viene_buttata(self) -> None:
-        """Il gestionale e' lo stesso file di settimana in settimana: la coppia
-        combacia, i conteggi riconciliano e tutte le altre guardie confrontano
-        fra loro artefatti di oggi. Senza l'impronta questa decisione entrerebbe
-        in ordine con confidenza `ALTA` e senza conferma."""
+        """The reorder list is the same file week to week: the pair matches,
+        the counts reconcile, and every other guard compares today's
+        artifacts against each other. Without the fingerprint, this decision
+        would enter the order at `ALTA` confidence and unconfirmed."""
         with tempfile.TemporaryDirectory() as temporanea:
             cartella = Path(temporanea)
             percorso = self.decidi(cartella, [voce()])
-            # Stessa coppia, stessa riga 441 nel listino: cambia solo che cosa
-            # il modello avrebbe visto, cioe' i candidati della shortlist.
+            # Same pair, same row 441 in the price list: only what the model
+            # would have seen changes, i.e. the shortlist candidates.
             di_oggi = [voce(candidati=((441, "PANTERA SH.250 RICCI", 0.81), (777, "DASY LAVATRICE 30 LAV", 0.55)))]
             esito, risolti = self.merge(cartella, di_oggi, percorso, 1)
         self.assertEqual(esito.returncode, 3, esito.stdout + esito.stderr)

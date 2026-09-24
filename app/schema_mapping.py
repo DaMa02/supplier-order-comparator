@@ -1,10 +1,9 @@
-"""Mappatura guidata dei documenti che il registro non riconosce.
+"""Guided mapping for documents the adapter registry doesn't recognize.
 
-Il servizio espone soltanto dati gia' presenti nel profilo della run fermata:
-nessun percorso arriva dal browser e nessun file arbitrario puo' essere letto.
-La conferma viene poi provata con lo stesso lettore usato dalla pipeline, cosi'
-un'anteprima apparentemente buona non puo' trasformarsi in un listino vuoto al
-ricalcolo successivo.
+The service only exposes data already present in the halted run's profile:
+no path comes from the browser and no arbitrary file can be read. The
+confirmed mapping is then tried with the same reader the pipeline uses, so a
+preview that looks good can't turn into an empty price list on the next run.
 """
 
 from __future__ import annotations
@@ -48,24 +47,21 @@ CAMPI_FORNITORE = {
     "vat",
     "availability",
     "unit",
-    # ⚠ I tre qui sotto servono alle **condizioni commerciali**, ed erano il
-    # buco misurato su QUERCIA il 17 agosto 2026: un fornitore nuovo si legge e si
-    # compila dalla pagina, le sue offerte no.  `commercial_conditions` si
-    # scriveva a mano nel registro — solo LARICE ce l'aveva — perche' non
-    # c'era nessun modo di dichiarare da dove vengono i suoi testi.
+    # The three below feed commercial conditions (promotions). Without them
+    # a new supplier's price list can be mapped but its promotions can't:
+    # `commercial_conditions` had to be written by hand into the registry.
     #
-    # `promotion_text` e' la colonna in cui il fornitore scrive le sue offerte.
-    # Non e' un campo del prodotto: nessun lettore la mette nei record, e sta
-    # qui perche' e' l'unico modo di dire **dove** guardare.  Puo' coincidere
-    # con una colonna gia' assegnata — su BETULLA l'offerta sta dentro la
-    # descrizione, su QUERCIA nella colonna del codice articolo — ed e' l'unica
-    # esente dalla regola «una colonna, un campo».
+    # `promotion_text` is the column where the supplier writes its offers.
+    # It isn't a product field — no reader puts it into records — it just
+    # says *where* to look. It can overlap an already-assigned column (an
+    # offer embedded in the description or in the item-code column), which
+    # is why it's the one field exempt from the "one column, one field" rule.
     "reward_description",
     "discount",
     "promotion_text",
 }
-# Le colonne che possono stare sopra a un'altra: guardano lo stesso testo con
-# un'altra domanda, non lo leggono due volte come campi diversi.
+# Columns allowed to overlap another: they read the same text under a
+# different question, not the same field twice.
 CAMPI_SOVRAPPONIBILI = {"promotion_text"}
 CAMPI_MASTER = {
     "ean",
@@ -76,51 +72,56 @@ CAMPI_MASTER = {
     "vat",
 }
 
-# Quota minima di righe confrontabili perche' un gestionale passi la prova.
+# Minimum share of comparable rows for a management-software export to pass
+# the read-back check.
 #
-# Un export vero non e' mai pulito al 100%: ci sono intestazioni ripetute a
-# meta' elenco, totali di reparto, righe di separazione. Sono una manciata su
-# centinaia, quindi le righe confrontabili restano fra il 90 e il 100%. Una
-# colonna puntata sulla casella sbagliata invece non ne lascia nessuna, o
-# quasi. Fra i due casi c'e' un abisso, e la soglia sta in mezzo ma dalla parte
-# della tolleranza: il documento deve essere dieci volte piu' rotto di uno
-# semplicemente sporco prima che la prova si fermi. Sotto una riga su dieci
-# non e' un documento con qualche riga di troppo: e' la colonna sbagliata.
+# A real export is never 100% clean: repeated headers mid-list, department
+# totals, separator rows. These are a handful out of hundreds, so a genuine
+# export stays between 90% and 100% comparable rows. A column pointed at the
+# wrong cell instead leaves almost none. The threshold sits well inside that
+# gap, on the tolerant side: a document has to be roughly ten times more
+# broken than a merely messy one before this check stops it. Under one row in
+# ten isn't a document with a few extra rows — it's the wrong column.
 QUOTA_MINIMA_MASTER = 0.10
 
-# Sotto quale somiglianza non si propone piu' nessun fornitore.
+# Below this match score, no supplier is proposed at all.
 #
-# `miglior_adattatore` restituisce **sempre** un candidato: se nessuno prende
-# punti ripiega sul primo del ruolo giusto con copertura 0.0. La pagina lo
-# metteva gia' selezionato nella tendina «Fornitore», e chi conferma sostituisce
-# il listino vero di quel fornitore. E' successo in negozio il 21 agosto 2026.
+# `miglior_adattatore` always returns a candidate: if nothing scores, it
+# falls back to the first candidate of the right role with 0.0 coverage. The
+# page would show it pre-selected in the supplier dropdown, and confirming
+# would silently overwrite that supplier's real price list.
 #
-# Misurato sugli undici documenti di `listini-storici/` piu' i tre della run:
+# Measured against the historical price-list corpus plus the run's own
+# documents:
 #
-#   proposta giusta     BETULLA 1.00 (due file) · CIPRESSO 1.00 (due file) ·
-#                       NOCE .xls 1.00 · gestionale 1.00
-#   proposta sbagliata  LARICE->noce 0.00 (quattro file) ·
-#                       OFFERTE AGOSTO 4->betulla 0.20 (una intestazione su
-#                       cinque, e quell'una e' «ORDINE») ·
-#                       QUERCIA->gestionale 0.29 · GINEPRO->gestionale 0.29 ·
-#                       ACERO->cipresso 0.33
+#   correct match    BETULLA 1.00 (two files) - CIPRESSO 1.00 (two
+#                     files) - NOCE .xls 1.00 - management export 1.00
+#   wrong match       LARICE -> noce 0.00 (four files) -
+#                     promo sheet -> betulla 0.20 (one header out of five,
+#                     and that one is "ORDINE") -
+#                     QUERCIA -> management export 0.29 -
+#                     GINEPRO -> management export 0.29 -
+#                     ACERO -> cipresso 0.33
 #
-# Fra 0.33 e 1.00 non c'e' nessun documento: la soglia sta in quell'abisso, e
-# 0.60 sta dalla parte giusta. E' quasi il doppio della proposta sbagliata piu'
-# alta, e lascia passare il caso per cui la proposta esiste — il fornitore che
-# rinomina una colonna: su BETULLA, cinque obbligatorie, una rinominata fa 0.80 e
-# due fanno 0.60, e si propone ancora; tre fanno 0.40 e non si propone piu'.
-# Con due intestazioni su cinque non e' un riconoscimento, e' una coincidenza.
+# No document falls between 0.33 and 1.00: the threshold sits in that gap,
+# on the safe side at 0.60 — nearly double the highest wrong match — while
+# still admitting the case where a match should exist: a supplier renaming
+# one column. With five required headers, one renamed still scores 0.80,
+# two renamed scores 0.60 and is still proposed; three renamed drops to 0.40,
+# below the threshold. Two headers out of five isn't recognition, it's
+# coincidence.
 SOGLIA_DELLA_PROPOSTA = 0.60
-# ...e mai su una intestazione sola, qualunque sia la percentuale: un adattatore
-# con due obbligatorie farebbe 1.00 trovandone due, ma uno con una sola farebbe
-# 1.00 con una parola. Oggi la firma piu' povera ne ha cinque (`betulla_v1`),
-# quindi questa non morde: sta qui perche' il registro si scrive dalla pagina.
+# ...and never on a single matched header, whatever the percentage: an
+# adapter with two required headers would score 1.00 by matching both, but
+# one with a single required header would score 1.00 on one matched word.
+# The sparsest signature today has five required headers, so this floor
+# doesn't currently bind; it stays as a guard since the registry is written
+# from the mapping page.
 INTESTAZIONI_MINIME_DELLA_PROPOSTA = 2
 
-# Ripiego per uno schema nuovo. Le intestazioni gia' note non stanno qui: si
-# prendono da ``header_aliases`` del registro, che resta l'unica fonte per i
-# fornitori conosciuti.
+# Fallback aliases for an unrecognized schema. Known headers aren't listed
+# here: they come from the registry's own `header_aliases`, the single
+# source of truth for recognized suppliers.
 ALIAS_GENERICI: dict[str, tuple[str, ...]] = {
     "ean": ("ean", "cod ean", "codice ean", "codice a barre", "barcode", "gtin"),
     "supplier_code": ("cod art", "codice articolo", "codice", "sku", "product code"),
@@ -164,17 +165,17 @@ def slug_fornitore(nome: str) -> str:
 
 
 def carica_adattatori(percorso: Path) -> list[dict[str, Any]]:
-    """Il registro effettivo: quello spedito piu' quello imparato in negozio.
+    """The effective registry: shipped adapters plus locally learned ones.
 
-    ⚠ Il fornitore imparato la settimana scorsa deve comparire anche qui,
-    altrimenti la mappatura guidata lo propone di nuovo come sconosciuto e
-    l'utente rimappa a mano uno schema che il programma conosce gia'.
+    A learned adapter must show up here too, or the guided mapping proposes
+    that supplier as unknown again and the user re-maps by hand a schema the
+    program already knows.
 
-    Si solleva quando non si e' letto niente: chi mappa uno schema deve sapere
-    che il registro e' rotto, invece di vedersi proporre un elenco vuoto come
-    se il programma non conoscesse nessun fornitore. Un imparato rotto sopra
-    uno spedito buono non ferma: si lavora con lo spedito, e il motivo lo
-    dice `registro.motivo_registro_illeggibile`.
+    Raises when nothing could be read: someone mapping a schema needs to know
+    the registry is broken, rather than seeing an empty supplier list as if
+    none were known. A broken learned registry over a good shipped one
+    doesn't stop the run — it falls back to the shipped one, and the reason
+    is reported by `registro.motivo_registro_illeggibile`.
     """
 
     from registro import adattatori_effettivi  # noqa: PLC0415 - import tardivo come gli altri
@@ -186,14 +187,12 @@ def carica_adattatori(percorso: Path) -> list[dict[str, Any]]:
 
 
 def nome_dichiarato(supplier_id: str, adattatori: list[dict[str, Any]]) -> str:
-    """Come si chiama questo fornitore, secondo gli adattatori gia' in mano.
+    """This supplier's display name, from the adapters already loaded.
 
-    ⚠ Qui c'era `supplier_id.upper()`: chi aveva dichiarato «Sapori & Co.» si
-    vedeva rispondere `SAPORI_E_CO`, underscore compresi (revisione di
-    regressione del 14 agosto 2026).  La regola — a parita' di `supplier_id`
-    vince il nome piu' corto, perche' il piu' lungo descrive il documento e non
-    il fornitore — e' quella di `scripts/registro.py`, e la si chiama invece di
-    riscriverla: il registro e' gia' aperto e passa di qui come parametro.
+    Delegates to `scripts/registro.py`'s tie-breaking rule instead of
+    reimplementing it: given the same `supplier_id`, the shortest name wins,
+    since the longer one usually describes the document rather than the
+    supplier. The registry is already open and is passed in as a parameter.
     """
 
     from registro import nome_del_fornitore_fra  # noqa: PLC0415 - import tardivo come gli altri
@@ -206,8 +205,8 @@ def fogli_del_profilo(profilo: dict[str, Any]) -> list[dict[str, Any]]:
     fogli = dettagli.get("sheets")
     if isinstance(fogli, list):
         return [foglio for foglio in fogli if isinstance(foglio, dict)]
-    # Un CSV e' un unico foglio logico. Tenere la stessa forma semplifica sia
-    # la pagina sia la validazione, senza inventargli un nome che non ha.
+    # A CSV is a single logical sheet. Keeping the same shape simplifies both
+    # the page and validation, without inventing a sheet name it doesn't have.
     return [{
         "name": "",
         "active_range": dettagli.get("active_range") or {},
@@ -220,12 +219,11 @@ def fogli_del_profilo(profilo: dict[str, Any]) -> list[dict[str, Any]]:
     }]
 
 
-# Quante righe l'anteprima puo' portare. Erano 36, cioe' esattamente quante ne
-# mandava il profilo: le righe attorno ai separatori di sezione — le uniche che
-# fanno vedere dove comincia davvero il listino — sarebbero entrate solo
-# buttando fuori le ultime righe del documento. Il tetto resta perche' serve a
-# non gonfiare la risposta, ma sta sopra al massimo che il profilo produce
-# (20 di testa + 24 di sezione + 5 centrali + 12 finali).
+# How many rows the preview can carry. Set above the profile's own maximum
+# (20 header + 24 section + 5 middle + 12 final samples), so the rows around
+# a section break — the only ones that show where the price list actually
+# starts — aren't pushed out by the document's trailing rows. The cap still
+# guards against an unbounded response.
 RIGHE_DELL_ANTEPRIMA = 64
 
 
@@ -234,9 +232,8 @@ def righe_visibili(foglio: dict[str, Any]) -> list[dict[str, Any]]:
     gruppi: list[Iterable[Any]] = [
         foglio.get("header_rows") or [],
         foglio.get("header_candidates") or [],
-        # Le righe attorno a un separatore di sezione: senza di loro chi mappa
-        # QUERCIA scriveva 69 in «Prima riga dei prodotti» e continuava a vedere
-        # le righe 3-20, cioe' il blocco promozionale.
+        # Rows around a section break: without them, entering the first
+        # product row still shows the promotional block above it instead.
         foglio.get("section_rows") or [],
     ]
     campioni = foglio.get("samples") or {}
@@ -253,9 +250,9 @@ def righe_visibili(foglio: dict[str, Any]) -> list[dict[str, Any]]:
             valori = voce.get("values")
             if isinstance(valori, list):
                 per_numero[numero] = {"row": numero, "values": valori}
-    # Le righe iniziali sono la parte davvero utile dell'anteprima. I campioni
-    # centrali e finali restano disponibili, ma il limite impedisce a un
-    # profilo anomalo di gonfiare la risposta senza misura.
+    # The leading rows are the genuinely useful part of the preview. Middle
+    # and final samples stay available, but the cap keeps an unusual profile
+    # from inflating the response without bound.
     return [per_numero[numero] for numero in sorted(per_numero)[:RIGHE_DELL_ANTEPRIMA]]
 
 
@@ -299,8 +296,8 @@ def punteggio_adattatore(
             osservate = {normalizza(voce) for voce in valori_riga(foglio, riga) if normalizza(voce)}
             trovate = len(richieste & osservate)
             copertura = trovate / len(richieste)
-            # Il formato vale solo come spareggio. Il riconoscimento resta
-            # fondato sul contenuto: un .xlsx rinominato non cambia fornitore.
+            # Format is only a tie-breaker. Recognition is still based on
+            # content: a renamed .xlsx doesn't change which supplier it is.
             candidato = (copertura, trovate, int(compatibile_formato(adattatore, profilo)), str(foglio.get("name") or ""))
             if migliore is None or candidato > migliore:
                 migliore = candidato[:3] + (f"{candidato[3]}\n{riga}",)
@@ -339,15 +336,15 @@ def miglior_adattatore(
 def proposta_credibile(
     profilo: dict[str, Any], adattatore: dict[str, Any] | None, copertura: float
 ) -> bool:
-    """Se questo candidato merita di comparire **gia' scelto** nella tendina.
+    """Whether this candidate deserves to appear pre-selected in the dropdown.
 
-    ⚠ Non si applica dentro `miglior_adattatore`, e non e' una svista: di li'
-    passa anche `adattatore_per_scelta`, che cerca l'adattatore del fornitore
-    che l'utente ha **appena scelto a mano**. Li' una copertura bassa e'
-    normale — il documento non somiglia a niente, e' per questo che siamo nella
-    mappatura guidata — e rifiutarla vorrebbe dire non poter piu' assegnare un
-    listino nuovo a un fornitore che esiste gia'. La soglia riguarda solo
-    quello che il programma **propone da solo**.
+    Deliberately not applied inside `miglior_adattatore`: that function is
+    also used by `adattatore_per_scelta`, which looks up the adapter for a
+    supplier the user just picked by hand. There, low coverage is expected —
+    the document doesn't resemble anything, which is why guided mapping is
+    showing at all — and rejecting it would make it impossible to assign a
+    new price list to an already-known supplier. This threshold gates only
+    what the program proposes on its own.
     """
 
     if adattatore is None or copertura < SOGLIA_DELLA_PROPOSTA:
@@ -421,9 +418,8 @@ def serializza_foglio(foglio: dict[str, Any]) -> dict[str, Any]:
         "maxColumn": colonna_massima(foglio),
         "headerRows": righe_candidate(foglio),
         "rows": righe_visibili(foglio),
-        # Le righe che separano una sezione dall'altra, con che cosa c'e'
-        # scritto e da quale riga ripartono i dati: e' quello che la pagina
-        # propone al posto di far indovinare un numero.
+        # Section breaks: what text marks them and which row data resumes
+        # from. This is what the page offers instead of a guessed row number.
         "sectionBreaks": deepcopy(foglio.get("section_breaks") or []),
         "columns": deepcopy(foglio.get("columns") or []),
     }
@@ -436,15 +432,15 @@ def fornitori_disponibili(adattatori: list[dict[str, Any]]) -> list[dict[str, st
         if not identificativo:
             continue
         etichetta = str(voce.get("display_name") or identificativo).strip()
-        # Due adattatori dello stesso fornitore (per esempio XLS e CSV) non
-        # diventano due scelte uguali nella pagina.
+        # Two adapters for the same supplier (e.g. XLS and CSV variants)
+        # don't turn into two identical entries in the page.
         per_id.setdefault(identificativo, etichetta.split(" listino ", 1)[0])
     return [{"id": chiave, "name": per_id[chiave]} for chiave in sorted(per_id)]
 
 
-# Che cosa e' cambiato in un documento che il registro conosce, detto con le
-# parole di chi guarda il file.  ⚠ I nomi delle verifiche in pagina non ci
-# vanno: «riga_intestazione» e «posizioni_intestazioni» sono nomi di codice.
+# What changed in a document the registry already recognizes, phrased for
+# whoever is looking at the file. Internal check names don't belong here —
+# they're code identifiers, not user-facing wording.
 COSA_E_CAMBIATO = {
     "foglio": "il nome del foglio",
     "riga_intestazione": "la riga delle intestazioni",
@@ -456,7 +452,7 @@ COSA_E_CAMBIATO = {
 
 
 def cambiamenti_del_documento(indizio: dict[str, Any]) -> list[str]:
-    """Le verifiche non superate, in italiano e senza doppioni."""
+    """Failed checks, in user-facing Italian and without duplicates."""
 
     fuori: list[str] = []
     for verifica in (indizio.get("checks") or []):
@@ -478,20 +474,18 @@ def _adattatore_per_id(identificativo: str, adattatori: list[dict[str, Any]]) ->
 def ruoli_gia_occupati(
     profili: list[dict[str, Any]], richiesti: set[str], adattatori: list[dict[str, Any]]
 ) -> list[dict[str, str]]:
-    """Chi, in questa run, ha gia' un documento che NON passa dalla mappatura.
+    """Who, in this run, already has a document that skips guided mapping.
 
-    Serve a dire **prima** della conferma quello che oggi si scopre dopo: se il
-    documento viene assegnato a un fornitore che ha gia' un listino,
-    `PipelineJobManager._piu_recente_per_ruolo` ne tiene uno solo — quello con
-    `modified_at` piu' recente — e l'altro esce dal confronto senza che nessuno
-    l'abbia chiesto. Misurato il 21 agosto 2026 con i profili veri: assegnando
-    un foglio di offerte a BETULLA, «LISTINO BETULLA VALIDO FINO AL 01-09-26.xlsx»
-    resta fuori.
+    Surfaces before confirmation what would otherwise only be discovered
+    after: if the document being mapped is assigned to a supplier that
+    already has a price list in this run, `PipelineJobManager.
+    _piu_recente_per_ruolo` keeps only the one with the most recent
+    `modified_at`, and the other silently drops out of the comparison.
 
-    La chiave e' la stessa di la': «master», oppure «supplier:<supplier_id>»
-    preso dall'adattatore che il registro ha riconosciuto. Un documento che il
-    registro non riconosce non occupa niente: e' fra quelli che stanno passando
-    di qui.
+    The key matches that logic: "master", or "supplier:<supplier_id>" taken
+    from the adapter the registry recognized. A document the registry
+    doesn't recognize occupies nothing — it's one of the ones currently
+    going through guided mapping.
     """
 
     per_id = {str(voce.get("id") or ""): voce for voce in adattatori}
@@ -522,11 +516,11 @@ def ruoli_gia_occupati(
             "supplierName": nome_dichiarato(supplier_id, adattatori),
             "fileName": nome, "modifiedAt": quando,
         })
-    # ⚠ Una voce per chiave, e dev'essere quella che vince davvero: la stessa
-    # regola di `_piu_recente_per_ruolo`, cioe' il file modificato piu' di
-    # recente. Con due listini dello stesso fornitore gia' caricati la pagina
-    # nominava il primo in ordine di nome e prometteva che il documento appena
-    # configurato entrava — mentre a restare fuori era proprio lui.
+    # One entry per key, and it must be the one that actually wins: the same
+    # rule as `_piu_recente_per_ruolo` — most recently modified file. With
+    # two price lists already loaded for the same supplier, the reported
+    # entry must match the one that will really be dropped, not just the
+    # first one alphabetically.
     per_chiave: dict[str, dict[str, str]] = {}
     for voce in occupati:
         chiave = voce["role"] if voce["role"] == "master" else f"supplier:{voce['supplierId']}"
@@ -558,14 +552,12 @@ def prepara_pendenti(
         else:
             candidati = adattatori
         adattatore, nome_foglio, riga, copertura = miglior_adattatore(profilo, candidati)
-        # Il foglio e la riga restano: sono la posizione in cui le poche
-        # intestazioni riconosciute stanno **davvero**, ed e' una proposta
-        # migliore della riga 1. Quello che cade e' l'**identita'** del
-        # fornitore, che con una copertura cosi' bassa non e' un
-        # riconoscimento. Con l'adattatore cade anche il suo `kind`, quindi il
-        # documento arriva in pagina come «Listino fornitore» invece che come
-        # «Elenco del gestionale»: misurato, QUERCIA e GINEPRO arrivavano proposti
-        # gestionale con copertura 0.29.
+        # Sheet and row are kept even when the match is dropped below: they
+        # mark where the few recognized headers actually sit, which beats
+        # defaulting to row 1. What's dropped is the supplier's identity —
+        # coverage this low isn't a real match. Losing the adapter also loses
+        # its `kind`, so the document shows up in the page as a supplier
+        # price list rather than as the management export.
         if not proposta_credibile(profilo, adattatore, copertura):
             adattatore = None
         ruolo = ruolo_caricato if ruolo_caricato in {"master", "supplier"} else (
@@ -574,23 +566,20 @@ def prepara_pendenti(
         foglio = foglio_per_nome(profilo, nome_foglio)
         colonne, ordine = suggerisci_colonne(foglio, riga, adattatore, ruolo)
         if ruolo == "supplier" and "description" not in colonne:
-            # Uno schema non somigliante al gestionale e senza proposta viene
-            # comunque presentato come listino: e' il caso piu' comune e
-            # lascia all'utente una sola scelta da correggere, non due.
+            # A schema that doesn't resemble the management export, and
+            # with no proposal, still defaults to "supplier price list":
+            # the more common case, leaving one field to correct, not two.
             ruolo = "supplier"
         indizio = profilo.get("deterministic_hint") or {}
-        # ⚠ Due notizie diverse, e finora il payload ne portava una sola.
-        # «SCONOSCIUTO» = il registro non lo conosce, c'e' un fornitore da
-        # configurare.  «VARIATO» = lo conosce, ed e' il documento a essere
-        # cambiato: le tendine arrivano gia' compilate con quello che il
-        # registro dichiara, e quasi sempre basta guardarle.
-        # ⚠ «NOTO» esiste per una strada sola: le colonne riviste a mano da un
-        # listino che il programma riconosce benissimo. Li' non c'e' nessuna
-        # fermata che detti il motivo, e senza questo ramo un documento
-        # riconosciuto arrivava in pagina marcato «SCONOSCIUTO» — un dato falso
-        # che oggi non produce nessuna frase, e che la produrrebbe il giorno in
-        # cui qualcuno si fida di quel campo. Sulla mappatura guidata il motivo
-        # arriva sempre dalla fermata, quindi questo ramo non la tocca.
+        # Two distinct states are reported here. `SCONOSCIUTO`: the registry
+        # doesn't recognize this document, a new supplier needs configuring.
+        # `VARIATO`: the registry recognizes the supplier, but the document
+        # itself changed — the dropdowns arrive pre-filled from the registry
+        # and usually just need a glance.
+        # `NOTO` covers one path only: manually revisiting columns for a
+        # price list the program already recognizes correctly. Nothing else
+        # sets a reason there, so without this branch a recognized document
+        # would show up marked `SCONOSCIUTO`.
         stato_documento = per_motivo.get(nome.casefold()) or (
             "VARIATO" if str(indizio.get("state") or "") == "SCHEMA_VARIATO"
             else "QUASI" if indizio.get("quasi_adapter_id")
@@ -601,12 +590,12 @@ def prepara_pendenti(
             _adattatore_per_id(str(indizio.get("adapter_id") or ""), adattatori)
             if stato_documento in {"VARIATO", "RUOLO_SBAGLIATO", "NOTO"} else {}
         )
-        # ⚠ «QUASI» = il registro sa di quale fornitore e' il documento e sa
-        # anche che cosa gli manca per leggerlo. Non e' uno sconosciuto: dirgli
-        # «configura un fornitore nuovo» e' quello che il 21 agosto 2026 ha
-        # fatto scrivere un adattatore imparato sopra quello spedito di BETULLA,
-        # per una cella svuotata in Excel.  I dati li produce `registro`, uno
-        # solo: qui si portano in pagina, non si ricalcolano.
+        # `QUASI`: the registry knows which supplier the document belongs to
+        # and knows what's missing to read it. It isn't unknown — treating it
+        # as "configure a new supplier" risks overwriting a good shipped
+        # adapter with a learned one for what's really just a header cell
+        # that moved. `registro` is the single source for this data; it's
+        # carried to the page here, not recomputed.
         quasi = {
             "supplierName": str(indizio.get("quasi_supplier_name") or ""),
             "missing": [
@@ -650,8 +639,8 @@ def prepara_pendenti(
         "required": bool(documenti),
         "runId": run_id,
         "suppliers": fornitori_disponibili(adattatori),
-        # Chi ha gia' un documento in questa run. La pagina lo usa per dire, al
-        # momento della scelta, quale listino resterebbe fuori.
+        # Who already has a document in this run. The page uses it to warn,
+        # at selection time, which price list would be dropped.
         "occupied": ruoli_gia_occupati(profili, richiesti, adattatori),
         "documents": documenti,
     }
@@ -680,27 +669,26 @@ def intero_positivo(valore: Any, etichetta: str, *, zero: bool = False) -> int:
 
 
 def marcatore_dei_dati(grezzo: Any, foglio: dict[str, Any], riga_dati: int, nome: str) -> dict[str, Any] | None:
-    """La regola «i prodotti cominciano dopo la riga che dice X», se e' stata scelta.
+    """The rule "products start after the row that says X", if one was set.
 
-    Serve perche' un numero di riga non sopravvive a una settimana: su QUERCIA le
-    righe 7-67 sono un blocco promozionale — prezzi che sono valorizzazioni di
-    omaggi, non prezzi d'acquisto — e il listino vero comincia alla 69, dopo
-    l'unico `A68 = 'LISTINO'` del file. La settimana prossima quel blocco sara'
-    di lunghezza diversa; il 69 congelato taglierebbe l'elenco nel punto
-    sbagliato **senza dire niente**.
+    A fixed row number doesn't survive a week: some price lists have a
+    promotional block of variable length above the real data, ending with a
+    single marker cell (e.g. "LISTINO") right before it. A frozen row number
+    would silently cut the list at the wrong point once that block's length
+    changes.
 
-    Qui la regola non si crede sulla parola: la riga dichiarata dev'essere fra
-    quelle che l'anteprima porta, e li' dentro deve esserci davvero quel testo,
-    in quella colonna.  Una regola confermata alla cieca sarebbe peggio del
-    numero che sostituisce.
+    The rule isn't trusted blindly: the declared row must be among the ones
+    the preview carries, and the declared text must actually be there, in
+    that column. A confirmed-without-checking rule would be worse than the
+    row number it replaces.
 
-    Contratto della pagina (`dataStartMarker`)::
+    Page contract (`dataStartMarker`)::
 
         {"column": 1, "match": "equals", "text": "LISTINO", "offset": 1}
 
-    `column` e' il numero 1-based della colonna (la lettera e' ammessa),
-    `match` vale «equals» o «contains», `offset` quante righe piu' in basso
-    cominciano i prodotti (1 se non c'e').
+    `column` is the 1-based column number (a letter is also accepted),
+    `match` is "equals" or "contains", `offset` is how many rows below the
+    marker the products start (1 when omitted).
     """
 
     if grezzo in (None, "", {}):
@@ -744,9 +732,9 @@ def marcatore_dei_dati(grezzo: Any, foglio: dict[str, Any], riga_dati: int, nome
     marcatore = {"column": get_column_letter(indice), confronto: testo, "offset": scarto}
     problemi = errori_del_marcatore(marcatore)
     if problemi:
-        # Non e' raggiungibile oggi — il marcatore lo costruisce la riga qui
-        # sopra, in forma valida — ma se un giorno lo diventa non deve uscire
-        # «data_start_marker.offset deve essere un numero intero da 0 in su».
+        # Unreachable today — the line above always builds a valid marker —
+        # but if that ever changes, the error should stay in the page's own
+        # wording rather than a raw field-path message.
         raise ValueError(f"{nome}: controlla {parole_della_pagina(problemi)}.")
     return marcatore
 
@@ -760,10 +748,10 @@ def adattatore_per_scelta(
     return adattatore
 
 
-# Il campo della mappatura che porta ogni ruolo del lettore delle condizioni.
-# I nomi a destra sono chiavi di `column_map`: e' cosi' che LARICE dichiara le
-# sue («text» → «description»), ed e' l'unica forma che `promotion_bridge` sa
-# risolvere, perche' e' la stessa che segue il lettore dei prezzi.
+# The mapped field that carries each role of the promotion reader. The
+# right-hand names are `column_map` keys — the same form the price reader
+# uses — because that's the only form `promotion_bridge` knows how to
+# resolve.
 CAMPI_DELLE_CONDIZIONI = {
     "text": "promotion_text",
     "reward": "reward_description",
@@ -775,26 +763,23 @@ CAMPI_DELLE_CONDIZIONI = {
 def condizioni_commerciali(
     grezza: dict[str, Any], colonne: dict[str, str | int], foglio: dict[str, Any], nome: str
 ) -> dict[str, Any] | None:
-    """Dove il fornitore scrive le sue offerte, dichiarato dalla mappatura.
+    """Where the supplier writes its promotions, as declared by the mapping.
 
-    ⚠ Il buco che chiude, misurato su QUERCIA il 17 agosto 2026: **oggi un
-    fornitore nuovo si legge e si compila, le sue offerte no.**
-    `commercial_conditions` si scrive a mano dentro `references/adapters.json`
-    e ce l'ha solo LARICE; la mappatura guidata non aveva un campo per
-    dichiararla e `impara_adattatore` non la scriveva. QUERCIA ha **quindici**
-    testi promozionali — sei in colonna A e nove in colonna Q — e nessuno di
-    loro sarebbe mai diventato una regola applicabile.
+    Without this field a new supplier's price list reads and compiles, but
+    its promotions can't: `commercial_conditions` had to be written by hand
+    into `references/adapters.json`, and guided mapping had no field to
+    declare it, so `impara_adattatore` never wrote it either.
 
-    Qui non si indovina niente. Se la mappatura non dichiara la colonna dei
-    testi non nasce nessuna dichiarazione, e le offerte di quel fornitore
-    restano quello che erano: non lette. Se invece la dichiara, si scrive la
-    forma e i campi, e chi legge e' lo stesso motore di LARICE.
+    Nothing is guessed here. If the mapping doesn't declare the promotion-
+    text column, no declaration is produced and that supplier's promotions
+    stay unread. If it does, the layout and fields are written, and the same
+    engine used for known suppliers reads them.
 
-    La forma sta nella mappatura e non si deduce: `riga` — una riga porta per
-    intero la sua condizione — e' il predefinito perche' e' come scrivono
-    quasi tutti, ma `blocchi` resta dichiarabile e **pretende le sue colonne**.
-    Accettarla senza sarebbe scrivere nel registro una dichiarazione che poi
-    ogni settimana produce «non so piu' dove il listino tiene …».
+    The layout lives in the mapping and isn't inferred: `riga` (one row
+    carries a whole condition) is the default since most suppliers write it
+    that way, but `blocchi` can be declared instead and then requires its own
+    columns. Accepting it without them would write a registry declaration
+    that fails silently every time it's applied.
     """
 
     from promotion_bridge import LAYOUT_RIGA, colonne_richieste_dal_layout, nomi_dei_ruoli
@@ -803,8 +788,8 @@ def condizioni_commerciali(
     if not isinstance(grezze, dict):
         return None
     if "promotion_text" not in colonne:
-        # Dichiarare la forma senza dire dove sono i testi non e' una
-        # dichiarazione: e' una casella spuntata a vuoto.
+        # Declaring the layout without saying where the text is isn't a
+        # declaration: it's an empty checkbox.
         if str(grezze.get("layout") or "").strip():
             raise ValueError(
                 f"{nome}: per leggere le offerte di questo fornitore serve la colonna in cui le "
@@ -836,32 +821,32 @@ def condizioni_commerciali(
     return {
         "layout": forma,
         "sheet": str(foglio.get("name") or "FIRST"),
-        # Dalla prima riga: le condizioni commerciali stanno spesso **sopra**
-        # l'elenco dei prodotti — su QUERCIA nel blocco promozionale delle righe
-        # 7-68 — e partire dalla prima riga dei dati le taglierebbe fuori tutte.
+        # From row 1: commercial conditions often sit above the product
+        # list, in the promotional block, and starting from the first data
+        # row would cut all of them out.
         "data_start_row": 1,
         "fields": campi,
     }
 
 
 def valori_di_disponibilita(grezzi: Any, nome: str) -> list[str]:
-    """Quali valori della colonna «Disponibilita» vogliono dire «disponibile».
+    """Which values of the availability column mean "in stock".
 
-    ⚠ Senza questa lista il lettore parte da `available = True` e la cella non
-    la guarda nemmeno (`prepare_manifest_sources`, `available_values`): la
-    colonna si poteva mappare, e le righe che dicevano NO restavano ordinabili
-    e potevano vincere il confronto — a prezzo piu' basso, per il motivo per
-    cui erano piu' basse (6 settembre 2026).
+    Without this list the reader defaults to `available = True` and never
+    looks at the cell (`prepare_manifest_sources`, `available_values`): the
+    column could be mapped while rows marked unavailable stayed orderable
+    and could win the comparison on price, for the very reason their price
+    looked lower.
 
-    L'elenco lo dichiara chi ha il listino davanti, e non si inventa qui: «SI»,
-    «S», «disponibile», «X» sono tutti veri per qualcuno, e un elenco cablato
-    sarebbe una convenzione di fornitore scritta nel codice, che questo
-    progetto non vuole (regola 4). Se la colonna e' mappata e la lista e'
-    vuota, la conferma si rifiuta: leggere quella colonna senza sapere che cosa
-    significa e' peggio che non leggerla.
+    The list is declared by whoever has the price list in hand, not guessed
+    here: "SI", "S", "disponibile", "X" are all valid for different
+    suppliers, and hardcoding one convention would bake a single supplier's
+    wording into the code. If the column is mapped and the list is empty,
+    confirmation is refused: reading that column without knowing what it
+    means is worse than not reading it.
 
-    Contratto della pagina (`availableValues`): un testo con i valori separati
-    da virgola o a capo, per esempio «SI, S, disponibile».
+    Page contract (`availableValues`): comma- or newline-separated values,
+    e.g. "SI, S, disponibile".
     """
 
     valori: list[str] = []
@@ -913,10 +898,10 @@ def decisione_da_mappatura(
             raise ValueError(
                 f"{nome}: la colonna {get_column_letter(indice)} è assegnata sia a {precedente} sia a {campo}."
             )
-        # La colonna resta comunque **occupata** — serve al controllo della
-        # colonna d'ordine qui sotto — ma il nome che si ricorda e' quello del
-        # campo vero: «assegnata sia a promotion_text sia a description» non
-        # direbbe niente a nessuno.
+        # The column is still marked occupied, for the order-column check
+        # below, but the remembered field is the real one, not the
+        # overlapping `promotion_text`, which would be a meaningless
+        # conflict message.
         if precedente is None or campo not in CAMPI_SOVRAPPONIBILI:
             indici_usati[indice] = campo
         colonne[campo] = specifica_colonna(foglio, riga_header, indice)
@@ -977,9 +962,9 @@ def decisione_da_mappatura(
             if str(intestazione_ordine or "").strip():
                 mappatura["order_header_expected"] = str(intestazione_ordine).strip()
             else:
-                # E' un consenso circoscritto a questi byte e a questa
-                # posizione. Il writer ricontrolla poi hash, cella vuota e
-                # contenuto della colonna prima di scrivere sulla copia.
+                # This consent is scoped to these exact bytes and this
+                # position. The writer still re-checks the hash, the empty
+                # cell and the column contents before writing to the copy.
                 mappatura["order_header_blank_confirmed"] = True
 
     supplier_id = ""
@@ -1000,9 +985,9 @@ def decisione_da_mappatura(
         else:
             display_name = " ".join(str(grezza.get("supplierName") or "").split())
             if len(display_name) < 2 or len(display_name) > 80:
-                # ⚠ Da quando la tendina puo' restare su «Scegli il fornitore…»
-                # questo messaggio copre due situazioni diverse, e dirne una
-                # sola manda a cercare un campo che non c'e' in pagina.
+                # The dropdown can also be left on its placeholder, so this
+                # message needs to cover both cases — an empty choice and an
+                # invalid name — instead of describing only one.
                 raise ValueError(
                     f"{nome}: scegli il fornitore, oppure «Nuovo fornitore…» e scrivi il nome."
                 )
@@ -1014,12 +999,11 @@ def decisione_da_mappatura(
                 raise ValueError(f"{nome}: questo fornitore esiste già; selezionalo dall'elenco.")
             stato = "NUOVO_FORNITORE"
 
-    # ⚠ `incomplete_mapping` decide «e' un CSV?» dal **suffisso del nome**. Un
-    # CSV che arriva chiamato .xlsx — succede, e il programma lo accetta perche'
-    # sceglie il lettore dai byte — si vedeva chiedere «completa foglio da
-    # leggere, colonna ordine»: due cose che quel documento non ha e che nessun
-    # campo della pagina puo' dare. Il formato lo sa gia' il profilo: glielo si
-    # dice.
+    # `incomplete_mapping` decides "is this a CSV?" from the file suffix. A
+    # CSV that arrives named .xlsx (the reader picks the parser from the
+    # bytes, so this is accepted) would otherwise be asked for a sheet name
+    # and an order column, neither of which that document has. The profile
+    # already knows the real format, so it's passed in explicitly.
     percorso_dichiarato = Path(str(profilo.get("path") or nome))
     if str(profilo.get("content_format") or "") == "csv":
         percorso_dichiarato = percorso_dichiarato.with_suffix(".csv")
@@ -1029,10 +1013,10 @@ def decisione_da_mappatura(
 
     decisione: dict[str, Any] = {
         "file_name": nome,
-        # La decisione vale per QUESTO documento, non per il suo nome. Senza
-        # l'impronta bastava eliminare un listino configurato male e ricaricarne
-        # un altro con lo stesso nome perche' il ricalcolo gli riapplicasse la
-        # mappatura vecchia, colonne comprese (revisione del 14 agosto 2026).
+        # The decision is valid for this document, not for its file name.
+        # Without the hash, deleting a misconfigured price list and
+        # re-uploading a different file under the same name would silently
+        # re-apply the old mapping, columns included.
         "file_sha256": profilo.get("sha256"),
         "profile_id": profilo.get("profile_id"),
         "state": stato,
@@ -1051,24 +1035,24 @@ def decisione_da_mappatura(
 
 
 def righe_master_confrontabili(righe: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Le righe del gestionale che possono davvero entrare nel confronto.
+    """The management-export rows that can actually enter the comparison.
 
-    Il gestionale non ha ne' prezzo netto ne' pezzi per collo, quindi
-    «utilizzabile» qui vuol dire un'altra cosa che per un listino, e la dice il
-    consumatore vero di questi dati:
+    The management export has neither net price nor pieces-per-carton, so
+    "usable" means something different than for a supplier price list, and
+    is defined by what actually consumes this data:
 
-    * il **codice** e' l'unica chiave su cui si costruisce il confronto.
-      ``build_matching`` cerca le offerte con ``index.get(product["ean"])``
-      (``scripts/prepare_sources.py``): senza codice il prodotto esce
-      ``EAN_ASSENTE`` da ogni fornitore e nessuna offerta gli si attacca.
-    * il **nome** e' quello che l'utente legge nel confronto ed e' l'unica
-      chiave del ripiego semantico; una riga che ne e' priva e finisce in coda
-      semantica fa fallire ``valuta_shortlist.py``, che pretende una
-      descrizione non vuota, e con lei l'intero ricalcolo.
+    * the EAN is the only key the comparison is built on. `build_matching`
+      looks up offers with `index.get(product["ean"])`
+      (`scripts/prepare_sources.py`); without it a product comes out as
+      `EAN_ASSENTE` for every supplier and no offer attaches to it.
+    * the description is what the user reads in the comparison and the only
+      key the semantic fallback has; a row missing it that reaches the
+      semantic queue makes `valuta_shortlist.py` fail, since it requires a
+      non-empty description, taking the whole run down with it.
 
-    L'ultimo prezzo non entra nel criterio: serve al risparmio mostrato in
-    pagina, non alla partecipazione al confronto, e un articolo mai comprato
-    prima non ce l'ha per definizione.
+    The last paid price isn't part of the criterion: it feeds the savings
+    figure shown in the page, not participation in the comparison, and an
+    item never bought before has none by definition.
     """
     return [
         voce for voce in righe
@@ -1077,7 +1061,7 @@ def righe_master_confrontabili(righe: list[dict[str, Any]]) -> list[dict[str, An
 
 
 def colonne_master_da_rivedere(righe: list[dict[str, Any]]) -> str:
-    """Quale colonna guardare, detta con le stesse parole della pagina."""
+    """Which column to check, phrased with the same wording as the page."""
     senza_codice = any(not str(voce.get("ean") or "").strip() for voce in righe)
     senza_nome = any(not str(voce.get("description") or "").strip() for voce in righe)
     nomi = [
@@ -1183,18 +1167,17 @@ def valida_mappature(
         percorso = Path(str(profilo.get("path") or ""))
         if not percorso.is_file():
             raise ValueError(f"{profilo.get('file_name')}: il documento non è più fra i caricamenti.")
-        # La run ha profilato proprio questi byte. Se il file e' stato
-        # sostituito nel frattempo, la pagina non deve confermare la mappatura
-        # di un documento e applicarla a un altro.
+        # The run profiled these exact bytes. If the file was replaced since
+        # then, confirming must not apply one document's mapping to another.
         digest = file_hash(percorso)
         if profilo.get("sha256") and digest != profilo.get("sha256"):
             raise ValueError(f"{profilo.get('file_name')}: il documento è cambiato dopo l'anteprima.")
         decisione = decisione_da_mappatura(profilo, per_id[str(profilo.get("profile_id") or "")], adattatori)
         supplier_id = str(decisione.get("supplier_id") or "")
         if supplier_id and supplier_id in fornitori:
-            # Il nome dal registro, come in ogni altra frase: `supplier_id.upper()`
-            # faceva leggere `NUOVO_FORNITORE_1` a chi aveva dichiarato «Sapori &
-            # Co.» (revisione di regressione del 14 agosto 2026).
+            # The display name comes from the registry, as in every other
+            # message: falling back to `supplier_id.upper()` would show a
+            # slugified identifier instead of the name the supplier declared.
             raise ValueError(
                 "Due documenti sono stati assegnati allo stesso fornitore: "
                 f"{nome_dichiarato(supplier_id, adattatori)}."
@@ -1211,31 +1194,26 @@ def valida_mappature(
 
 
 # ---------------------------------------------------------------------------
-# Che cosa il programma legge, colonna per colonna
+# What the program reads, column by column
 # ---------------------------------------------------------------------------
-# Fino al 15 agosto 2026 l'assegnazione delle colonne si poteva vedere soltanto
-# quando il programma NON riconosceva un documento: la mappatura guidata qui
-# sopra compare solo dopo `SCHEMA_SCONOSCIUTO`.  Sui documenti riconosciuti —
-# cioe' sempre, nella settimana normale — la pagina diceva «Schema riconosciuto
-# dal registro (betulla_v1, confidenza 0.99)» e nient'altro: quale colonna
-# diventasse il prezzo non era visibile da nessuna parte, e la sola verifica
-# possibile era aprire il listino e contare le colonne a mano.
+# Guided mapping (above) only shows column assignment for an unrecognized
+# schema. For a recognized document — the common case — the page otherwise
+# has no way to show which column became the price, short of opening the
+# price list and counting columns by hand.
 #
-# ⚠ Queste posizioni NON si ricalcolano indovinando dalle intestazioni.
-# `suggerisci_colonne` e' il proponitore per uno schema nuovo, e su un documento
-# gia' riconosciuto risponde il falso: sul listino LARICE vero (che non ha
-# nessuna riga di intestazione) propone «fornitore NOCE, nessuna colonna»,
-# e sul gestionale lascia vuoti i colli perche' «Colli» e «Quantita» sono
-# entrambe alias dello stesso campo e la proposta si ferma sull'ambiguita'.
-# La verita' e' una sola ed e' gia' scritta: la dichiarazione del registro
-# (`header_aliases`, `column_map`) oppure la mappatura confermata della
-# decisione, risolte sul documento dalle stesse due funzioni che usano il
-# verificatore e il writer.
+# These positions are never recomputed by guessing from headers.
+# `suggerisci_colonne` is the proposer for a new schema, and on an already
+# recognized document it can be wrong — a price list with no header row at
+# all, or two fields sharing the same alias so the proposal stops on the
+# ambiguity. The single source of truth is the registry declaration
+# (`header_aliases`, `column_map`) or the confirmed mapping in the decision,
+# resolved against the document by the same two functions the recognizer and
+# the writer use.
 
-# I campi che i lettori mettono davvero nei record, con il nome che ha senso
-# per chi fa gli ordini.  Un campo dichiarato dal registro ma che nessun lettore
-# consuma (`historical_total`, `line_total`, `department`) non entra: dire che
-# il programma «legge» una colonna che poi butta e' un'informazione falsa.
+# The fields readers actually put into records, named the way someone
+# placing orders would read them. A field the registry declares but no
+# reader consumes doesn't appear here: claiming the program "reads" a
+# column it then discards would be misleading.
 ETICHETTE_DEI_CAMPI: dict[str, str] = {
     "ean": "Codice a barre (EAN)",
     "supplier_code": "Codice articolo del fornitore",
@@ -1302,11 +1280,10 @@ def _riga_del_foglio(foglio: dict[str, Any], numero: Any) -> list[Any]:
 
 
 def _primo_esempio(foglio: dict[str, Any], indice: int, dalla_riga: Any) -> str:
-    """Un valore vero di quella colonna, preso dalle righe dei prodotti.
+    """A real value from that column, taken from the product rows.
 
-    Serve a rispondere all'unica domanda che conta guardando la tabella: «e'
-    davvero questa la colonna del prezzo?».  Un'intestazione puo' mentire, un
-    valore no.
+    Answers the question that actually matters when checking a mapping: is
+    this really the price column? A header can be misleading; a value isn't.
     """
 
     try:
@@ -1331,21 +1308,20 @@ def colonne_del_foglio(
     riga_dati: Any,
     fino_a: Any = None,
 ) -> list[dict[str, Any]]:
-    """**Tutte** le colonne di un foglio, con titolo, esempio e che cosa contiene.
+    """Every column of a sheet, with its header, a sample value and its content.
 
-    `mappatura_effettiva` dice quali colonne il programma **usa**; questa dice
-    quali **esistono**, ed e' quello che serve a chi deve sceglierne una. Il
-    conto dei tipi non e' un campione: `inspect_sources` attraversa ogni riga di
-    ogni foglio, quindi `formule` e' il numero vero — ed e' l'informazione che
-    decide, perche' scrivere l'ordine sopra una colonna di formule le cancella.
+    `mappatura_effettiva` says which columns the program uses; this says
+    which columns exist, which is what someone choosing a column needs. The
+    type counts aren't sampled: `inspect_sources` walks every row of every
+    sheet, so `formule` is an exact count — and it matters, because writing
+    the order quantity into a formula column would overwrite the formula.
 
-    Si arriva a **una colonna oltre** l'ultima scritta: la colonna d'ordine puo'
-    essere la prima libera in fondo, ed e' il caso di un listino che non ne ha
-    ancora una.  `fino_a` allunga il conto — serve quando la colonna d'ordine di
-    oggi e' gia' oltre l'ultima colonna con qualcosa dentro, come su CIPRESSO,
-    dove la G e' vuota su tutte e 3372 le righe e nel profilo non compare
-    proprio: senza, l'unica colonna che non si potrebbe scegliere sarebbe quella
-    accanto a quella in uso.
+    Goes one column past the last one with data: the order column can be the
+    first empty one past the end, for a price list that doesn't have one
+    yet. `fino_a` extends the range further, for the case where today's
+    order column is already past the last column that has any data in the
+    profile at all; without it, the one column that couldn't be chosen would
+    be the one right next to the one already in use.
     """
 
     fogli = fogli_del_profilo(profilo)
@@ -1393,17 +1369,19 @@ def mappatura_effettiva(
     adattatore: dict[str, Any] | None,
     decisione: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Le colonne che il programma usa davvero per leggere QUESTO documento.
+    """The columns the program actually uses to read this document.
 
-    Non e' una proposta e non e' una ricostruzione: e' la dichiarazione che i
-    lettori seguono, risolta sul documento con `registro.posizione_del_campo` e
-    `registro.indice_della_colonna` — le stesse due funzioni che usa la verifica
-    delle posizioni durante il riconoscimento e il writer prima di scrivere una
-    quantita'.  Se un giorno il registro e il lettore non dicessero piu' la
-    stessa cosa, questa tabella lo mostrerebbe invece di nasconderlo.
+    Not a proposal and not a reconstruction: it's the declaration the
+    readers follow, resolved against the document with
+    `registro.posizione_del_campo` and `registro.indice_della_colonna` — the
+    same two functions used by position verification during recognition and
+    by the writer before it writes an order quantity. If the registry and
+    the reader ever disagreed, this table would show it instead of hiding
+    it.
 
-    Restituisce sempre qualcosa: un documento di cui non si sa niente esce con
-    `colonne: []` e `riconosciuto: False`, che in pagina e' l'informazione utile.
+    Always returns something: a document nothing is known about comes back
+    with an empty column list and `recognised: False`, which is itself
+    useful information for the page.
     """
 
     from registro import indice_della_colonna, posizione_del_campo  # noqa: PLC0415
@@ -1419,10 +1397,10 @@ def mappatura_effettiva(
     firma_osservata = firma_osservata if isinstance(firma_osservata, dict) else {}
 
     ruolo = str(decisione.get("role") or ("master" if adattatore.get("kind") == "master" else "supplier"))
-    # La riga delle intestazioni: quella confermata vince su quella osservata dal
-    # riconoscimento, che vince sul ripiego dichiarato nel registro. Il ripiego
-    # per ultimo di proposito — `gestionale_v1` lo dichiara «1» sapendo che
-    # nell'export vero e' la 2.
+    # Header row: the confirmed one wins over the one observed during
+    # recognition, which wins over the registry's own fallback. The
+    # fallback comes last on purpose — `gestionale_v1` declares row 1 even
+    # though the real export's header is on row 2.
     riga_intestazioni = _primo_numero(
         mappatura.get("header_row"), firma_osservata.get("header_row"), firma_registro.get("header_row")
     )
@@ -1454,8 +1432,8 @@ def mappatura_effettiva(
             continue
         indice = indice_della_colonna(intestazioni, dichiarata)
         if indice is None:
-            # Dichiarata e non trovata: e' esattamente il caso che l'utente deve
-            # poter vedere, non uno da saltare in silenzio.
+            # Declared but not found: exactly the case the user needs to
+            # see, not one to skip silently.
             colonne.append({
                 "campo": campo,
                 "etichetta": _etichetta_del_campo(campo),
@@ -1493,11 +1471,10 @@ def mappatura_effettiva(
         "dataStartRow": riga_dati,
         "orderColumn": ordine,
         "columns": colonne,
-        # Da dove vengono le offerte di questo fornitore, se qualcuno l'ha
-        # dichiarato. `None` vuol dire che non le legge nessuno — che oggi e' il
-        # caso di tutti tranne LARICE — ed e' un'informazione, non un vuoto:
-        # e' la differenza fra «questo fornitore non fa offerte» e «le fa e non
-        # gliele stiamo leggendo».
+        # Where this supplier's promotions come from, if anyone declared it.
+        # `None` means nobody reads them — the common case — and that's
+        # itself information: the difference between "this supplier has no
+        # promotions" and "it has them and we're not reading them".
         "commercialConditions": _condizioni_dichiarate(adattatore, mappatura, intestazioni),
         "origin": _origine_della_mappatura(decisione, adattatore),
         "recognised": bool(colonne),
@@ -1507,7 +1484,7 @@ def mappatura_effettiva(
 def _condizioni_dichiarate(
     adattatore: dict[str, Any], mappatura: dict[str, Any], intestazioni: list[Any]
 ) -> dict[str, Any] | None:
-    """La dichiarazione delle condizioni commerciali, risolta sul documento."""
+    """The commercial-conditions declaration, resolved against the document."""
 
     from registro import indice_della_colonna  # noqa: PLC0415
 
@@ -1549,10 +1526,11 @@ def _primo_numero(*candidati: Any) -> int | None:
 def _colonna_d_ordine(
     adattatore: dict[str, Any], mappatura: dict[str, Any], intestazioni: list[Any]
 ) -> dict[str, Any] | None:
-    """La colonna in cui il writer scrivera' le quantita', se ce n'e' una.
+    """The column the writer fills with order quantities, if there is one.
 
-    Sta a fianco delle altre e non dentro l'elenco: non e' una colonna che si
-    legge, e' l'unica che il programma **scrive** sulla copia del listino.
+    Reported alongside the other columns rather than inside the list: it
+    isn't a column that's read, it's the one column the program writes to,
+    on the price list's copy.
     """
 
     dichiarata = mappatura.get("order_column") or (adattatore.get("order_write") or {}).get("order_column")
@@ -1575,14 +1553,14 @@ def _colonna_d_ordine(
 
 
 def _origine_della_mappatura(decisione: dict[str, Any], adattatore: dict[str, Any]) -> str:
-    """Da dove viene questa assegnazione.
+    """Where this assignment comes from.
 
-    Due valori soli, perche' due sono le risposte che cambiano qualcosa per chi
-    guarda: **confermata** (l'ha indicata l'utente in pagina, e vale solo per
-    questo documento) oppure **registro** (sta in `references/adapters.json`,
-    che sia nativa o imparata la settimana scorsa).  Nativa contro imparata e'
-    una distinzione vera ma inerte: non cambia ne' quello che si vede ne'
-    quello che si puo' fare.
+    Only two values, because only two answers change anything for the
+    reader: "confermata" (the user set it in the page, valid for this
+    document only) or "registro" (it lives in `references/adapters.json`,
+    whether shipped or locally learned). Shipped vs. learned is a real
+    distinction but an inert one here — it changes neither what's shown nor
+    what can be done.
     """
 
     conferma = decisione.get("user_confirmation")

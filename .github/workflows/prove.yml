@@ -1,9 +1,8 @@
-# Le prove, su Windows, prima che il codice arrivi al PC che lo esegue.
+# Tests, on Windows, before the code reaches the machine that runs it.
 #
-# Perche' esiste. Il programma installato si aggiorna da solo dal ramo
-# predefinito a ogni avvio (`fetch` + `reset --hard`): fra un push e un ordine
-# sbagliato non c'e' nessun passaggio umano. Questa e' la rete di sicurezza.
-#
+# The installed program self-updates from the default branch on every
+# launch (`fetch` + `reset --hard`): there's no human step between a push
+# and a wrong order. This is the safety net for that.
 
 name: Prove
 
@@ -13,29 +12,31 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Tre push di fila non pagano tre esecuzioni: le prime due si annullano da sole.
+# Three pushes in a row don't pay for three runs: the first two cancel
+# themselves.
 concurrency:
   group: prove-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   windows:
-    name: Windows — la macchina del negozio
+    name: Windows — the store's machine
     runs-on: windows-latest
-    # La suite misurata dura ~6 minuti. Il tetto e' per il caso in cui un passo
-    # si impianti: senza, un collaudo appeso brucerebbe il monte ore da solo.
+    # The measured suite takes about 6 minutes. The cap covers a stuck step:
+    # without it, a hung test would burn through the runner budget on its
+    # own.
     timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v7
 
-      - name: Il lanciatore si legge senza errori di sintassi
+      - name: Launcher script parses without syntax errors
         shell: pwsh
         run: |
-          # AVVIA_COMPARATORE.ps1 e' il file che, se si rompe, vuol dire «il
-          # programma non parte». Non lo prova nessun collaudo, e chi sviluppa
-          # su Mac non ha PowerShell per accorgersene. Qui almeno si controlla
-          # che si legga.
+          # AVVIA_COMPARATORE.ps1 breaking means "the program doesn't
+          # start". No test suite exercises it, and PowerShell isn't
+          # available to a Mac-based developer to notice. This at least
+          # checks that it parses.
           $rotto = $false
           foreach ($script in @("AVVIA_COMPARATORE.ps1")) {
             $errori = $null
@@ -53,42 +54,43 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          # La stessa riga installata sul PC del negozio il 19 agosto 2026.
+          # Matches the version installed on the store PC.
           python-version: '3.13'
 
       - uses: actions/setup-node@v5
         with:
-          # La stessa del negozio. Serve al writer che scrive i listini, che
-          # usa solo la libreria standard di Node: non si installa niente.
+          # Matches the store's version too. Only needed by the writer that
+          # patches price lists, which uses Node's standard library only —
+          # nothing gets installed.
           node-version: '24'
 
-      - name: Le dipendenze — soltanto quelle che ha il negozio
-        # Dal file, non a mano: se un giorno la riga qui e quella di
-        # `requirements.txt` divergono, la CI prova con una versione che il
-        # negozio non ha e nessuno se ne accorge.
+      - name: Dependencies — only what the store has installed
+        # From the file, not typed by hand: if this line and
+        # `requirements.txt` ever diverge, CI would test against a version
+        # the store doesn't have, unnoticed.
         run: python -m pip install --disable-pip-version-check -r requirements.txt
 
-      # ⚠ `lxml` NON si installa, ed e' voluto. openpyxl serializza con lxml
-      # quando lo trova e con xml.etree quando non lo trova, e le due scrivono
-      # l'elemento vuoto in modo diverso: e' costato tre collaudi rossi sul PC
-      # del negozio che qui passavano.  Questa
-      # macchina deve somigliare al negozio, non al Mac di chi sviluppa.
-      - name: Con che cosa stiamo provando
+      # `lxml` is deliberately NOT installed. openpyxl serializes with lxml
+      # when available and with xml.etree otherwise, and the two write an
+      # empty element differently — a mismatch that has caused tests to fail
+      # on the store PC while passing here. This runner needs to match the
+      # store, not a developer's machine.
+      - name: What we're testing against
         run: |
           python -c "import sys, openpyxl; from openpyxl.xml import LXML; print('Python', sys.version); print('openpyxl', openpyxl.__version__, '| usa lxml:', LXML)"
           node --version
 
-      - name: La suite
-        # Sempre con `discover`, mai il modulo singolo: altrimenti diciannove
-        # classi diventano `skipped` in silenzio.
+      - name: Test suite
+        # Always via `discover`, never a single module: otherwise several
+        # test classes get silently skipped.
         run: python -m unittest discover -s tests -p "test_*.py"
 
   browser:
-    name: Ubuntu — le prove che premono i pulsanti
+    name: Ubuntu — the UI click-through tests
     runs-on: ubuntu-latest
-    # Girano in due secondi e mezzo misurati; il tetto e' per il caso in cui il
-    # server di prova non si alzi. Su ubuntu, che costa meta' di windows: qui
-    # non si prova il sistema, si prova la pagina.
+    # Measured at a couple of seconds; the cap covers the test server
+    # failing to start. Runs on Ubuntu, half the cost of Windows: this job
+    # tests the page, not the OS.
     timeout-minutes: 10
 
     steps:
@@ -102,22 +104,22 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Le dipendenze del programma
+      - name: Program dependencies
         run: python -m pip install --disable-pip-version-check -r requirements.txt
 
-      - name: Playwright e il suo browser
+      - name: Playwright and its browser
         working-directory: prove-browser
-        # `--with-deps` installa anche le librerie di sistema che chromium vuole
-        # su una macchina nuda: senza, il browser si alza e muore subito.
+        # `--with-deps` also installs the system libraries chromium needs on
+        # a bare runner: without it, the browser starts and dies immediately.
         run: |
           npm ci
           npx playwright install --with-deps chromium
 
-      - name: Le prove
+      - name: Run the tests
         working-directory: prove-browser
         run: npx playwright test
 
-      - name: Se e' andata storta, la traccia
+      - name: Trace, on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:

@@ -1,15 +1,14 @@
-"""Quali colonne il programma legge in ogni documento, e chi puo' correggerle.
+"""Which columns each reader picks up, and how a manual correction reaches it.
 
-Due cose che prima non esistevano e che vanno insieme:
+Two things that work together:
 
-* `schema_mapping.mappatura_effettiva` dice, per un documento **riconosciuto**,
-  quale colonna diventa il prezzo, quale l'EAN, quale i pezzi per collo. Prima
-  l'assegnazione si poteva vedere solo quando il programma NON riconosceva il
-  file, cioe' nel caso raro; nella settimana normale era invisibile;
-* i tre lettori cablati (gestionale, BETULLA, Larice) accettano colonne diverse
-  da quelle predefinite, cosi' una correzione fatta a mano puo' raggiungerli
-  **senza cambiare lettore** — mandare Larice al lettore generico vuol dire
-  perdere espositori e soglie con omaggio.
+* `schema_mapping.mappatura_effettiva` reports, for a recognised document, which
+  column feeds each field (price, EAN, pieces per carton). This is otherwise
+  only observable when the document is unrecognised.
+* the wired readers (gestionale, BETULLA, Larice) accept column overrides on top
+  of their defaults, so a manual correction can reach them without switching to
+  the generic reader — routing Larice through the generic reader loses displays
+  and free-goods thresholds it knows how to parse.
 """
 
 from __future__ import annotations
@@ -40,7 +39,7 @@ def adattatori_veri() -> dict[str, dict]:
 
 
 class MappaturaEffettivaTests(unittest.TestCase):
-    """La tabella dice quello che il lettore fa, non quello che sembra."""
+    """`mappatura_effettiva` reports what the reader actually does, not the declared mapping."""
 
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -72,7 +71,7 @@ class MappaturaEffettivaTests(unittest.TestCase):
         esito = schema_mapping.mappatura_effettiva(profilo, self.adattatori["betulla_v1"], decisione)
         per_campo = {voce["campo"]: voce for voce in esito["columns"]}
 
-        # Le stesse posizioni che legge `read_betulla`: prezzo da row[5], cioe' F.
+        # Same positions `read_betulla` uses: price from row[5], i.e. column F.
         self.assertEqual(per_campo["ean"]["lettera"], "A")
         self.assertEqual(per_campo["description"]["lettera"], "D")
         self.assertEqual(per_campo["pieces_per_carton"]["lettera"], "E")
@@ -82,8 +81,8 @@ class MappaturaEffettivaTests(unittest.TestCase):
         self.assertEqual(esito["origin"], "registro")
 
     def test_porta_un_valore_vero_della_colonna_e_non_solo_l_intestazione(self) -> None:
-        # Un'intestazione puo' mentire, un valore no: e' l'unico modo di
-        # rispondere a «e' davvero questa la colonna del prezzo?».
+        # A header can be wrong; a sample value from the actual data is the only
+        # way to confirm which column really holds the price.
         profilo = self.profilo_betulla()
         decisione = {"role": "supplier", "adapter_id": "betulla_v1"}
 
@@ -103,9 +102,8 @@ class MappaturaEffettivaTests(unittest.TestCase):
         self.assertEqual(indici, sorted(indici))
 
     def test_una_colonna_dichiarata_che_non_c_e_piu_si_dichiara(self) -> None:
-        # E' il caso per cui la tabella esiste: il registro promette una colonna
-        # e il documento non ce l'ha. Saltarla in silenzio sarebbe la malattia
-        # che si voleva curare.
+        # The adapter registry declares a column that this document lacks;
+        # silently skipping it would hide exactly the mismatch this table exists to surface.
         profilo = self.foglio("betulla-senza-prezzo.xlsx", [
             ["EAN", "CodArt", "ORDINE", "Descr.Commerciale", "PzCt", "Pedana", "Iva"],
             ["8000000000001", "1300634", None, "VAPO Emanatore", 12, 64, 22],
@@ -121,9 +119,9 @@ class MappaturaEffettivaTests(unittest.TestCase):
         self.assertIsNone(per_campo["unit_price_net"]["colonna"])
 
     def test_il_gestionale_dichiara_i_colli_che_la_proposta_automatica_perde(self) -> None:
-        # `suggerisci_colonne` si ferma perche' «Colli» e «Quantita» sono due
-        # alias dello stesso campo e la proposta rifiuta l'ambiguita': va bene
-        # per proporre, non per raccontare quello che il lettore ha gia' fatto.
+        # `suggerisci_colonne` bails out here because "Colli" and "Quantita" are
+        # two aliases for the same field and it refuses the ambiguity; that's fine
+        # for a proposal but not for reporting what the reader already did.
         profilo = self.foglio("gestionale.xlsx", [
             ["T", "OF", "33", "del", "14/08/2026"],
             [None, "Codice", "Cod. Int.", "Descrizione", "UM", "Colli", "Quantità", "Prezzo", "Sconto", "IVA"],
@@ -166,7 +164,7 @@ class MappaturaEffettivaTests(unittest.TestCase):
 
 
 class ColonneCorretteAiLettoriCablatiTests(unittest.TestCase):
-    """Una correzione delle colonne raggiunge i lettori senza cambiarli."""
+    """A column correction reaches the wired readers without swapping to the generic one."""
 
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -199,8 +197,8 @@ class ColonneCorretteAiLettoriCablatiTests(unittest.TestCase):
         self.assertEqual(risultato["ean"], prepare_sources.COLONNE_PREDEFINITE_BETULLA["ean"])
 
     def test_una_colonna_indicata_male_ferma_invece_di_leggere_quella_di_prima(self) -> None:
-        # Ignorarla vorrebbe dire tornare in silenzio alla predefinita: chi ha
-        # corretto crederebbe di aver corretto, e i prezzi resterebbero quelli.
+        # Falling back to the default silently would leave the operator believing
+        # the correction took effect while the old prices keep being read.
         with self.assertRaises(ValueError):
             prepare_sources.colonne_con_predefinite(
                 prepare_sources.COLONNE_PREDEFINITE_BETULLA, {"unit_price_net": "non una colonna"}
@@ -217,7 +215,7 @@ class ColonneCorretteAiLettoriCablatiTests(unittest.TestCase):
 
         self.assertEqual(di_serie[0]["unit_price_net"], "3.9800")
         self.assertEqual(corretto[0]["unit_price_net"], "9.9900")
-        # Il resto del record non cambia: si e' corretta una colonna, non il lettore.
+        # The rest of the record is unaffected: only one column changed, not the reader.
         self.assertEqual(corretto[0]["ean"], di_serie[0]["ean"])
         self.assertEqual(corretto[0]["description"], di_serie[0]["description"])
 
@@ -248,7 +246,7 @@ class ColonneCorretteAiLettoriCablatiTests(unittest.TestCase):
 
 
 class ColonneDelManifestTests(unittest.TestCase):
-    """Solo la decisione corregge: la field_mapping del registro non è una correzione."""
+    """Only the operator's decision counts as a correction, not the registry's own `field_mapping`."""
 
     def test_la_field_mapping_dell_adattatore_non_arriva_al_lettore_cablato(self) -> None:
         from prepare_manifest_sources import colonne_corrette
@@ -272,8 +270,8 @@ class ColonneDelManifestTests(unittest.TestCase):
         self.assertEqual(colonne_corrette(decisione, {}, "noce_csv_v1"), {})
 
     def test_il_gestionale_non_riceve_una_colonna_d_ordine(self) -> None:
-        # Il gestionale non si compila: passargli `order_column` sarebbe un
-        # argomento che quel lettore non ha.
+        # The gestionale export is never written back to; `order_column` is not
+        # a parameter this reader accepts.
         from prepare_manifest_sources import colonne_corrette
 
         decisione = {"field_mapping": {"columns": {"ean": "C"}, "order_column": "J"}}

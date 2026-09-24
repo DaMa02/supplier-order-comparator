@@ -1,8 +1,8 @@
-"""Il catalogo dei fornitori: chi lo legge, con quale lettore, e chi resta fuori.
+"""The supplier catalog: who reads what, with which reader, and who gets left out.
 
-Fase 9b. Due difetti stavano qui: il listino Noce in Excel 97-2003 veniva
-mandato lo stesso al lettore CSV, e l'eccezione che ne usciva portava giu' i
-cataloghi di *tutti* i fornitori, non solo il suo.
+Two defects lived here: a legacy Excel 97-2003 price list was still routed to
+the CSV reader, and the exception it raised took down every supplier's
+catalog, not just that one's.
 """
 
 from __future__ import annotations
@@ -26,8 +26,8 @@ for cartella in (SKILL_ROOT / "app", SKILL_ROOT / "scripts", TESTS):
 
 from catalog_search import SupplierCatalog  # noqa: E402
 
-# Lo scrittore del listino Noce in .xls sta gia' nel collaudo della
-# pipeline: costruisce un OLE2 vero con record BIFF8 veri.
+# The .xls price-list writer already lives in the pipeline test suite: it
+# builds a real OLE2 file with real BIFF8 records.
 import test_schema_pipeline as pipeline  # noqa: E402
 
 
@@ -67,7 +67,7 @@ def scrivi_cipresso(percorso: Path) -> Path:
 
 
 def scrivi_noce_csv(percorso: Path) -> Path:
-    """Il vecchio catalogo estratto dal sito: deve continuare a funzionare."""
+    """The legacy catalog extracted from the website; it must keep working."""
     with percorso.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=[
             "catalog_page", "ean", "product", "packaging", "availability", "variation", "price", "unit",
@@ -99,12 +99,12 @@ class CatalogoFornitoriTests(unittest.TestCase):
     def review(self, *file_voci: dict[str, object]) -> dict[str, object]:
         return {"files": list(file_voci), "products": []}
 
-    # Con quale adattatore il registro riconosce il listino di ciascun
-    # fornitore di collaudo. Non e' decorazione: `adapterId` e `schemaState`
-    # sono i due campi con cui il catalogo sceglie il lettore, gli stessi su
-    # cui decide la catena. Una review vera li porta sempre — li scrive
-    # `build_review_data.manifest_files` — e una `voce` che non li dichiarava
-    # descriveva una review che non esiste.
+    # Which adapter the registry uses to recognize each test supplier's price
+    # list. Not decoration: `adapterId` and `schemaState` are the two fields
+    # the catalog uses to pick a reader, the same ones the pipeline decides
+    # on. A real review always carries them — `build_review_data.
+    # manifest_files` writes them — so a `voce` without them would describe a
+    # review that cannot exist.
     ADATTATORE_PREDEFINITO = {
         "noce": "noce_xls_v1",
         "betulla": "betulla_v1",
@@ -131,13 +131,14 @@ class CatalogoFornitoriTests(unittest.TestCase):
             "fieldMapping": mapping or {},
         }
 
-    # -- il lettore lo sceglie la decisione, non il nome del fornitore -------
+    # -- the reader is chosen by the mapping decision, not by the supplier's name --
     #
-    # Il difetto del 21 agosto 2026: un listino promozionale dichiarato «BETULLA»
-    # nella mappatura guidata. La catena lo leggeva col lettore generico —
-    # `SCHEMA_VARIATO` non entra fra i lettori a schema noto — e questo modulo
-    # lo mandava a `read_betulla` per il solo fatto che il fornitore si chiamava
-    # betulla. BETULLA restava nel confronto e spariva dal visualizzatore.
+    # A promotional price list declared "BETULLA" in a guided mapping. The
+    # pipeline reads it with the generic reader — `SCHEMA_VARIATO` is not one
+    # of the known-schema readers — and this module must not route it to
+    # `read_betulla` just because the supplier is named betulla: doing so
+    # keeps the supplier in the comparison while making it disappear from
+    # the catalog viewer.
 
     MAPPATURA_A_MANO = {
         "sheet": "FIRST",
@@ -149,7 +150,7 @@ class CatalogoFornitoriTests(unittest.TestCase):
     }
 
     def scrivi_senza_intestazioni(self, percorso: Path) -> Path:
-        """Un foglio che NON ha le intestazioni che `read_betulla` pretende."""
+        """A sheet that does NOT have the headers `read_betulla` requires."""
         workbook = Workbook()
         sheet = workbook.active
         sheet.title = "Foglio1"
@@ -160,7 +161,7 @@ class CatalogoFornitoriTests(unittest.TestCase):
         return percorso
 
     def test_un_listino_letto_dal_generico_nella_catena_non_va_al_lettore_dedicato(self) -> None:
-        """LA prova del difetto: schema variato e confermato a mano, fornitore BETULLA."""
+        """The regression test: a varied schema confirmed by hand, supplier BETULLA."""
         percorso = self.scrivi_senza_intestazioni(self.radice / "offerte.xlsx")
         catalogo = SupplierCatalog()
         review = self.review(self.voce(
@@ -178,13 +179,13 @@ class CatalogoFornitoriTests(unittest.TestCase):
         self.assertEqual(pagina["righe"][0]["unitPriceNet"], 1.85)
 
     def test_una_variazione_imparata_qui_resta_lo_stesso_fornitore(self) -> None:
-        """`betulla_v1__locale` e' BETULLA, e deve passare da `read_betulla`.
+        """`betulla_v1__locale` is BETULLA, and must still go through `read_betulla`.
 
-        ⚠ Dal 22 agosto 2026 quello che si impara sopra un adattatore spedito
-        prende un id suo. Tutti i punti che decidono per identificativo devono
-        risolvere l'id base, altrimenti imparare una variazione manderebbe il
-        fornitore al lettore generico — che legge le stesse colonne ma non fa il
-        resto. `pallet` lo legge solo `read_betulla`: e' la spia.
+        A learned adapter built on top of a shipped one gets its own id. Every
+        place that decides by adapter id must resolve back to the base id,
+        otherwise a learned variation would route the supplier to the generic
+        reader, which reads the same columns but skips the rest. `pallet` is
+        read only by `read_betulla`, so it's the tell.
         """
 
         percorso = self.radice / "betulla-locale.xlsx"
@@ -204,10 +205,10 @@ class CatalogoFornitoriTests(unittest.TestCase):
         self.assertEqual(riga["pallet"], 120)
 
     def test_lo_stesso_fornitore_con_schema_noto_va_al_lettore_dedicato(self) -> None:
-        """Il gemello: correggere il difetto non vuol dire mandare tutto al generico.
+        """The counterpart: fixing the defect must not route everything to the generic reader.
 
-        `pallet` lo legge soltanto `read_betulla`, per posizione: se comparisse il
-        lettore generico quel campo non ci sarebbe.
+        `pallet` is read only by `read_betulla`, by column position: if the
+        generic reader were used instead, that field would be missing.
         """
         percorso = self.radice / "betulla.xlsx"
         workbook = Workbook()
@@ -227,7 +228,7 @@ class CatalogoFornitoriTests(unittest.TestCase):
         self.assertEqual(riga["description"], "SAPONE BETULLA")
 
     def test_un_fornitore_scartato_dice_sempre_perche(self) -> None:
-        """La sparizione silenziosa: `_read_sources` scartava senza dire niente."""
+        """Guards against `_read_sources` silently dropping a rejected supplier."""
         percorso = self.scrivi_senza_intestazioni(self.radice / "sconosciuto.xlsx")
         catalogo = SupplierCatalog()
         review = self.review(self.voce("acero", percorso, adattatore="", stato="NUOVO_FORNITORE"))
@@ -237,7 +238,7 @@ class CatalogoFornitoriTests(unittest.TestCase):
         self.assertIn("ACERO", catalogo.load_errors[0]["message"].upper())
 
     def test_il_gestionale_non_finisce_fra_i_listini_da_sfogliare(self) -> None:
-        """Restava fuori per un incidente; adesso è una regola che si legge."""
+        """The management-software file must never end up among the browsable catalogs."""
         gestionale = self.scrivi_senza_intestazioni(self.radice / "gestionale.xlsx")
         catalogo = SupplierCatalog()
         review = self.review(
@@ -259,7 +260,7 @@ class CatalogoFornitoriTests(unittest.TestCase):
     # -- il listino .xls entra davvero -------------------------------------
 
     def test_il_listino_xls_di_noce_entra_nel_catalogo(self) -> None:
-        """Senza mappatura nella review: la prende dal registro degli adattatori."""
+        """With no mapping in the review, it falls back to the adapter registry."""
         catalogo = SupplierCatalog()
 
         risultati = catalogo.search(self.review(self.voce("noce", self.listino_xls)), "casseruola")
@@ -272,7 +273,7 @@ class CatalogoFornitoriTests(unittest.TestCase):
         self.assertEqual(catalogo.load_errors, [])
 
     def test_le_righe_alimentari_non_entrano_nel_catalogo(self) -> None:
-        """L'utente non tratta il FOOD: quelle righe non devono nemmeno comparire."""
+        """The store does not sell food: those rows must not show up at all."""
         catalogo = SupplierCatalog()
         review = self.review(self.voce("noce", self.listino_xls))
 
@@ -281,7 +282,7 @@ class CatalogoFornitoriTests(unittest.TestCase):
         self.assertEqual(len(catalogo.search(review, "sapone")), 1)
 
     def test_il_csv_di_noce_continua_a_essere_letto(self) -> None:
-        """Il formato lo dicono i byte: il vecchio CSV non deve essersi rotto."""
+        """The format is decided by content, not extension: the legacy CSV must still work."""
         catalogo = SupplierCatalog()
         percorso = scrivi_noce_csv(self.radice / "noce_catalog.csv")
 
@@ -296,10 +297,10 @@ class CatalogoFornitoriTests(unittest.TestCase):
     # -- un fornitore rotto non ne trascina altri ---------------------------
 
     def test_il_xls_di_noce_non_fa_cadere_i_cataloghi_degli_altri(self) -> None:
-        """Il difetto di partenza: l'.xls andava al lettore CSV e cadeva tutto.
+        """One bad `.xls` sent to the CSV reader must not take other suppliers down with it.
 
-        Qui il listino Noce si legge, ma la prova vera e' che CIPRESSO
-        arrivi comunque all'utente.
+        The supplier with the broken file still fails, but the test that
+        matters is that the other supplier's catalog still reaches the user.
         """
         catalogo = SupplierCatalog()
         cipresso = scrivi_cipresso(self.radice / "cipresso.xlsx")
@@ -348,8 +349,8 @@ class CatalogoFornitoriTests(unittest.TestCase):
     # -- le righe alimentari non entrano da nessuna porta -------------------
 
     def test_una_mappatura_della_review_senza_esclusione_del_food_viene_rifiutata(self) -> None:
-        """La mappatura della review ha la precedenza: se non scarta il FOOD,
-        entrerebbero migliaia di articoli alimentari senza un solo errore."""
+        """The review's mapping takes precedence: if it doesn't exclude FOOD
+        rows, thousands of food items would get in without a single error."""
         catalogo = SupplierCatalog()
         senza_esclusione = {chiave: valore for chiave, valore in MAPPATURA_NOCE.items() if chiave != "exclude_rows"}
         review = self.review(self.voce("noce", self.listino_xls, senza_esclusione))
@@ -360,8 +361,8 @@ class CatalogoFornitoriTests(unittest.TestCase):
         self.assertIn("non scarta le righe alimentari", catalogo.load_errors[0]["message"])
 
     def test_una_mappatura_della_review_aggiornata_prevale_sull_adattatore(self) -> None:
-        """Il caso opposto: il fornitore rinomina una colonna, Codex conferma la
-        mappatura nuova, e il listino deve entrare nonostante il registro."""
+        """The opposite case: a supplier renames a column, the new mapping gets
+        confirmed, and the price list must load despite what the registry says."""
         catalogo = SupplierCatalog()
         intestazioni = tuple(
             "categoria_merceologica" if nome == "cat" else nome
@@ -383,7 +384,7 @@ class CatalogoFornitoriTests(unittest.TestCase):
     # -- gli altri modi di sparire ------------------------------------------
 
     def test_un_listino_che_non_c_e_piu_viene_detto_e_non_sparisce_in_silenzio(self) -> None:
-        """Il modo più comune: il file viene spostato o rinominato sul Desktop."""
+        """The common case: the file gets moved or renamed on the operator's Desktop."""
         catalogo = SupplierCatalog()
         review = self.review(
             self.voce("noce", self.listino_xls),
@@ -427,7 +428,7 @@ class CatalogoFornitoriTests(unittest.TestCase):
         self.assertIn("nessuna riga ordinabile", catalogo.load_errors[0]["message"])
 
     def test_un_listino_cipresso_rinominato_csv_si_legge_lo_stesso(self) -> None:
-        """L'estensione non decide neanche per i fornitori mappati, non solo per Noce."""
+        """The extension doesn't decide the format for mapped suppliers either."""
         catalogo = SupplierCatalog()
         vero = scrivi_cipresso(self.radice / "vero.xlsx")
         travestito = self.radice / "cipresso_listino.csv"
@@ -441,14 +442,13 @@ class CatalogoFornitoriTests(unittest.TestCase):
     # -- come si chiamano i fornitori --------------------------------------
 
     def test_il_nome_di_un_fornitore_imparato_viene_dal_registro(self) -> None:
-        """Il nome dichiarato nel registro arriva fino all'offerta.
+        """The display name declared in the registry reaches the offer.
 
-        ⚠ Questo test prima usava un fornitore che nel registro **non c'era**,
-        quindi attraversava il solo ripiego — che è identico a una tabella
-        scritta a mano, ed è per questo che il revisore dell'integrità dei test
-        ha potuto rimettere la tabella cablata lasciando 238 test verdi. Qui il
-        registro dichiara «Sapori & Co.», che nessuna regola sull'identificativo
-        saprebbe inventare.
+        This test uses a supplier that the registry actually declares, with a
+        display name — "Sapori & Co." — that no fallback rule derived from
+        the identifier could invent. A test exercising only the fallback path
+        (identical to a hardcoded table) would not catch a registry lookup
+        that silently stopped happening.
         """
 
         import catalog_search
@@ -482,7 +482,7 @@ class CatalogoFornitoriTests(unittest.TestCase):
         self.assertEqual(offerta["supplierName"], "Sapori & Co.")
 
     def test_un_fornitore_che_il_registro_non_conosce_si_legge_lo_stesso(self) -> None:
-        """Il ripiego: `nuovo_fornitore_1` non diventa una frase con gli underscore."""
+        """The fallback: `nuovo_fornitore_1` doesn't turn into a phrase with underscores."""
 
         percorso = scrivi_cipresso(self.radice / "ignoto.xlsx")
         catalogo = SupplierCatalog()
@@ -495,10 +495,10 @@ class CatalogoFornitoriTests(unittest.TestCase):
         self.assertEqual(risultati[0]["offers"][0]["supplierName"], "NUOVO FORNITORE 1")
 
     def test_i_fornitori_di_oggi_si_chiamano_come_prima(self) -> None:
-        """L'altra meta' della regola: il registro dice gli stessi quattro nomi.
+        """The other half of the rule: the registry gives the same supplier names as before.
 
-        Un cambio di sorgente che cambiasse anche i nomi in pagina sarebbe una
-        correzione con una regressione dentro.
+        A source change that also changed the on-screen names would be a
+        correction hiding a regression.
         """
 
         percorso = scrivi_cipresso(self.radice / "cipresso.xlsx")
@@ -512,7 +512,7 @@ class CatalogoFornitoriTests(unittest.TestCase):
         self.assertEqual(risultati[0]["offers"][0]["supplierName"], "CIPRESSO")
 
     def test_senza_il_registro_degli_adattatori_il_motivo_nomina_il_registro(self) -> None:
-        """Registro assente e review incompleta sono due guasti diversi."""
+        """A missing registry and an incomplete review are two different failures."""
         import catalog_search
 
         catalogo = SupplierCatalog()
@@ -527,7 +527,7 @@ class CatalogoFornitoriTests(unittest.TestCase):
         self.assertIn("registro degli adattatori", catalogo.load_errors[0]["message"])
 
     def test_un_guasto_senza_parole_non_lascia_il_messaggio_a_meta(self) -> None:
-        """`str(MemoryError())` è vuoto: l'avviso non deve finire con i due punti."""
+        """`str(MemoryError())` is empty: the warning must not end with a trailing colon."""
         import catalog_search
 
         catalogo = SupplierCatalog()
@@ -547,7 +547,7 @@ class CatalogoFornitoriTests(unittest.TestCase):
         self.assertEqual(catalog_search._motivo(ValueError("motivo scritto")), "motivo scritto")
 
     def test_un_listino_illeggibile_non_viene_riaperto_a_ogni_ricerca(self) -> None:
-        """Senza memoria dell'errore, ogni tasto digitato riaprirebbe il file."""
+        """Without caching the error, every keystroke would reopen the broken file."""
         catalogo = SupplierCatalog()
         rotto = self.radice / "larice.xlsx"
         rotto.write_bytes(b"questo non e' un foglio di calcolo")

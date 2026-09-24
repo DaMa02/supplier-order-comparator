@@ -36,8 +36,8 @@ TESTS = Path(__file__).resolve().parent
 if str(TESTS) not in sys.path:
     sys.path.insert(0, str(TESTS))
 
-# Il listino Noce in .xls lo costruisce gia' il collaudo della pipeline:
-# un OLE2 vero con dentro record BIFF8 veri, non un file finto.
+# The pipeline's own test already builds the Noce .xls file: a real OLE2
+# with real BIFF8 records, not a fake one.
 import test_schema_pipeline as pipeline  # noqa: E402
 
 SERVER_SPEC = importlib.util.spec_from_file_location("compara_ordini_web_server", SERVER_PATH)
@@ -47,14 +47,14 @@ SERVER = importlib.util.module_from_spec(SERVER_SPEC)
 SERVER_SPEC.loader.exec_module(SERVER)
 
 ReviewStore = SERVER.ReviewStore
-# Lo stesso modulo che usa il servizio: le date del rinvio le calcola lui.
+# Same module the service uses: it computes the deferral dates itself.
 ORDER_HISTORY = SERVER.order_history
 SnapshotError = SERVER.SnapshotError
-# «Un lavoro per volta»: la stessa eccezione che il servizio traduce in 409.
+# One job at a time: the same exception the service translates to a 409.
 LavoroGiaInCorso = SERVER.LavoroGiaInCorso
 supplier_label = SERVER.supplier_label
-# Lo stesso `consegna` che il servizio ha caricato: le costanti dei tipi da
-# consegnare stanno li', e una seconda importazione darebbe un altro modulo.
+# The same `consegna` module the service loaded: the delivery-type constants
+# live there, and a second import would give a different module instance.
 consegna = SERVER.consegna
 
 SCRIPTS_DIR = SKILL_ROOT / "scripts"
@@ -64,7 +64,7 @@ import registro as registro_adattatori  # noqa: E402
 
 
 def importa_launcher() -> Any:
-    """Il lanciatore come modulo isolato, allo stesso modo degli altri test qui."""
+    """Import the launcher as an isolated module, like the other tests here."""
 
     percorso = SKILL_ROOT / "app" / "launcher.py"
     spec = importlib.util.spec_from_file_location("compara_ordini_launcher_prova", percorso)
@@ -131,10 +131,10 @@ def synthetic_review() -> dict[str, object]:
                         "supplierCode": "28246",
                         "sourceRow": 198,
                         "ean": "",
-                        # Come lo scrive `display_offer`: il prezzo al pezzo in
-                        # `unitPriceNet`, i pezzi dell'espositore in
-                        # `quantityFactor`, l'espositore intero in
-                        # `orderUnitPriceNet`. 442,1196 / 96 = 4,6054.
+                        # As `display_offer` writes it: price per piece in
+                        # `unitPriceNet`, the display's pieces in
+                        # `quantityFactor`, the whole display in
+                        # `orderUnitPriceNet`. 442.1196 / 96 = 4.6054.
                         "unitPriceNet": 4.6054,
                         "quantityFactor": 96,
                         "unitsPerOrderUnit": 96,
@@ -160,16 +160,10 @@ def synthetic_review() -> dict[str, object]:
 
 
 class LaFraseDellaCompilazione(unittest.TestCase):
-    """I sei casi della frase che l'utente legge a compilazione finita.
+    """The six branches of the message shown when a compile finishes.
 
-    Era una sessantina di righe innestate in sei rami dentro `compile`, che e'
-    la funzione piu' lunga del programma: si potevano guardare solo compilando
-    davvero, cioe' scrivendo file veri con Node. Adesso e' una funzione pura, e
-    i sei casi si provano con una tabella.
-
-    ⚠ La frase non e' solo quello che si legge a schermo: finisce anche
-    nell'audit della cartella, campo `messaggio`, che e' quello che resta fra
-    una settimana quando nessuno ricorda piu' com'era andata.
+    The message doubles as the audit trail: it also lands in the folder
+    audit's `messaggio` field, which is the only record left a week later.
     """
 
     PIANO = [{"tipo": "piano"}]
@@ -207,14 +201,10 @@ class LaFraseDellaCompilazione(unittest.TestCase):
         self.assertNotIn("configurazione di scrittura", frase)
 
     def test_col_writer_configurato_non_si_dice_di_configurarlo(self) -> None:
-        """⚠ «Non ci ha provato nessuno» e «ci ha provato e non ne e' uscito
-
-        niente» sono due cose diverse, e a separarle e' la configurazione, non
-        il fatto che ci sia un motivo da dire. La prima estrazione le
-        confondeva, e a chi la configurazione ce l'ha gia' completa faceva
-        leggere «completa la configurazione di scrittura» — nella pagina e
-        nell'audit della cartella, dove resta. Trovato dalla verifica
-        avversariale del 20 agosto 2026.
+        """'Never tried' and 'tried and got nothing' are different states,
+        and only the configuration flag tells them apart, not whether a
+        reason is given. A fully configured writer must not read "complete
+        the writer configuration".
         """
 
         senza_motivo = self.frase(writer_configurato=True, copie_non_create=[])
@@ -240,10 +230,10 @@ class LaFraseDellaCompilazione(unittest.TestCase):
         self.assertIn("Attenzione: La copia di LARICE non regge.", frase)
 
     def test_degli_avvisi_del_writer_resta_il_numero_e_non_il_testo(self) -> None:
-        """La pagina li elenca gia' da `writerIssues`: ripeterli qui li farebbe
-
-        comparire due volte sotto un titolo che li smentisce. Il numero resta,
-        perche' lo storico delle compilazioni ha il messaggio e non l'elenco."""
+        """The page already lists these via `writerIssues`; repeating them here
+        would show them twice under a title that contradicts them. Only the
+        count stays, since the compile history keeps the message, not the list.
+        """
 
         uno = self.frase(status="FILES_READY", avvisi_writer=["riga 12 sospetta"])
         due = self.frase(status="FILES_READY", avvisi_writer=["riga 12", "riga 40"])
@@ -270,11 +260,11 @@ class LaFraseDellaCompilazione(unittest.TestCase):
         )
 
     def test_le_copie_scartate_non_si_mescolano_agli_avvisi_del_writer(self) -> None:
-        """Quando NON e' stata creata nessuna copia il motivo sono le copie
+        """When NO copy was created, the discarded copies are the reason.
 
-        scartate. Gli avvisi del writer dicono «la quantita' e' stata scritta
-        lo stesso», e dentro una frase che dichiara che non e' stato creato
-        niente si contraddicono a vicenda."""
+        The writer warnings say "the quantity was written anyway", which
+        contradicts a sentence declaring nothing was created.
+        """
 
         frase = self.frase(
             writer_configurato=True,
@@ -288,17 +278,18 @@ class LaFraseDellaCompilazione(unittest.TestCase):
         self.assertNotIn("segnalazioni da leggere", frase)
 
 class IlConfrontoSiCostruisceUnaVoltaSola(unittest.TestCase):
-    """Ogni autosalvataggio ricostruiva il confronto due volte da zero.
+    """Each autosave must build the comparison exactly once, not twice.
 
-    `save_state` chiamava `validate_snapshot`, che costruisce il confronto per
-    sapere quali prodotti esistono; poi, scritto lo stato, lo ricostruiva. E
-    `base_review` rilegge e riparsa `review_data.json` per intero — 2,4 MB sul
-    confronto vero — piu' `upload_profiles.json`, il catalogo e gli sconti. La
-    pagina si autosalva 450 ms dopo ogni modifica: due volte per ogni quantita'
-    toccata, e il primo dei due risultati si buttava via.
+    `save_state` calls `validate_snapshot`, which builds the comparison to
+    know which products exist, and would otherwise rebuild it again after
+    writing the state. `base_review` re-reads and re-parses all of
+    `review_data.json` (2.4 MB on the real comparison), plus
+    `upload_profiles.json`, the catalog and the discounts. The page
+    autosaves 450 ms after every edit, so a double build on every quantity
+    change would throw the first result away for nothing.
 
-    ⚠ Qui si conta, non si cronometra: un test sul tempo passerebbe o
-    fallirebbe a seconda di quanto e' carica la macchina che lo esegue.
+    These tests count rebuilds instead of timing them, since a timing test
+    would be flaky depending on machine load.
     """
 
     def setUp(self) -> None:
@@ -321,7 +312,7 @@ class IlConfrontoSiCostruisceUnaVoltaSola(unittest.TestCase):
         }
 
     def conta_le_costruzioni(self, chiamata):
-        """Quante volte `base_review` ha riletto il confronto da disco."""
+        """Count how many times `base_review` re-read the comparison from disk."""
 
         vero = self.store.base_review
         conteggio: list[int] = []
@@ -338,11 +329,11 @@ class IlConfrontoSiCostruisceUnaVoltaSola(unittest.TestCase):
         return len(conteggio), esito
 
     def test_un_salvataggio_lo_costruisce_una_volta(self) -> None:
-        """⚠ Il primo salvataggio no, e non e' una dimenticanza: senza un
-
-        `state.json` sul disco lo stato non dichiara nessuna run, e il
-        confronto va rifatto (vedi la prova qui sotto). Quello che conta e' il
-        salvataggio di regime, che la pagina fa 450 ms dopo ogni modifica."""
+        """The first save is an exception, not an oversight: without a
+        `state.json` on disk the state declares no run, so the comparison
+        must be rebuilt (see the test below). What matters is the steady-state
+        save, which the page does 450 ms after every edit.
+        """
 
         primo = self.store.save_state(self.snapshot)
 
@@ -354,10 +345,9 @@ class IlConfrontoSiCostruisceUnaVoltaSola(unittest.TestCase):
         self.assertEqual(volte, 1)
 
     def test_anche_l_anteprima_dello_spostamento_lo_costruisce_una_volta(self) -> None:
-        """Qui vale sempre: l'anteprima non scrive niente, quindi il confronto
-
-        costruito dalla convalida e' letteralmente quello che si otterrebbe
-        rifacendolo."""
+        """Always true here: the preview writes nothing, so the comparison
+        built by validation is literally what a rebuild would produce.
+        """
 
         volte, _ = self.conta_le_costruzioni(lambda: self.store.move_preview({
             **self.snapshot,
@@ -367,14 +357,14 @@ class IlConfrontoSiCostruisceUnaVoltaSola(unittest.TestCase):
         self.assertEqual(volte, 1)
 
     def test_con_uno_stato_di_un_altra_run_il_confronto_si_ricostruisce(self) -> None:
-        """L'unico caso in cui riusare il confronto cambierebbe qualcosa.
+        """The one case where reusing the comparison would change something.
 
-        `apply_match_overrides` — le risposte date ai candidati — si applica
-        solo se lo stato sul disco dichiara la stessa run del confronto. Con
-        uno stato che ne dichiara un'altra, quello costruito prima della
-        scrittura le salta e quello di dopo no: qui si pretende che il
-        programma se ne accorga e ricostruisca, invece di rispondere con un
-        confronto a cui manca qualcosa.
+        `apply_match_overrides` (the answers given to match candidates)
+        applies only when the state on disk declares the same run as the
+        comparison. With a state declaring another run, the comparison built
+        before the write skips those overrides and the one built after does
+        not: the program must notice and rebuild instead of returning a
+        comparison missing something.
         """
 
         SERVER.atomic_json(self.store.state_path, {
@@ -389,9 +379,9 @@ class IlConfrontoSiCostruisceUnaVoltaSola(unittest.TestCase):
         self.assertEqual(volte, 2, "con lo stato di un'altra run il confronto va rifatto")
 
     def test_due_salvataggi_di_fila_danno_lo_stesso_riepilogo(self) -> None:
-        """Se il confronto riusato non fosse quello che si sarebbe ricostruito,
-
-        il secondo salvataggio direbbe numeri diversi dal primo."""
+        """If the reused comparison weren't what a rebuild would produce,
+        the second save would report different numbers than the first.
+        """
 
         primo = self.store.save_state(self.snapshot)
         secondo = self.store.save_state({**self.snapshot, "stateVersion": primo["stateVersion"]})
@@ -400,18 +390,14 @@ class IlConfrontoSiCostruisceUnaVoltaSola(unittest.TestCase):
         self.assertEqual(primo["promotionStates"], secondo["promotionStates"])
 
     def test_il_confronto_riusato_dice_quello_che_direbbe_uno_ricostruito(self) -> None:
-        """La proprieta' che rende lecita la scorciatoia, provata invece che
+        """The property that justifies the shortcut, tested rather than assumed:
 
-        dichiarata: fra la lettura e la scrittura non cambia niente da cui il
-        confronto dipenda, quindi i numeri devono essere gli stessi.
+        nothing the comparison depends on changes between read and write, so
+        the numbers must match.
 
-        ⚠ Lo stato di partenza porta le chiavi da cui il confronto dipende —
-        uno sconto di testata e un prodotto aggiunto a mano — e non e' un
-        ornamento: la prima versione girava su uno stato che non ne aveva
-        nessuna, cioe' su un confronto in cui non c'era niente da perdere.
-        Trovato dalla verifica avversariale del 20 agosto 2026, che ha fatto
-        notare come il difetto chiuso subito dopo fosse stato trovato
-        rileggendo il codice e non da questa prova.
+        The starting state carries the keys the comparison depends on (a
+        header discount and a manually added product) on purpose: a state
+        without any of those would exercise a comparison with nothing to lose.
         """
 
         SERVER.atomic_json(self.store.state_path, {
@@ -453,18 +439,18 @@ class WebAppStoreTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
         self.review_path = self.root / "review_data.json"
-        # Lo stato vive in una sottocartella "run" perche' lo storico degli ordini
-        # viene ricavato da state_path.parent.parent/history/orders.json: con lo
-        # stato nella radice della cartella temporanea le compile() dei test
-        # scriverebbero fuori da essa, in %TEMP%\history\orders.json.
+        # The state lives in a "run" subfolder because the order history is
+        # derived from state_path.parent.parent/history/orders.json: with the
+        # state at the root of the temp dir, the tests' compile() calls would
+        # write outside it, into %TEMP%\history\orders.json.
         self.run_dir = self.root / "run-corrente"
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.state_path = self.run_dir / "review_state.json"
         self.upload_dir = self.root / "uploads"
         self.output_dir = self.root / "outputs"
-        # Fase 6d: ogni compilazione ha la sua cartella datata qui dentro. Il
-        # piano non sta piu' in `outputs` con un nome fisso, ed e' il motivo per
-        # cui tutte le prove qui sotto lo cercano passando per `piano_di`.
+        # Each compile gets its own dated folder in here; the plan lives
+        # there, not in `outputs` under a fixed name, which is why every
+        # test below looks it up through `piano_di`.
         self.orders_dir = self.root / "ordini"
         self.review_path.write_text(json.dumps(synthetic_review()), encoding="utf-8")
         self.store = ReviewStore(
@@ -477,22 +463,22 @@ class WebAppStoreTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    # -- Fase 6d: dove sono finiti i file di una compilazione ----------------
+    # -- where a compile's files end up ---------------------------------------
 
     def cartelle(self) -> list[Path]:
-        """Le cartelle delle compilazioni presenti, in ordine di nome."""
+        """The compile folders present, in name order."""
 
         if not self.orders_dir.is_dir():
             return []
         return sorted(item for item in self.orders_dir.iterdir() if item.is_dir())
 
     def cartella_di(self, esito: dict[str, Any]) -> Path:
-        """La cartella della compilazione appena fatta, presa dalla sua risposta."""
+        """The folder of the compile just run, taken from its response."""
 
         return self.orders_dir / esito["cartella"]
 
     def piano_di(self, esito: dict[str, Any]) -> dict[str, Any]:
-        """Il piano di quella compilazione, letto dalla sua cartella datata."""
+        """That compile's plan, read from its dated folder."""
 
         return json.loads((self.cartella_di(esito) / "final_order_plan.json").read_text(encoding="utf-8"))
 
@@ -686,9 +672,9 @@ class WebAppStoreTests(unittest.TestCase):
         self.assertEqual(error["threshold_net"], 1000.0)
         self.assertFalse((self.output_dir / "final_order_plan.json").exists())
         self.assertFalse(self.state_path.exists())
-        # Il piano non si scrive: quindi non deve nascere nemmeno la cartella
-        # che lo avrebbe contenuto. Una cartella vuota comparirebbe nell'elenco
-        # come una compilazione avvenuta e senza file.
+        # The plan isn't written, so its folder must not appear either: an
+        # empty folder would look like a compile that ran and produced
+        # nothing.
         self.assertEqual(self.cartelle(), [])
 
     def test_compile_display_writes_one_order_on_parent_source_row(self) -> None:
@@ -711,9 +697,9 @@ class WebAppStoreTests(unittest.TestCase):
         self.assertEqual(order["supplier"], "larice")
         self.assertEqual(order["supplier_source_row"], 198)
         self.assertEqual(order["quantity"], 2)
-        # L'espositore consegna i suoi pezzi, non se stesso: 2 espositori da 96
-        # sono 192 pezzi a 4,6054 l'uno. Il totale non cambia, perche' si fattura
-        # l'espositore intero.
+        # The display delivers its pieces, not itself: 2 displays of 96 are
+        # 192 pieces at 4.6054 each. The total is unchanged, since the whole
+        # display is invoiced.
         self.assertEqual(order["quantity_factor"], 96.0)
         self.assertEqual(order["delivered_pieces"], 192)
         self.assertEqual(order["unit_price_net"], 4.6054)
@@ -722,10 +708,9 @@ class WebAppStoreTests(unittest.TestCase):
         self.assertNotIn(order["supplier_source_row"], {199, 200})
 
     def test_standard_product_quantity_is_colli_with_no_rounding(self) -> None:
-        # Nuova regola commerciale: l'utente inserisce direttamente i colli da
-        # ordinare, non piu' i pezzi desiderati. 10 colli restano 10 colli:
-        # niente arrotondamento e niente eccedenza, anche se il collo contiene
-        # 6 pezzi (quantityFactor dell'offerta larice).
+        # The user enters cartons to order directly, not pieces: 10 cartons
+        # stay 10 cartons, with no rounding and no excess, even though the
+        # carton holds 6 pieces (larice offer's quantityFactor).
         result = self.store.compile(
             {
                 "runId": "run-sintetica",
@@ -754,9 +739,9 @@ class WebAppStoreTests(unittest.TestCase):
         self.assertEqual(order["line_total_net"], 90.0)
 
     def test_no_rounding_three_colli_stay_three_regardless_of_pieces_per_collo(self) -> None:
-        # Stesso principio della nuova regola isolato dal calcolo del prezzo:
-        # 3 colli restano 3 colli sia che il collo contenga 6 pezzi (larice)
-        # sia che ne contenga 97 (fornitore con un fattore molto diverso).
+        # Same principle isolated from the price calculation: 3 cartons stay
+        # 3 cartons whether the carton holds 6 pieces (larice) or 97 (a
+        # supplier with a very different factor).
         review = synthetic_review()
         review["suppliers"].append({"id": "betulla", "name": "Betulla", "minimumOrder": 0})
         standard = next(item for item in review["products"] if item["id"] == "product-standard")
@@ -820,8 +805,8 @@ class WebAppStoreTests(unittest.TestCase):
         self.review_path.write_text(json.dumps(review), encoding="utf-8")
         store = ReviewStore(self.review_path, self.state_path, self.upload_dir, self.output_dir)
 
-        # Prodotto normale (larice, 6 pezzi/collo) + espositore (larice, 1
-        # pezzo/collo: l'espositore stesso e' l'unita' d'ordine).
+        # A regular product (larice, 6 pieces/carton) plus a display (larice,
+        # 1 piece/carton: the display itself is the order unit).
         misto = store.compile({
             "runId": "run-sintetica",
             "currentStep": 3,
@@ -847,8 +832,8 @@ class WebAppStoreTests(unittest.TestCase):
         self.assertEqual(display_order["desired_quantity_unit"], "espositori")
         self.assertEqual(display_order["line_total_net"], 884.2392)
 
-        # Noce: il fattore e' il moltiplicatore d'ordine del campo "unit"
-        # del listino, esattamente come per l'offerta EAN normale qui sopra.
+        # Noce: the factor is the order multiplier from the price list's
+        # "unit" field, exactly as for the regular EAN offer above.
         mega = store.compile({
             "runId": "run-sintetica",
             "currentStep": 3,
@@ -865,10 +850,10 @@ class WebAppStoreTests(unittest.TestCase):
         self.assertEqual(mega_order["line_total_net"], 33.6)
 
     def test_order_plan_preserves_keys_required_by_the_writer(self) -> None:
-        # scripts/write_supplier_orders.mjs e la compilazione Noce in
-        # app/server.py leggono queste chiavi per nome dal piano compilato: se
-        # sparissero, la scrittura dei listini si romperebbe senza che nessun
-        # altro test se ne accorga.
+        # scripts/write_supplier_orders.mjs and the Noce compile path in
+        # app/server.py read these keys by name from the compiled plan: if
+        # they disappeared, writing the price lists would break without any
+        # other test noticing.
         esito = self.store.compile(self.snapshot(2, accept_below_threshold=True))
         plan = self.piano_di(esito)
         order = plan["orders"][0]
@@ -902,9 +887,10 @@ class WebAppStoreTests(unittest.TestCase):
         self.assertEqual(product["quantityLabel"], "colli")
 
     def test_quantity_source_survives_save_and_reload(self) -> None:
-        """Una quantità toccata dall'utente non deve tornare 'gestionale' dopo un
-        ricaricamento: altrimenti il comando che azzera le sole quantità
-        predefinite cancellerebbe una scelta deliberata."""
+        """A quantity edited by the user must not revert to 'gestionale' after a
+        reload: otherwise the command that resets only default quantities
+        would erase a deliberate choice.
+        """
 
         review = synthetic_review()
         standard = next(item for item in review["products"] if item["id"] == "product-standard")
@@ -999,11 +985,11 @@ class WebAppStoreTests(unittest.TestCase):
             "sourcePath": str(catalog_path),
             "role": "supplier",
             "supplierId": "noce",
-            # ⚠ `adapterId` e `schemaState` non sono decorazione: sono i due
-            # campi con cui il catalogo sceglie il lettore, gli stessi su cui
-            # decide la catena. Una review vera li porta sempre — li scrive
-            # `build_review_data.manifest_files` — e senza di loro questa
-            # fixture descriveva una review che non esiste.
+            # `adapterId` and `schemaState` aren't decoration: they're the two
+            # fields the catalog uses to pick the reader, the same ones the
+            # pipeline decides on. A real review always carries them (written
+            # by `build_review_data.manifest_files`); without them this
+            # fixture would describe a review that doesn't exist.
             "adapterId": "noce_csv_v1",
             "schemaState": "SCHEMA_NOTO",
         }]
@@ -1024,16 +1010,16 @@ class WebAppStoreTests(unittest.TestCase):
         current = store.review()
         manual = next(item for item in current["products"] if item.get("addedManually"))
         self.assertEqual(manual["name"], "PRODOTTO NUOVO CON OMAGGIO")
-        # Nuova regola: anche per un prodotto aggiunto manualmente dal
-        # catalogo l'unita' di quantita' e' il collo, non il pezzo.
+        # Even for a product added manually from the catalog, the quantity
+        # unit is the carton, not the piece.
         self.assertEqual(manual["quantityLabel"], "colli")
 
     def test_catalog_ranks_suppliers_by_price_per_piece_not_by_total_per_carton(self) -> None:
-        # La regressione piu' pericolosa della nuova regola, riprodotta anche
-        # nel percorso "aggiungi dal catalogo": cipresso ha il totale per
-        # collo piu' basso (12.00 EUR) ma NON e' il piu' conveniente al pezzo
-        # (2.00 EUR/pezzo contro 1.00 EUR/pezzo di noce, che vende colli
-        # da 24 pezzi invece che da 6). Deve vincere noce.
+        # The most dangerous regression of this rule, reproduced here for the
+        # "add from catalog" path too: cipresso has the lower total per carton
+        # (12.00 EUR) but is NOT the cheaper one per piece (2.00 EUR/piece vs.
+        # noce's 1.00 EUR/piece, since noce sells cartons of 24 instead of 6).
+        # noce must win.
         noce_path = self.root / "noce_trappola.csv"
         with noce_path.open("w", encoding="utf-8-sig", newline="") as stream:
             writer = csv.DictWriter(
@@ -1112,9 +1098,9 @@ class WebAppStoreTests(unittest.TestCase):
         self.assertEqual(offers["cipresso"]["quantityFactor"], 6)
         self.assertEqual(offers["cipresso"]["orderUnitPriceNet"], 12.0)
 
-        # Precondizione del trabocchetto: cipresso vince sul totale in colli...
+        # Precondition of the trap: cipresso wins on the total per carton...
         self.assertLess(offers["cipresso"]["orderUnitPriceNet"], offers["noce"]["orderUnitPriceNet"])
-        # ...ma noce vince sul prezzo al pezzo, il solo criterio valido.
+        # ...but noce wins on price per piece, the only valid criterion.
         self.assertLess(offers["noce"]["unitPriceNet"], offers["cipresso"]["unitPriceNet"])
         self.assertEqual(found["selectedSupplierId"], "noce")
 
@@ -1188,8 +1174,8 @@ class WebAppStoreTests(unittest.TestCase):
         self.review_path.write_text(json.dumps(review), encoding="utf-8")
         writer_config = self.root / "writer_config.json"
         writer_config.write_text(json.dumps({
-            # La run del confronto attivo: senza, la compilazione si ferma
-            # prima di guardare qualsiasi altra cosa, ed e' giusto cosi'.
+            # The active comparison's run: without it, compile stops before
+            # looking at anything else, which is the right behavior.
             "run_id": "run-sintetica",
             "node_executable": str(self.root / "node-mancante.exe"),
             "writer_script": str(self.root / "writer-mancante.mjs"),
@@ -1220,9 +1206,8 @@ class WebAppStoreTests(unittest.TestCase):
         self.assertIn("CIPRESSO", result["message"])
         self.assertIn("Non sono state create copie", result["message"])
         self.assertEqual([item["name"] for item in result["outputs"]], ["final_order_plan.json"])
-        # Il piano sta nella cartella datata e **non** in `outputs`: e' il
-        # cambiamento della 6d, ed e' quello che impedisce alla compilazione
-        # successiva di sovrascriverlo.
+        # The plan lives in the dated folder, NOT in `outputs`: that's what
+        # keeps the next compile from overwriting it.
         self.assertTrue((self.cartella_di(result) / "final_order_plan.json").is_file())
         self.assertFalse((self.output_dir / "final_order_plan.json").exists())
         self.assertFalse(any(self.output_dir.glob("*.xlsx")))
@@ -1299,8 +1284,8 @@ class WebAppStoreTests(unittest.TestCase):
         self.assertIn("CIPRESSO", result["message"])
         self.assertFalse((self.output_dir / "ORDINE_LARICE_larice.xlsx").exists())
         self.assertFalse(any(self.output_dir.glob("*.xlsx")))
-        # Nemmeno nella cartella della compilazione: il writer non e' partito
-        # affatto, quindi li' dentro c'e' solo il piano con il suo audit.
+        # Not in the compile folder either: the writer never started, so it
+        # holds only the plan and its audit.
         self.assertFalse(any(self.cartella_di(result).glob("*.xlsx")))
 
     def test_launcher_recognizes_cipresso_only_with_verified_mapping(self) -> None:
@@ -1311,10 +1296,10 @@ class WebAppStoreTests(unittest.TestCase):
         launcher = importlib.util.module_from_spec(launcher_spec)
         sys.modules[launcher_spec.name] = launcher
         launcher_spec.loader.exec_module(launcher)
-        # ⚠ Copia congelata del registro: `references/adapters.json` lo riscrive
-        # il programma quando impara uno schema confermato, e questa prova
-        # poggia su quello che l'adattatore CIPRESSO **consegnato** dichiara.
-        # Vedi la nota in `tests/test_registro_impronte.py`.
+        # Frozen copy of the registry: the program rewrites
+        # `references/adapters.json` when it learns a confirmed schema, and
+        # this test relies on what the shipped CIPRESSO adapter declares.
+        # See the note in `tests/test_registro_impronte.py`.
         launcher.ADAPTERS_PATH = SKILL_ROOT / "tests" / "fixtures" / "adapters_nativi.json"
 
         source = self.root / "cipresso.xlsx"
@@ -1425,13 +1410,11 @@ class WebAppStoreTests(unittest.TestCase):
                 "betulla": str(betulla_source),
                 "cipresso": str(source),
                 "larice": str(larice_source),
-                # ⚠ Noce c'e' anche qui, come nella configurazione vera che
-                # `prepare_writer_config` scrive: un fornitore ordinato ci sta
-                # sempre. Prima mancava, e il writer lo saltava perche' si
-                # chiamava «noce» — cioe' era questo banco a tenere in piedi
-                # il nome cablato. Adesso a saltarlo e' la **procedura** che la
-                # sua regola dichiara, e un fornitore ordinato senza listino
-                # configurato viene detto invece che ignorato.
+                # Noce is here too, as in the real configuration
+                # `prepare_writer_config` writes: an ordered supplier is
+                # always present. It's the write *procedure* declared by its
+                # rule that skips it, and an ordered supplier missing a
+                # configured price list is reported instead of ignored.
                 "noce": str(source),
             },
             "supplier_write_rules": {
@@ -1491,12 +1474,13 @@ class WebAppStoreTests(unittest.TestCase):
         larice_output = self.output_dir / "ORDINE_LARICE_listino_larice.xlsx"
         self.assertTrue(betulla_output.is_file())
         self.assertTrue(larice_output.is_file())
-        # ⚠ Il writer Node non produce **niente** per Noce: a loro si
-        # rimanda il loro `.xls`, compilato in posizione da `app/xls_writer.py`.
-        # Il piano qui sopra porta una riga Noce apposta, cosi' questa prova
-        # fallisce se il ramo tornasse con un nome che dica «noce».  Un
-        # artefatto con un nome del tutto diverso non lo vedrebbe: e' la guardia
-        # piu' larga che si possa scrivere senza elencare nomi che non esistono.
+        # The Node writer produces NOTHING for Noce: they get their `.xls`
+        # patched in place by `app/xls_writer.py` instead. The plan above
+        # carries a Noce row on purpose, so this test fails if that branch
+        # regressed to producing a file with "noce" in its name. An artifact
+        # with a completely different name wouldn't be caught here: this is
+        # the widest guard that doesn't have to enumerate names that don't
+        # exist.
         roba_noce = sorted(
             voce.name for voce in self.output_dir.iterdir() if "noce" in voce.name.casefold()
         )
@@ -1528,11 +1512,10 @@ class WebAppStoreTests(unittest.TestCase):
             self.assertEqual(larice_book["LARICE"]["D2"].value, 5)
         finally:
             larice_book.close()
-        # La riga Noce del piano non produce piu' niente **qui**: la sua
-        # copia la scrive il servizio locale dentro il loro `.xls`, e il writer
-        # Node si limita a contarla nel proprio riepilogo.
-        # Il writer stampa anche righe di servizio del motore fogli: il
-        # riepilogo e' l'ultimo oggetto JSON dell'uscita.
+        # The plan's Noce row produces nothing HERE: the local service writes
+        # its copy into their `.xls`, and the Node writer only counts it in
+        # its own summary. The writer also prints spreadsheet-engine status
+        # lines, so the summary is the last JSON object in the output.
         riepilogo = json.loads(result.stdout[result.stdout.index('{\n  "supplier_copies"'):])
         self.assertEqual(riepilogo["noce_lines"], 1)
         self.assertEqual(
@@ -1551,14 +1534,13 @@ class WebAppStoreTests(unittest.TestCase):
         self.assertFalse(self.state_path.exists())
 
     def test_non_si_compila_mentre_il_confronto_si_sta_aggiornando(self) -> None:
-        """⚠ Il lucchetto dei dati non basta a impedirlo, e il risultato inganna.
+        """The data lock alone doesn't prevent this, and the result is misleading.
 
-        `compile` prende `self.lock`; la catena lo prende solo nell'istante in
-        cui sostituisce il confronto vivo. Per tutte le nove fasi prima di
-        quello, compilare e' legittimo e produce i listini del confronto
-        **precedente** — i prezzi della settimana scorsa — mentre in pagina 1
-        una barra dice che il confronto si sta aggiornando. Basta far partire
-        il ricalcolo e passare alla pagina 3.
+        `compile` takes `self.lock`; the pipeline takes it only at the instant
+        it swaps in the live comparison. For every stage before that, compile
+        is legal and produces the price lists of the PREVIOUS comparison
+        (last week's prices) while page 1 shows a bar saying the comparison is
+        updating.
         """
 
         vero = self.store.pipeline_jobs.in_corso
@@ -1569,25 +1551,25 @@ class WebAppStoreTests(unittest.TestCase):
         finally:
             self.store.pipeline_jobs.in_corso = vero
 
-        # La frase e' quella che legge chi ordina, e dice perche' non adesso.
+        # The message is what whoever orders reads, and says why not now.
         self.assertIn("si sta aggiornando", str(fermato.exception))
-        # E nessuna cartella: un ordine non partito non lascia niente in giro.
+        # And no folder: an order that never started leaves nothing behind.
         self.assertEqual(self.cartelle(), [])
 
-        # La controprova: finito il ricalcolo, lo stesso comando compila.
+        # Counter-proof: once the recalc finishes, the same command compiles.
         self.store.compile(self.snapshot(1, accept_below_threshold=True))
         self.assertEqual(len(self.cartelle()), 1)
 
     def test_una_compilazione_rifiutata_non_lascia_nessuna_cartella(self) -> None:
-        """Il fratello della prova qui sopra, sul difetto che la 6d introduce.
+        """The sibling of the test above, guarding against a folder-creation bug.
 
-        Creare la cartella prima delle convalide sarebbe comodo e lascerebbe
-        dietro una compilazione fantasma per ogni ordine vuoto o sotto soglia:
-        l'elenco delle compilazioni precedenti si riempirebbe di cartelle che
-        non contengono niente e che nessuno ha chiesto.
+        Creating the folder before validation would be convenient and would
+        leave a ghost compile behind for every empty or below-threshold
+        order: the list of previous compiles would fill with folders that
+        contain nothing and that nobody asked for.
         """
 
-        # La radice esiste gia' (la crea il costruttore), ed e' vuota.
+        # The root already exists (the constructor creates it) and is empty.
         self.assertTrue(self.orders_dir.is_dir())
         self.assertEqual(self.cartelle(), [])
 
@@ -1599,12 +1581,12 @@ class WebAppStoreTests(unittest.TestCase):
             self.store.compile(self.snapshot(1, accept_below_threshold=False))
         self.assertEqual(self.cartelle(), [])
 
-        # E la prova che il conteggio non e' vuoto per un altro motivo: una
-        # compilazione accettata la cartella la crea eccome.
+        # And proof the count isn't empty for some other reason: an accepted
+        # compile does create the folder.
         self.store.compile(self.snapshot(1, accept_below_threshold=True))
         self.assertEqual(len(self.cartelle()), 1)
 
-    # -- Fase 9b: l'ingresso del listino Noce in Excel 97-2003 ----------
+    # -- ingesting the Noce Excel 97-2003 (.xls) price list --------------
 
     def carica(self, nome: str, contenuto: bytes, role: str = "suppliers") -> dict[str, Any]:
         return self.store.upload({"files": [{
@@ -1614,7 +1596,7 @@ class WebAppStoreTests(unittest.TestCase):
         }]})
 
     def test_il_listino_xls_di_noce_si_carica_e_viene_riconosciuto(self) -> None:
-        """Era il difetto più semplice e il più bloccante: «Formato non accettato: .xls»."""
+        """The simplest and most blocking bug: "Format not accepted: .xls"."""
         listino = pipeline.scrivi_listino_noce(
             self.root / "formattato_104233.xls", pipeline.RIGHE_DI_PROVA, pipeline.RIGHE_IN_CODA,
         )
@@ -1628,9 +1610,8 @@ class WebAppStoreTests(unittest.TestCase):
         self.assertEqual(acquisito["schemaState"], "SCHEMA_NOTO")
         self.assertEqual(acquisito["adapterId"], "noce_xls_v1")
         self.assertTrue((self.upload_dir / "formattato_104233.xls").is_file())
-        # ⚠ Seguiva «Codex deve confermarne la struttura prima del ricalcolo»:
-        # un nome che chi usa il programma non conosce, per un permesso che dal
-        # cantiere R6 non serve piu'.
+        # The message must not name an internal tool the user has never
+        # heard of, for a confirmation step the pipeline doesn't need.
         self.assertEqual(esito["message"].split(".")[0], "1 documento caricato e letto")
         self.assertNotIn("Codex", esito["message"])
         self.assertIn("Confronta i listini", esito["message"])
@@ -1645,10 +1626,11 @@ class WebAppStoreTests(unittest.TestCase):
         self.assertFalse(any(self.upload_dir.iterdir()))
 
     def test_un_nome_lunghissimo_si_taglia_prima_di_perdere_l_estensione(self) -> None:
-        """Rilievo [41]: il taglio a 180 caratteri veniva DOPO il controllo
-        sull'estensione. Un nome piu' lungo di 180 caratteri superava il
-        controllo e poi perdeva il punto e l'estensione nel taglio: il nome
-        risultante non era piu' quello che il controllo aveva approvato.
+        """The 180-character truncation must happen BEFORE the extension check.
+
+        Truncating after the check would let a name longer than 180
+        characters pass, then lose the dot and extension in the cut: the
+        resulting name would differ from the one the check had approved.
         """
 
         nome_lunghissimo = "A" * 250 + ".xlsx"
@@ -1659,13 +1641,12 @@ class WebAppStoreTests(unittest.TestCase):
         self.assertEqual(Path(tagliato).suffix, ".xlsx")
 
     def test_un_listino_con_nome_lunghissimo_arriva_sul_disco_ancora_xlsx(self) -> None:
-        """La conseguenza vera non e' un messaggio d'errore: e' un listino che
-        sparisce dal confronto senza che nessuno lo dica. Il caricamento
-        riesce (il lettore sceglie dal contenuto, non dal nome), ma
-        `candidate_files` di `scripts/inspect_sources.py` filtra per suffisso
-        quando la catena rilancia l'inventario sulla cartella: un file senza
-        estensione non entra e il fornitore sparisce dal confronto in
-        silenzio.
+        """The real risk isn't an error message: it's a price list that
+        silently drops out of the comparison. Upload succeeds (the reader
+        picks the format from content, not from the name), but
+        `candidate_files` in `scripts/inspect_sources.py` filters by suffix
+        when the pipeline re-scans the folder: a file with no extension is
+        skipped and the supplier disappears from the comparison silently.
         """
 
         sorgente = listino_finto(self.root / "sorgente.xlsx", "LARICE")
@@ -1674,9 +1655,9 @@ class WebAppStoreTests(unittest.TestCase):
         esito = self.carica(nome_lunghissimo, sorgente.read_bytes())
 
         self.assertTrue(esito["ok"])
-        # `upload_profiles.json` vive nella stessa cartella dei documenti
-        # caricati: si guarda solo la copia appena scritta, presa dalla
-        # risposta, non tutto quello che c'e' dentro `upload_dir`.
+        # `upload_profiles.json` lives in the same folder as the uploaded
+        # documents: only the copy just written, taken from the response, is
+        # checked here, not everything inside `upload_dir`.
         nome_salvato = esito["files"][0]["name"]
         self.assertEqual(Path(nome_salvato).suffix, ".xlsx")
         self.assertTrue((self.upload_dir / nome_salvato).is_file())
@@ -1692,7 +1673,7 @@ class WebAppStoreTests(unittest.TestCase):
         self.assertFalse(any(self.upload_dir.iterdir()))
 
     def test_un_documento_con_l_estensione_bugiarda_viene_letto_per_il_contenuto(self) -> None:
-        """Un .xls rinominato .csv si legge lo stesso, ma va detto: le colonne non torneranno."""
+        """An .xls renamed to .csv is still read, but this must be reported: the columns won't be the expected ones."""
         listino = pipeline.scrivi_listino_noce(
             self.root / "vero.xls", pipeline.RIGHE_DI_PROVA, pipeline.RIGHE_IN_CODA,
         )
@@ -1704,7 +1685,7 @@ class WebAppStoreTests(unittest.TestCase):
         self.assertIn("letto per quello che è", esito["message"])
 
     def test_un_fornitore_non_letto_diventa_un_avviso_e_non_toglie_gli_altri(self) -> None:
-        """Il catalogo che si assottiglia in silenzio è peggio di uno che non si carica."""
+        """A catalog that silently thins out is worse than one that fails to load."""
         rotto = self.root / "larice.xlsx"
         rotto.write_bytes(b"questo non e' un foglio di calcolo")
         cipresso = self.root / "cipresso.xlsx"
@@ -1751,15 +1732,16 @@ class WebAppStoreTests(unittest.TestCase):
         self.assertIn("larice.xlsx", avvisi[0]["message"])
         self.assertIn("Gli altri fornitori restano nel confronto", avvisi[0]["message"])
         self.assertFalse(avvisi[0]["blocking"])
-        # Lo stesso file non viene segnalato due volte con parole diverse.
+        # The same file isn't flagged twice with different wording.
         doppioni = [item for item in prodotta["warnings"] if item.get("code") == "CONDIZIONI_COMMERCIALI_NON_LETTE"]
         self.assertEqual(doppioni, [])
-        # E l'altro fornitore e' rimasto in piedi.
+        # And the other supplier stayed in.
         self.assertEqual(store.search_products("tovaglioli")["count"], 1)
 
     def test_le_condizioni_di_un_listino_rovinato_non_fanno_fallire_la_pagina(self) -> None:
-        """Il lettore delle soglie Larice apriva il file senza rete: bastava un
-        listino rovinato perché `GET /api/review` non rispondesse più."""
+        """The Larice threshold reader had no error handling: a corrupted price
+        list was enough to make `GET /api/review` stop responding.
+        """
         rotto = self.root / "larice.xlsx"
         rotto.write_bytes(b"questo non e' un foglio di calcolo")
         servizio = SERVER.PromotionService()
@@ -1770,7 +1752,7 @@ class WebAppStoreTests(unittest.TestCase):
         self.assertIn("larice.xlsx", servizio.load_errors[0]["message"])
         self.assertEqual(servizio.load_errors[0]["supplier"], "larice")
 
-        # La seconda lettura non riapre il file, ma il motivo lo dice lo stesso.
+        # The second read doesn't reopen the file, but still reports the reason.
         self.assertEqual(servizio.detect(review), [])
         self.assertEqual(len(servizio.load_errors), 1)
 
@@ -1792,7 +1774,7 @@ class WebAppStoreTests(unittest.TestCase):
         self.assertEqual(codici[1], codici[2])
 
     def test_un_documento_gia_presente_non_viene_dichiarato_acquisito(self) -> None:
-        """Chi ricarica un listino e legge «acquisito» crede di averlo aggiornato."""
+        """Someone re-uploading a price list and reading "acquired" would think it was updated."""
         listino = pipeline.scrivi_listino_noce(
             self.root / "formattato_104233.xls", pipeline.RIGHE_DI_PROVA, pipeline.RIGHE_IN_CODA,
         )
@@ -1806,21 +1788,20 @@ class WebAppStoreTests(unittest.TestCase):
         self.assertNotIn("caricato e letto", secondo["message"])
 
     def test_un_listino_cancellato_dalla_cartella_si_ricarica(self) -> None:
-        """«Gia' presente» deve voler dire che la copia c'e'.
+        """'Already present' must mean the copy is actually there.
 
-        ⚠ Il vicolo cieco del 15 agosto 2026, con le parole di chi ci e' finito
-        dentro: «ho cancellato i listini dalla cartella dell'app e ora, provando
-        a caricarli, mi segnala che sono gia' presenti, ma io non li vedo e non
-        mi fa nemmeno confrontare i listini».  Il registro dei profili teneva la
-        scheda di un documento che sul disco non c'era piu': il caricamento la
-        leggeva come «duplicato» e non scriveva niente, mentre la pagina — che i
-        profili senza copia li filtra gia' — non mostrava nessuna scheda da
-        eliminare per uscirne.
+        The dead end this guards against: deleting the price lists from the
+        app folder and then, trying to re-upload them, being told they're
+        already present while not seeing them and being unable to compare.
+        The profile registry can hold the record of a document that isn't on
+        disk; the upload read it as a "duplicate" and wrote nothing, while
+        the page (which already filters out profiles with no copy) showed no
+        card to delete to get out of the deadlock.
         """
 
         contenuto = b"ean;prodotto\n8000000000001;PRIMO\n"
         self.carica("larice-nuovo.csv", contenuto)
-        # Cancellato da Esplora risorse, non dall'app: l'app non lo sa.
+        # Deleted from the file explorer, not from the app: the app doesn't know.
         (self.upload_dir / "larice-nuovo.csv").unlink()
 
         secondo = self.carica("larice-nuovo.csv", contenuto)
@@ -1830,22 +1811,23 @@ class WebAppStoreTests(unittest.TestCase):
         self.assertTrue((self.upload_dir / "larice-nuovo.csv").exists())
         profili = json.loads((self.upload_dir / "upload_profiles.json").read_text(encoding="utf-8"))
         nomi = [item.get("file_name") for item in profili["profiles"]]
-        # Una copia sola, una scheda sola: due schede sullo stesso percorso
-        # sarebbero due verita' sullo stesso file.
+        # One copy, one record: two records for the same path would be two
+        # different truths about the same file.
         self.assertEqual(nomi.count("larice-nuovo.csv"), 1)
-        # E la pagina lo rivede: e' la prova che il giro si chiude.
+        # And the page sees it again: proof the loop closes.
         self.assertTrue(any(
             item.get("uploadName") == "larice-nuovo.csv" for item in self.store.review()["files"]
         ))
 
     def test_una_scheda_che_parla_di_un_altro_file_non_vale_per_questo(self) -> None:
-        """Il profilo dichiara un percorso: se non e' questa copia, non e' suo.
+        """A profile declares a path: if this isn't that copy, it isn't its record.
 
-        ⚠ Controprova rimasta VERDE al primo giro: togliendo il confronto fra
-        percorso dichiarato e copia vera, i test non se ne accorgevano — tutti
-        passavano dal ramo «il file non c'e'», che si ferma prima.  Questo e' il
-        caso che quel confronto serve a fermare: una scheda che parla
-        dell'originale sul Desktop mentre negli upload c'e' un file omonimo.
+        Guards against a counter-proof that stayed green on the first pass:
+        without the comparison between the declared path and the actual
+        copy, the tests never noticed, because they all went through the
+        "the file isn't there" branch, which stops early. This is the case
+        that comparison is meant to catch: a record pointing at the original
+        on the Desktop while the uploads folder has a file with the same name.
         """
 
         contenuto = b"ean;prodotto\n8000000000001;PRIMO\n"
@@ -1872,7 +1854,7 @@ class WebAppStoreTests(unittest.TestCase):
         self.assertNotIn(str(altrove / "listino.csv"), percorsi)
 
     def test_la_scheda_di_un_documento_sparito_esce_dal_registro(self) -> None:
-        """Il registro descrive la cartella, e la cartella è l'unica verità."""
+        """The registry describes the folder, and the folder is the only source of truth."""
 
         self.carica("larice-nuovo.csv", b"ean;prodotto\n8000000000001;PRIMO\n")
         (self.upload_dir / "larice-nuovo.csv").unlink()
@@ -1903,16 +1885,15 @@ class WebAppStoreTests(unittest.TestCase):
         )
 
     def test_eliminare_il_listino_toglie_dal_confronto_le_offerte_di_quel_fornitore(self) -> None:
-        """«Eliminando un listino questo continuava a comparire nel confronto».
+        """'Deleting a price list still kept it showing up in the comparison.'
 
-        Il difetto segnalato il 14 agosto 2026, con le parole di chi lo ha
-        subito.  La cancellazione toglieva la scheda del file e lasciava intatto
-        tutto il resto: il fornitore restava fra le offerte di ogni prodotto,
-        restava quello scelto e restava nel totale in euro del riepilogo.
+        Deletion removed the file's record but left everything else intact:
+        the supplier stayed among every product's offers, stayed the
+        selected one, and stayed in the summary's euro total.
 
-        Le offerte non spariscono — restano visibili, perche' l'utente deve
-        capire perche' il prezzo di prima non c'e' piu' — ma smettono di essere
-        ordinabili, ed e' scritto perche'.
+        Offers don't disappear (they stay visible, so the user understands
+        why the previous price is gone) but they stop being orderable, and
+        the reason is stated.
         """
 
         self.carica("larice.csv", b"ean;prodotto\n8000000000001;PRIMO\n")
@@ -1955,12 +1936,12 @@ class WebAppStoreTests(unittest.TestCase):
         self.assertIn("LARICE", avvisi[0]["message"])
 
     def test_un_fornitore_mai_stato_nell_elenco_resta_ordinabile(self) -> None:
-        """«Non lo so» non e' «e' stato tolto», e solo il secondo spegne le offerte.
+        """'Unknown' is not 'removed', and only the latter disables offers.
 
-        Il confronto vivo di Daniele ha quattro fornitori con offerte e un solo
-        documento nell'elenco: se bastasse l'assenza dall'elenco per spegnere un
-        fornitore, aprendo il programma troverebbe tutto non ordinabile senza
-        che nessuno abbia eliminato niente.
+        A real comparison can have suppliers with offers but no matching
+        document in the file list: if being absent from the list were enough
+        to disable a supplier, opening the program would find everything
+        non-orderable without anyone having deleted anything.
         """
 
         confronto = synthetic_review()
@@ -2035,15 +2016,12 @@ class WebAppStoreTests(unittest.TestCase):
         self.assertTrue(originale.exists())
         dopo = self.store.review()
         self.assertEqual(dopo["files"], [])
-        # I prodotti restano: non si potano dal confronto, e nessuno lo chiede.
+        # Products stay: they aren't pruned from the comparison, and nothing
+        # asks for that.
         self.assertEqual(len(dopo["products"]), len(review["products"]))
-        # ⚠ Ma le offerte del fornitore eliminato smettono di essere ordinabili.
-        # Fino al 14 agosto 2026 questa prova si fermava alla riga qui sopra, e
-        # quel solo conteggio **codificava il difetto come atteso**: il
-        # fornitore restava nelle offerte, restava quello scelto e restava nel
-        # totale del riepilogo.  La scheda qui dichiara solo `supplier`, senza
-        # `supplierId`: e' la forma che i confronti piu' vecchi hanno, ed e' il
-        # motivo per cui la chiave si ricava da tutte e due.
+        # But the deleted supplier's offers stop being orderable. The record
+        # here declares only `supplier`, not `supplierId`: that's the shape
+        # older comparisons have, which is why the key is derived from both.
         offerte = [
             offerta for prodotto in dopo["products"]
             for offerta in prodotto["offers"] if offerta["supplierId"] == "larice"
@@ -2095,11 +2073,11 @@ class WebAppStoreTests(unittest.TestCase):
         self.assertTrue(originale.exists())
         dopo = self.store.review()
         self.assertEqual(dopo["files"], [])
-        # Eliminare il gestionale e' una funzione voluta — serve quando se ne
-        # carica uno sbagliato — ma i prodotti del confronto vengono da li' e
-        # restano in pagina, con «Continua» attivo.  La conseguenza va detta,
-        # altrimenti si preparano gli ordini della settimana su un elenco che
-        # nel programma non c'e' piu'.
+        # Deleting the management export is intended (it's needed when the
+        # wrong one was loaded), but the comparison's products come from it
+        # and stay on the page with "Continue" active. The consequence must
+        # be stated, otherwise the week's orders get prepared against a list
+        # missing from the program.
         self.assertEqual(len(dopo["products"]), len(review["products"]))
         avvisi = [
             avviso for avviso in dopo.get("warnings") or []
@@ -2154,7 +2132,7 @@ class WebAppStoreTests(unittest.TestCase):
         self.assertNotIn("60 MB", str(errore.exception))
 
     def test_se_un_documento_del_gruppo_e_rotto_gli_altri_non_restano_sul_disco(self) -> None:
-        """Le copie che il programma non conosce si accumulano e nessuno le vede."""
+        """Copies the program doesn't know about pile up unseen."""
         buono = base64.b64encode(b"ean;prodotto\n8000000000001;PRIMO\n").decode("ascii")
         cattivo = base64.b64encode(b"\x00\x01\x02 spazzatura").decode("ascii")
 
@@ -2190,7 +2168,7 @@ class WebAppStoreTests(unittest.TestCase):
         self.assertIn("ricarica il listino dal passo 1", avvisi[0]["message"])
 
     def test_le_offerte_non_lette_di_un_fornitore_leggibile_hanno_un_avviso_proprio(self) -> None:
-        """Il catalogo legge il listino, il motore delle promozioni no: due guasti diversi."""
+        """The catalog reads the price list, the promotion engine doesn't: two different failures."""
         store = self.store
         servizio = store.promotion_service
 
@@ -2227,19 +2205,17 @@ class WebAppStoreTests(unittest.TestCase):
 
 
 class LaFasciaDeiDocumentiCambiatiSiAccende(unittest.TestCase):
-    """⚠ La fascia c'era, la pagina sapeva leggerla, e non si e' mai vista.
+    """The changed-documents banner existed and the page could read it, but nothing wrote it.
 
-    `cambiamentoDocumenti` legge `pipeline.stato.cambiamento` e ha cinque prove
-    che la coprono, ma **nessuno scriveva quel campo**: `input_modificato`
-    metteva soltanto un messaggio, e il messaggio in pagina non compare (la
-    barra delle fasi tace su IN_ATTESA, apposta). Chi cancellava il listino
-    della settimana scorsa e caricava quello nuovo si ritrovava le pagine 2 e 3
-    con i prezzi di prima, e niente che glielo dicesse.
+    `cambiamentoDocumenti` reads `pipeline.stato.cambiamento` and had five
+    tests covering it, but nothing wrote that field: `input_modificato` only
+    set a message, and the message doesn't render on the page (the phase bar
+    stays silent on IN_ATTESA, on purpose). Deleting last week's price list
+    and uploading the new one left pages 2 and 3 showing the old prices with
+    no indication of that.
 
-    Verificato il 22 agosto 2026 con una ricerca su tutto il codice: la stringa
-    `"cambiamento"` compariva **solo nei file di prova**. E' la forma piu'
-    insidiosa di prova verde — prova che chi legge funziona, e nessuno prova
-    che qualcuno lo alimenti.
+    A repo-wide search found the string `"cambiamento"` only in test files:
+    the tests proved the reader worked, none proved anything fed it.
     """
 
     def setUp(self) -> None:
@@ -2271,14 +2247,14 @@ class LaFasciaDeiDocumentiCambiatiSiAccende(unittest.TestCase):
         self.assertIn("listino-nuovo.csv", cambiamento.get("documenti") or [])
 
     def test_l_elenco_del_gestionale_non_e_un_fornitore_che_si_chiama_FORNITORE(self) -> None:
-        """⚠ Visto in pagina il 23 agosto 2026, con il servizio vero.
+        """The management export isn't a supplier named FORNITORE.
 
-        Caricando insieme l'elenco e un listino, la fascia diceva «Hai caricato
-        i listini BETULLA e FORNITORE dopo l'ultimo confronto». L'elenco del
-        gestionale ha un adattatore come tutti (`gestionale_v1`) ma non ha un
-        `supplier_id`, e `supplier_label("")` risponde «FORNITORE» — il ripiego
-        generico del registro. La guardia `if etichetta` non poteva bastare:
-        «FORNITORE» è una stringa piena.
+        Uploading the export together with a price list, the banner read
+        "You uploaded price lists BETULLA and FORNITORE since the last
+        comparison". The management export has an adapter like any other
+        (`gestionale_v1`) but no `supplier_id`, and `supplier_label("")`
+        returns "FORNITORE", the registry's generic fallback. A guard on
+        `if etichetta` wasn't enough: "FORNITORE" is a non-empty string.
         """
 
         percorso = self.root / "gestionale.xlsx"
@@ -2296,7 +2272,7 @@ class LaFasciaDeiDocumentiCambiatiSiAccende(unittest.TestCase):
 
         cambiamento = esito["pipeline"].get("cambiamento") or {}
         self.assertIn("gestionale.xlsx", cambiamento.get("documenti") or [])
-        # Il documento si nomina; il fornitore inventato no.
+        # The document is named; the invented supplier is not.
         self.assertEqual(cambiamento.get("fornitori") or [], [])
 
     def test_eliminarne_uno_lo_dichiara(self) -> None:
@@ -2309,10 +2285,12 @@ class LaFasciaDeiDocumentiCambiatiSiAccende(unittest.TestCase):
         self.assertIn("listino-vecchio.csv", cambiamento.get("documenti") or [])
 
     def test_e_il_campo_finisce_sul_disco_cosi_sopravvive_al_riavvio(self) -> None:
-        """⚠ Nella sua prima stesura questa prova rimase VERDE togliendo il
-        salvataggio: leggeva lo stato dalla **memoria**, e un riavvio del
-        programma avrebbe fatto sparire la fascia. Qui si guarda il file, che e'
-        quello che il servizio rilegge quando riparte.
+        """Guards against reading in-memory state instead of disk.
+
+        A version of this test that read the state from memory stayed green
+        even without persisting it, but a program restart would have made
+        the banner disappear. This checks the file, which is what the
+        service re-reads on startup.
         """
 
         self.carica("listino-nuovo.csv", b"ean;prodotto\n8000000000001;PRIMO\n")
@@ -2328,18 +2306,17 @@ class LaFasciaDeiDocumentiCambiatiSiAccende(unittest.TestCase):
 
 
 class AvvisiDeiDocumentiTests(unittest.TestCase):
-    """Un fornitore che manca va detto prima che l'utente scelga, non dopo.
+    """A missing supplier must be reported before the user picks it, not after.
 
-    Fino alla Fase 9b gli avvisi della review comparivano soltanto nel riquadro
-    del passo 3: chi sceglieva prodotti e fornitori al passo 2 non sapeva che un
-    listino era rimasto fuori dal confronto.
+    Review warnings must reach step 2, not only the step-3 panel: someone
+    choosing products and suppliers there needs to know when a price list
+    has been left out of the comparison.
 
-    ⚠ Queste sono prove **a sottostringa**: guardano il sorgente, non il
-    comportamento.  La regola vera — quali avvisi entrano nel riquadro e quali
-    restano sulla scheda del prodotto — la prova
-    `tests/test_interfaccia_pagina1.py`, che esegue `app.js` in Node.  Qui
-    resta soltanto il cablaggio: il riquadro esiste e arriva a tutte e due le
-    pagine.
+    These are substring tests: they check the source, not the behavior. The
+    real rule — which warnings go in the panel and which stay on the
+    product card — is checked by `tests/test_interfaccia_pagina1.py`, which
+    runs `app.js` under Node. This only checks the wiring: the panel exists
+    and reaches both pages.
     """
 
     @classmethod
@@ -2352,43 +2329,45 @@ class AvvisiDeiDocumentiTests(unittest.TestCase):
         return self.app_js.split(marker)[1].split("\n}\n")[0]
 
     def test_gli_avvisi_dei_documenti_hanno_un_riquadro_proprio(self) -> None:
-        # La scelta di quali avvisi mostrare sta in `avvisiDelConfronto`, che è
-        # anche il posto da cui il riquadro del ricalcolo scopre quali avvisi
-        # sono già stampati e non li ripete.
+        # Which warnings to show lives in `avvisiDelConfronto`, which is also
+        # where the recalc panel finds which warnings are already printed so
+        # it doesn't repeat them.
         selezione = self.body("avvisiDelConfronto")
         self.assertIn("state.review?.warnings", selezione)
-        # Gli avvisi legati a un prodotto restano nella scheda del prodotto.
+        # Warnings tied to a product stay on the product card.
         self.assertIn("!issue.productId", selezione)
         corpo = self.body("renderSourceWarnings")
         self.assertIn("avvisiDelConfronto()", corpo)
-        # Il riquadro non chiama piu' `renderAlert` da se': passa da
-        # `renderAvvisi`, che stampa i singoli e conta quelli che si ripetono.
-        # Che gli avvisi arrivino davvero in pagina lo provano le prove
-        # eseguite in `test_interfaccia_pagina1.py`.
+        # The panel must go through `renderAvvisi` rather than calling
+        # `renderAlert` directly: `renderAvvisi` prints each entry and
+        # counts repeats. That warnings actually reach the page is checked
+        # by `test_interfaccia_pagina1.py`.
         self.assertIn("renderAvvisi(warnings", corpo)
 
     def test_ogni_pagina_chiede_i_suoi_avvisi(self) -> None:
-        """Lo stesso riquadro con lo stesso titolo stava in cima a tutt'e due,
-        con dentro le stesse frasi. Adesso la pagina dice quale mazzo vuole:
-        1 i documenti, 2 i prodotti. Che il taglio sia quello giusto lo provano
-        le prove eseguite in `test_interfaccia_pagina1.py`."""
+        """Each page must show its own warning set, not a shared panel.
+
+        Each page states which set it wants: 1 for documents, 2 for
+        products. That the split is the right one is checked by
+        `test_interfaccia_pagina1.py`.
+        """
 
         self.assertIn("renderSourceWarnings(1)", self.body("renderUploadStep"))
         self.assertIn("renderSourceWarnings(2)", self.body("renderQuantityStep"))
 
 
 class LaReidratazioneDelRicalcoloTests(unittest.TestCase):
-    """Chi ricarica la pagina deve ritrovare anche l'esito, non solo la barra.
+    """Reloading the page must recover the recalc outcome, not just the progress bar.
 
-    Il servizio lo stato finale ce l'ha e continua a darlo (lo tiene in
-    `pipeline_status.json` e lo rilegge anche dopo un riavvio): era la pagina a
-    buttarlo via, perche' all'avvio riprendeva soltanto un ricalcolo `IN_CORSO`.
-    Un ricalcolo fermato a meta', o finito con degli avvisi, spariva al primo
-    ricaricamento — e fra quegli avvisi c'e' proprio quello che dice che la
-    compilazione va ricontrollata prima di creare le copie.
+    The service keeps the final state (in `pipeline_status.json`, re-read
+    after a restart too); it was the page that discarded it, because on
+    startup it only resumed a recalc still `IN_CORSO`. A recalc that
+    stopped partway, or finished with warnings, disappeared on the next
+    reload, including the warning that says the compile needs re-checking
+    before creating copies.
 
-    Sono asserzioni sul testo sorgente, come in `ConsegnaInterfacciaTests`:
-    l'unica cosa che un test del servizio non puo' vedere e' la pagina.
+    These are assertions on the source text, as in `ConsegnaInterfacciaTests`:
+    the one thing a service-level test can't see is the page.
     """
 
     @classmethod
@@ -2401,7 +2380,7 @@ class LaReidratazioneDelRicalcoloTests(unittest.TestCase):
         return self.app_js.split(marker)[1].split("\n}\n")[0]
 
     def reidratazione(self) -> str:
-        """Il pezzo che gira all'apertura della pagina, dopo `loadReview()`."""
+        """The code that runs when the page opens, after `loadReview()`."""
 
         marker = "loadReview();"
         self.assertIn(marker, self.app_js)
@@ -2410,17 +2389,16 @@ class LaReidratazioneDelRicalcoloTests(unittest.TestCase):
         return blocco
 
     def callback_di_reidratazione(self) -> list[str]:
-        """Le righe di CODICE della callback, con gli apici normalizzati.
+        """The CODE lines of the callback, with quotes normalized.
 
-        ⚠ La prima versione di queste prove cercava il testo esatto della
-        guardia vecchia (`!== "IN_CORSO"`): la revisione avversariale del 13
-        agosto 2026 ha riscritto il comportamento vecchio con gli apici singoli
-        e le tre asserzioni sono passate tutte.  Qui si asserisce sulla
-        struttura: gli apici si normalizzano, i commenti non contano, e le
-        regole sono «un solo return, quello di IN_ATTESA» e «IN_CORSO compare
-        una volta sola, a guardia del polling» — qualunque modo di scartare gli
-        esiti finiti ha bisogno o di un secondo return o di un secondo
-        IN_CORSO.
+        Asserting on exact source text (like the old guard's literal
+        `!== "IN_CORSO"`) is fragile: a harmless rewrite using single quotes
+        instead of double quotes would pass three false assertions. This
+        asserts on structure instead: quotes are normalized, comments don't
+        count, and the rules are "exactly one return, the IN_ATTESA one" and
+        "IN_CORSO appears exactly once, guarding the polling" — any way of
+        discarding finished outcomes needs either a second return or a
+        second IN_CORSO.
         """
 
         blocco = self.reidratazione()
@@ -2435,8 +2413,8 @@ class LaReidratazioneDelRicalcoloTests(unittest.TestCase):
 
     def test_all_apertura_si_riprende_anche_un_ricalcolo_finito(self) -> None:
         righe = self.callback_di_reidratazione()
-        # Un solo scarto, quello di «non e' mai partito niente»: ogni altro
-        # esito — fermata, avvisi, riuscita — si rimette in pagina.
+        # Only one discard case, "nothing ever started": every other outcome
+        # (stopped, warnings, success) gets put back on the page.
         con_return = [riga for riga in righe if "return" in riga]
         self.assertEqual(len(con_return), 1, con_return)
         self.assertIn('esito === "IN_ATTESA"', con_return[0])
@@ -2446,12 +2424,12 @@ class LaReidratazioneDelRicalcoloTests(unittest.TestCase):
         self.assertIn("render()", corpo)
 
     def test_si_continua_a_interrogare_solo_una_run_viva(self) -> None:
-        """Su una run finita il timer ripeterebbe per sempre la stessa risposta."""
+        """On a finished run, the timer would repeat the same answer forever."""
 
         righe = self.callback_di_reidratazione()
         con_in_corso = [riga for riga in righe if "IN_CORSO" in riga]
-        # IN_CORSO compare UNA volta sola: a guardia del polling.  Una seconda
-        # occorrenza e' il segno che qualcuno sta di nuovo filtrando gli esiti.
+        # IN_CORSO appears exactly ONCE, guarding the polling. A second
+        # occurrence means something is filtering outcomes again.
         self.assertEqual(len(con_in_corso), 1, con_in_corso)
         self.assertEqual(
             con_in_corso[0],
@@ -2459,7 +2437,7 @@ class LaReidratazioneDelRicalcoloTests(unittest.TestCase):
         )
 
     def test_il_riquadro_mostra_la_fermata_e_gli_avvisi(self) -> None:
-        """L'altra metà: ripescarli non serve se poi non si vedono."""
+        """The other half: recovering these is useless if they aren't shown."""
 
         corpo = self.body("renderAvanzamentoPipeline")
         self.assertIn("stato.fermata", corpo)
@@ -2469,11 +2447,11 @@ class LaReidratazioneDelRicalcoloTests(unittest.TestCase):
 
 
 class PromotionPanelTests(unittest.TestCase):
-    """Fase 8: 188 condizioni lette, 13 che possono cambiare l'ordine.
+    """Measured on real price lists: 188 conditions read, only 13 can change the order.
 
-    Sui listini veri 175 delle 188 sono sconti già compresi nel prezzo al pezzo
-    su cui si sceglie il fornitore. Mostrarle insieme alle altre è ciò che
-    rendeva il pannello inutilizzabile.
+    175 of the 188 are discounts already folded into the per-piece price
+    that selects the supplier. Mixing them in with the actionable ones is
+    what makes a panel unusable.
     """
 
     @classmethod
@@ -2490,7 +2468,7 @@ class PromotionPanelTests(unittest.TestCase):
         self.assertIn("economic_effect?.already_applied", corpo)
 
     def test_utile_vuol_dire_non_nel_prezzo_e_collegata_a_prodotti(self) -> None:
-        """Una condizione senza prodotti abbinati non dice quanto manca."""
+        """A condition with no matched products can't tell you how much is missing."""
 
         corpo = self.body("promotionIsActionable")
         self.assertIn("!promotionIsAlreadyInPrice(promotion)", corpo)
@@ -2507,7 +2485,7 @@ class PromotionPanelTests(unittest.TestCase):
         self.assertIn("promotionIsAlreadyInPrice", corpo)
         self.assertIn("promotion-catalog__included", corpo)
         self.assertIn("Già conteggiate nel prezzo", corpo)
-        # Le due liste non devono essere la stessa lista.
+        # The two lists must not be the same list.
         self.assertIn("!promotionIsAlreadyInPrice(promotion)", corpo)
 
     def test_prima_le_offerte_a_cui_manca_meno(self) -> None:
@@ -2518,23 +2496,24 @@ class PromotionPanelTests(unittest.TestCase):
     def test_la_ricerca_esiste_e_il_riquadro_resta_aperto_mentre_si_scrive(self) -> None:
         self.assertIn("data-promotion-search", self.app_js)
         self.assertIn('data-focus-key="promotion-search"', self.app_js)
-        # Senza memoria dell'apertura il riquadro si richiude a ogni ridisegno e
-        # il campo sparisce da sotto le dita.
+        # Without remembering whether it's open, the panel closes on every
+        # re-render and the field vanishes mid-typing.
         self.assertIn("state.promotionCatalogOpen", self.app_js)
         self.assertIn('data-promotion-catalog ${state.promotionCatalogOpen ? "open" : ""}', self.app_js)
-        # L'evento toggle di <details> non risale: senza la fase di cattura il
-        # listener non viene mai chiamato e l'apertura non si ricorda.
+        # The <details> toggle event doesn't bubble: without the capture
+        # phase the listener never fires and the open state is lost.
         toggle = self.app_js.split('appElement.addEventListener("toggle"')[1].split("\n\n")[0]
         self.assertTrue(toggle.rstrip().endswith("}, true);"), "il listener toggle deve essere in cattura")
 
 
 class SupplierMoveInterfaceTests(unittest.TestCase):
-    """Fase 7, lato browser: le regole che nessun test del server può difendere.
+    """Browser-side rules no server test can defend.
 
-    Il calcolo dello spostamento sta sul server ed è coperto da
-    tests/test_supplier_move.py. L'APPLICAZIONE però avviene nel browser, e tre
-    mutazioni ad app.js — ereditare la conferma, riscrivere i colli, rompere
-    l'annulla — passavano con la suite tutta verde.
+    The move calculation lives on the server and is covered by
+    tests/test_supplier_move.py. Applying it, though, happens in the
+    browser: three separate app.js mutations (inheriting the confirmation,
+    rewriting the quantity, breaking undo) could slip past a fully green
+    suite without this coverage.
     """
 
     @classmethod
@@ -2549,8 +2528,9 @@ class SupplierMoveInterfaceTests(unittest.TestCase):
     def test_lo_spostamento_cambia_il_fornitore_e_azzera_la_conferma(self) -> None:
         corpo = self.body("applySupplierMove")
         self.assertIn("product.selectedSupplierId = assignment.toSupplierId;", corpo)
-        # Una conferma data su un'offerta non vale per un'altra: se si eredita,
-        # l'ordine parte senza che nessuno abbia guardato il prodotto.
+        # A confirmation given for one offer doesn't apply to another: if
+        # inherited, the order would go out without anyone having looked at
+        # the product.
         self.assertIn("product.confirmed = false;", corpo)
 
     def test_lo_spostamento_non_tocca_quantita_esclusioni_e_origine(self) -> None:
@@ -2560,7 +2540,7 @@ class SupplierMoveInterfaceTests(unittest.TestCase):
 
     def test_l_annulla_ripristina_fornitore_e_conferma_di_prima(self) -> None:
         applica = self.body("applySupplierMove")
-        # Per ripristinare bisogna prima aver conservato entrambi i valori.
+        # Restoring requires both values to have been saved first.
         self.assertIn("selectedSupplierId: product.selectedSupplierId,", applica)
         self.assertIn("confirmed: Boolean(product.confirmed),", applica)
 
@@ -2569,21 +2549,22 @@ class SupplierMoveInterfaceTests(unittest.TestCase):
         self.assertIn("product.confirmed = entry.confirmed;", annulla)
 
     def test_la_differenza_di_spesa_non_si_mostra_mai_da_sola(self) -> None:
-        """Spendere meno ricevendo meno merce non è un risparmio."""
+        """Spending less while receiving less merchandise isn't a saving."""
 
         corpo = self.body("moveDeltaParts")
         self.assertIn("deltaPieces", corpo)
-        # "si risparmia" deve stare in un ramo che ha già escluso il calo di merce.
+        # "si risparmia" (saving) must sit in a branch that already excludes
+        # the case of receiving less merchandise.
         prima_del_risparmio = corpo.split('words: "si risparmia"')[0]
         self.assertIn("pieces < 0", prima_del_risparmio)
         self.assertIn("si spende meno, ma arriva meno merce", corpo)
 
     def test_le_soglie_distinguono_chi_un_ordine_non_ce_l_aveva(self) -> None:
-        """Un fornitore partito da zero non può "scendere" sotto la soglia."""
+        """A supplier starting from zero can't "drop below" the threshold."""
 
         corpo = self.body("moveThresholdNotes")
-        # Non basta che hadOrderBefore compaia da qualche parte: deve essere
-        # proprio la condizione che decide se la soglia era raggiunta prima.
+        # It's not enough for hadOrderBefore to appear somewhere: it must be
+        # exactly the condition deciding whether the threshold was met before.
         self.assertIn("const reachedBefore = row.hadOrderBefore && row.meetsThresholdBefore;", corpo)
         self.assertIn("&& reachedBefore", corpo)
         self.assertNotIn("&& row.meetsThresholdBefore)", corpo)
@@ -2597,24 +2578,24 @@ class SupplierMoveInterfaceTests(unittest.TestCase):
             self.assertIn(codice, tabella, f"il browser non sa tradurre {codice}")
 
     def test_la_conferma_richiesta_dall_offerta_ha_una_casella_per_darla(self) -> None:
-        """Altrimenti l'ordine non si salva e non c'è nessun modo di sbloccarlo."""
+        """Otherwise the order can't be saved and there's no way to unblock it."""
 
         corpo = self.body("renderConfirmation")
         self.assertIn("confirmationRequired(product)", corpo)
         regola = self.body("confirmationRequired")
         self.assertIn("selectedOffer(product)", regola)
         self.assertIn("offer.requiresConfirmation", regola)
-        # ⚠ E senza fornitore scelto non c'è niente da confermare: e' la stessa
-        # riga di confine del servizio. Senza, rifiutare l'unica offerta lasciava
-        # in piedi il bloccante «Conferma richiesta» su un prodotto in cui la
-        # casella non compariva da nessuna parte.
+        # With no supplier selected there's nothing to confirm: the same
+        # boundary the service applies. Without this, rejecting the only
+        # offer left the "Confirmation required" blocker up on a product
+        # with no checkbox anywhere to clear it.
         self.assertIn("if (!offer) return false;", regola)
-        # L'offerta deve portarsi dietro il campo dal servizio locale.
+        # The offer must carry this field over from the local service.
         self.assertIn("requiresConfirmation: Boolean(offer.requiresConfirmation", self.app_js)
 
 
 class QuantityWheelGuardTests(unittest.TestCase):
-    """Fase 3bis: la rotellina non deve poter cambiare una quantità d'ordine."""
+    """The mouse wheel must not be able to change an order quantity."""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -2633,14 +2614,14 @@ class QuantityWheelGuardTests(unittest.TestCase):
         self.assertIn("field.blur()", guard)
 
     def test_the_listener_can_actually_cancel_the_event(self) -> None:
-        # Senza { passive: false } preventDefault() viene ignorato e la protezione
-        # non protegge nulla.
+        # Without { passive: false }, preventDefault() is ignored and the
+        # guard protects nothing.
         coda = self.app_js.split('appElement.addEventListener("wheel"')[1].split("\n\n")[0]
         self.assertIn("passive: false", coda)
 
 
 class InterfacciaR5Tests(unittest.TestCase):
-    """Le richieste R5 devono restare azioni brevi, non nuovi muri di testo."""
+    """UI review-round changes must stay short actions, not new walls of text."""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -2667,10 +2648,8 @@ class InterfacciaR5Tests(unittest.TestCase):
         self.assertIn("product.name", corpo)
         self.assertIn("offer.description", corpo)
         self.assertIn("propone:", corpo)
-        # Il motivo non sta piu' dietro un pieghevole: era l'unica cosa che
-        # serve per decidere, ed era l'unica nascosta (revisione 14/8/2026).
-        # Il motivo non sta piu' dietro un pieghevole: era l'unica cosa che
-        # serve per decidere, ed era l'unica nascosta (revisione 14/8/2026).
+        # The reason must not be hidden behind a collapsible: it's the one
+        # thing needed to decide.
         self.assertNotIn("Perché serve?", corpo)
         self.assertNotIn("<details", corpo)
         self.assertIn("confirmationMessageFor(product)", corpo)
@@ -2705,8 +2684,8 @@ class InterfacciaR5Tests(unittest.TestCase):
         self.assertIn("<details", compilazioni)
         self.assertIn("data-compilazioni", compilazioni)
         self.assertIn('data-action="ask-delete-compilation"', self.body("renderCompilazione"))
-        # La conferma dice che cosa si perde, non come si chiama dentro il
-        # programma: «promemoria» era il nome della struttura, non della cosa.
+        # The confirmation states what is lost, not the program's internal
+        # name for it.
         conferma = self.body("renderCompilazione")
         self.assertNotIn("e i suoi promemoria", conferma)
         self.assertIn("è arrivata la merce?", conferma)
@@ -2717,12 +2696,11 @@ class InterfacciaR5Tests(unittest.TestCase):
 
 
 class LaCompilabilitaVieneDalRegistroTests(unittest.TestCase):
-    """Satellite 1 della verifica del 12 agosto 2026.
+    """Which suppliers are compilable must come from the registry, not a hardcoded tuple.
 
-    I fornitori compilabili erano una tupla dentro `launcher.py`, contro la
-    regola per cui la regola sta nel registro: un fornitore imparato non
-    sarebbe mai potuto diventare compilabile, e nessuno lo diceva. Misurato:
-    102 prodotti assegnati a ACERO e avvertimenti vuoti.
+    Hardcoding it in `launcher.py` meant a learned supplier could never
+    become compilable, silently. Measured effect: 102 products assigned to
+    ACERO with no warning raised.
     """
 
     def setUp(self) -> None:
@@ -2784,7 +2762,7 @@ class LaCompilabilitaVieneDalRegistroTests(unittest.TestCase):
                             for avviso in avvisi), avvisi)
 
     def test_basta_dichiarare_order_write_perche_diventi_compilabile(self) -> None:
-        """Nessuna riga di codice: la regola sta nel registro, il codice la applica."""
+        """No code changes needed: the rule lives in the registry, code just applies it."""
 
         percorso = self.registro(self.adattatore_imparato(con_scrittura=True))
 
@@ -2799,7 +2777,7 @@ class LaCompilabilitaVieneDalRegistroTests(unittest.TestCase):
         self.assertEqual(avvisi, [])
 
     def test_la_colonna_dichiarata_si_verifica_sul_documento(self) -> None:
-        """Se l'intestazione dichiarata non è lì, l'ordine finirebbe altrove."""
+        """If the declared header isn't there, the order would land somewhere else."""
 
         voce = self.adattatore_imparato(con_scrittura=True)
         voce["order_write"]["order_column"] = "B"
@@ -2864,19 +2842,18 @@ class LaCompilabilitaVieneDalRegistroTests(unittest.TestCase):
         self.assertTrue(any("contiene testo o formule" in avviso for avviso in avvisi), avvisi)
 
     def test_la_colonna_vuota_si_controlla_in_una_passata_sola(self) -> None:
-        """Il controllo dev'essere lineare, non quadratico.
+        """The check must be linear, not quadratic.
 
-        Il 15 agosto 2026 l'avvio del programma e' rimasto **muto per cinque
-        minuti** e Daniele l'ha dato per piantato.  Non era piantato: su un
-        foglio aperto in sola lettura `foglio.cell(r, c)` rilegge il foglio
-        dall'inizio a ogni chiamata, e questo controllo ne faceva una per riga
-        di listino — misurate 3382 chiamate su CIPRESSO, 5,7 milioni di righe
-        analizzate, 474 secondi dentro `prepare_writer_config`.
+        On a sheet opened read-only, `foglio.cell(r, c)` re-reads the sheet
+        from the start on every call. Checking this once per price-list row
+        made program startup silently hang for minutes: measured 3382 calls
+        on CIPRESSO, 5.7 million rows scanned, 474 seconds inside
+        `prepare_writer_config`.
 
-        Il tetto qui e' larghissimo di proposito: la passata unica sta sotto il
-        secondo, quella vecchia su queste righe ci metteva minuti.  Non misura
-        la velocita' del computer, misura che l'algoritmo non sia tornato
-        quadratico.
+        The ceiling here is deliberately generous: the single pass stays
+        under a second, the old quadratic version took minutes on these
+        rows. It doesn't measure machine speed, it measures that the
+        algorithm hasn't gone quadratic again.
         """
 
         import time
@@ -2913,21 +2890,20 @@ class LaCompilabilitaVieneDalRegistroTests(unittest.TestCase):
         self.assertLess(durata, 20.0, f"il controllo della colonna ha impiegato {durata:.1f}s")
 
     def test_i_compilabili_sono_quelli_che_il_registro_spedito_dichiara(self) -> None:
-        """La regola e' cambiata di posto, non di contenuto.
+        """The rule moved location, not content.
 
-        L'elenco non e' fisso a quattro: e' quello che il registro spedito
-        dichiara, e cresce quando si aggiunge un fornitore. `offerte` e' il
-        listino promozionale di CIPRESSO, aggiunto il 21 agosto 2026 — arriva
-        senza riga di intestazione e si riconosce dalla forma delle colonne.
-        Questa prova serve a far notare l'aggiunta di un fornitore
-        compilabile, non a impedirla: se il numero cambia, si aggiorna qui
-        dopo aver guardato che cosa e' entrato.
+        The list isn't fixed at any count: it's whatever the shipped
+        registry declares, and it grows as suppliers are added. `offerte`
+        is CIPRESSO's promotional price list, which has no header row and
+        is recognized by the shape of its columns. This test is meant to
+        flag the addition of a compilable supplier, not to block it: when
+        the count changes, update it here after checking what was added.
         """
 
         self.assertEqual(sorted(self.launcher.fornitori_compilabili()),
                          ["betulla", "cipresso", "larice", "noce", "offerte"])
 
-    # -- la revisione avversariale del 13 agosto 2026 ----------------------
+    # -- source-text structural checks (quote/comment-agnostic) ------------
 
     def listino_su_misura(self, *, intestazioni: list[str], fogli_extra: int = 0) -> Path:
         percorso = self.root / f"acero_{len(intestazioni)}_{fogli_extra}.xlsx"
@@ -2954,7 +2930,7 @@ class LaCompilabilitaVieneDalRegistroTests(unittest.TestCase):
         return regole, avvisi
 
     def test_le_righe_dichiarate_si_confrontano_col_documento(self) -> None:
-        """Un refuso di una cifra scriverebbe le quantità fuori dai dati, in silenzio."""
+        """A single-digit typo would silently write quantities outside the data range."""
 
         voce = self.adattatore_imparato(con_scrittura=True)
         del voce["order_write"]["expected_header"]
@@ -2979,7 +2955,7 @@ class LaCompilabilitaVieneDalRegistroTests(unittest.TestCase):
                             and "fuori dal foglio" in avviso for avviso in avvisi), avvisi)
 
     def test_intestazione_e_dati_dichiarati_incoerenti_si_dicono(self) -> None:
-        """Dati che partono sulla riga dell'intestazione non stanno insieme."""
+        """Data starting on the header row is an inconsistent declaration."""
 
         voce = self.adattatore_imparato(con_scrittura=True)
         voce["order_write"]["header_row"] = 2
@@ -2991,7 +2967,7 @@ class LaCompilabilitaVieneDalRegistroTests(unittest.TestCase):
         self.assertTrue(any("non stanno insieme" in avviso for avviso in avvisi), avvisi)
 
     def test_un_foglio_non_dichiarato_su_un_documento_a_piu_fogli_si_rifiuta(self) -> None:
-        """Prendere il primo di tre sarebbe un foglio che nessuno ha guardato."""
+        """Picking the first of three sheets would be one nobody actually checked."""
 
         voce = self.adattatore_imparato(con_scrittura=True)
         del voce["order_write"]["sheet"]
@@ -3005,7 +2981,7 @@ class LaCompilabilitaVieneDalRegistroTests(unittest.TestCase):
                             for avviso in avvisi), avvisi)
 
     def test_first_dichiarato_dal_registro_vale_il_primo_foglio(self) -> None:
-        """«FIRST» scritto nel registro è una scelta, anche su più fogli."""
+        """'FIRST' written in the registry is a deliberate choice, even across multiple sheets."""
 
         voce = self.adattatore_imparato(con_scrittura=True)
         documento = self.listino_su_misura(intestazioni=["COD.EAN", "DESCRIZIONE", "ORDINE"],
@@ -3017,7 +2993,7 @@ class LaCompilabilitaVieneDalRegistroTests(unittest.TestCase):
         self.assertEqual(avvisi, [])
 
     def test_una_procedura_di_scrittura_sconosciuta_si_rifiuta(self) -> None:
-        """Un refuso in `mode` ricadeva in silenzio sulla procedura base."""
+        """A typo in `mode` must not silently fall back to the default write procedure."""
 
         voce = self.adattatore_imparato(con_scrittura=True)
         voce["order_write"]["mode"] = "patch_xls_in_posizone"
@@ -3029,7 +3005,7 @@ class LaCompilabilitaVieneDalRegistroTests(unittest.TestCase):
                             and "patch_xls_in_posizone" in avviso for avviso in avvisi), avvisi)
 
     def test_le_colonne_richieste_senza_mappatura_accusano_le_colonne(self) -> None:
-        """La frase diceva «le righe» quando il problema erano le colonne."""
+        """The message must blame the columns, not "rows", when columns are the problem."""
 
         voce = self.adattatore_imparato(con_scrittura=True)
         voce["order_write"]["required_columns"] = ["ean"]
@@ -3041,7 +3017,7 @@ class LaCompilabilitaVieneDalRegistroTests(unittest.TestCase):
         self.assertFalse(any("le righe da cui parte" in avviso for avviso in avvisi), avvisi)
 
     def test_un_foglio_dichiarato_che_non_esiste_accusa_il_registro(self) -> None:
-        """Lo dichiara il registro, non una mappatura: la frase deve dirlo."""
+        """The registry declared it, not a field mapping: the message must say so."""
 
         voce = self.adattatore_imparato(con_scrittura=True)
         voce["order_write"]["sheet"] = "Fantasma"
@@ -3052,7 +3028,7 @@ class LaCompilabilitaVieneDalRegistroTests(unittest.TestCase):
         self.assertTrue(any("indicato nel registro" in avviso for avviso in avvisi), avvisi)
 
     def test_un_registro_rotto_non_diventa_un_non_dichiara(self) -> None:
-        """«Non si legge» e «non dichiara» mandano in due posti diversi."""
+        """'Can't be read' and 'doesn't declare' must lead to two different messages."""
 
         percorso = self.root / "adapters.json"
         percorso.write_text("{ rotto", encoding="utf-8")
@@ -3065,7 +3041,7 @@ class LaCompilabilitaVieneDalRegistroTests(unittest.TestCase):
         self.assertFalse(any("non dichiara" in avviso for avviso in avvisi), avvisi)
 
     def test_fornitori_senza_copia_porta_la_causa_vera(self) -> None:
-        """L'avviso della catena deve dire perché, non solo che manca."""
+        """The pipeline's warning must say why a copy is missing, not just that it is."""
 
         voce = self.adattatore_imparato(con_scrittura=True)
         percorso = self.registro(voce)
@@ -3081,7 +3057,7 @@ class LaCompilabilitaVieneDalRegistroTests(unittest.TestCase):
 
 
 class LauncherBrowserTests(unittest.TestCase):
-    """Il comparatore deve aprirsi in Chrome, non nel predefinito di Windows."""
+    """The comparator must open in Chrome, not in the system's default browser."""
 
     @classmethod
     def load_launcher(cls) -> Any:
@@ -3141,23 +3117,24 @@ class LauncherBrowserTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Fase 5d: la pagina Impostazioni
+# Settings page
 # ---------------------------------------------------------------------------
 
 AI = SERVER.ai_client
 
-# Due chiavi finte, e la differenza fra loro e' il punto di due prove diverse.
-# La prima **non ha la forma** di una chiave OpenRouter: la rete di sicurezza a
-# espressione regolare non la riconosce, quindi se sparisce da una risposta e'
-# perche' il gestore si e' ricordato di quale chiave stava passando. La seconda
-# ha la forma giusta e serve al caso opposto: una chiave che il gestore non ha
-# mai visto — arrivata per esempio dentro l'errore di un fornitore.
+# Two fake keys, and the difference between them is the point of two
+# different tests. The first does NOT have the shape of an OpenRouter key:
+# the regex-based safety net doesn't recognize it, so if it's missing from
+# a response, that's because the handler remembered which key it was
+# passing. The second has the right shape and covers the opposite case: a
+# key the handler never saw explicitly (arriving, for example, inside a
+# supplier's error message).
 CHIAVE_SENZA_FORMA = "CHIAVE-FINTA-DI-PROVA-0123456789"
 CHIAVE_CON_FORMA = "sk-or-v1-0123456789abcdef0123456789abcdef"
 
 
 def nomi_dei_campi(valore: Any) -> set[str]:
-    """Tutti i nomi di campo di una risposta JSON, a qualunque profondita'."""
+    """All field names of a JSON response, at any depth."""
 
     if isinstance(valore, dict):
         trovati = set(valore)
@@ -3173,7 +3150,7 @@ def nomi_dei_campi(valore: Any) -> set[str]:
 
 
 def esito_finto(stato: str = "OK", dettaglio: str = "Tutto a posto.") -> Any:
-    """Un `EsitoAI` completo: la classe è congelata e non ha valori predefiniti."""
+    """A complete `EsitoAI`: the class is frozen and has no default values."""
 
     return AI.EsitoAI(
         stato=stato,
@@ -3190,7 +3167,7 @@ def esito_finto(stato: str = "OK", dettaglio: str = "Tutto a posto.") -> Any:
 
 
 class ClientAIFinto:
-    """Un `ClientAI` che non tocca la rete e ricorda la chiave che ha ricevuto."""
+    """A `ClientAI` stand-in that never touches the network and records the key it received."""
 
     def __init__(self, configurazione: dict[str, Any], chiave: str | None, esito: Any) -> None:
         self.configurazione = configurazione
@@ -3204,11 +3181,11 @@ class ClientAIFinto:
 
 
 class ImpostazioniHttpTests(unittest.TestCase):
-    """La pagina Impostazioni provata dalla parte della rotta.
+    """The Settings page tested from the route's side.
 
-    Una chiave che esce dal servizio locale non si richiama indietro, e il corpo
-    dei 500 rimanda `str(exc)` al programma di navigazione. Questi test guardano
-    proprio quella via d'uscita, non il caso che va bene.
+    A key that leaves the local service can't be recalled, and a 500's body
+    forwards `str(exc)` to the browser. These tests target exactly that
+    escape path, not the happy case.
     """
 
     def setUp(self) -> None:
@@ -3218,8 +3195,9 @@ class ImpostazioniHttpTests(unittest.TestCase):
         self.secrets = self.root / "secrets.json"
         self.settings = self.root / "impostazioni_ai.json"
 
-        # OPENROUTER_API_KEY vince su tutto: se e' impostata sul computer di chi
-        # lancia la suite, questi test proverebbero un'altra cosa.
+        # OPENROUTER_API_KEY overrides everything: if it were set on the
+        # machine running the suite, these tests would be testing something
+        # else entirely.
         ambiente = mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": ""})
         ambiente.start()
         self.addCleanup(ambiente.stop)
@@ -3229,15 +3207,15 @@ class ImpostazioniHttpTests(unittest.TestCase):
         review_path = self.root / "review_data.json"
         review_path.write_text(json.dumps(synthetic_review()), encoding="utf-8")
         self.store = ReviewStore(review_path, run_dir / "state.json", self.root / "uploads", self.root / "outputs")
-        # ⚠ Chiude `conferme.db` PRIMA che la cartella temporanea venga
-        # cancellata: `addCleanup` esegue in ordine inverso, quindi questa riga
-        # va dopo quella della cartella.  Su Windows un file aperto non si
-        # cancella, e la prova che scarica le conferme — l'unica qui che il
-        # database lo apre davvero — moriva alla pulizia con WinError 32,
-        # mentre sul Mac passava: Unix un file aperto lo cancella.
+        # Close `conferme.db` BEFORE the temp dir is deleted: `addCleanup`
+        # runs in reverse order, so this line must come after the temp dir's
+        # own cleanup. On Windows an open file blocks deletion, so the test
+        # that downloads confirmations (the only one here that actually opens
+        # the database) would fail cleanup with WinError 32; on Unix an open
+        # file can be deleted regardless.
         self.addCleanup(self.store.chiudi)
 
-        # Quello che i due punti di rete restituiscono, deciso dal singolo test.
+        # What the two network endpoints return, decided per test.
         self.modelli: Any = [
             {"id": "fornitore/modello-di-prova", "nome": "Modello di prova", "prezzo_ingresso": 0.0000006, "prezzo_uscita": 0.0000017},
         ]
@@ -3256,9 +3234,9 @@ class ImpostazioniHttpTests(unittest.TestCase):
 
         class HandlerCheRegistra(SERVER.AppHandler):
             def log_message(self, format_string: str, *args: object) -> None:
-                # Si chiama il vero e se ne cattura l'uscita: quello che finisce
-                # nel registro dev'essere quello che scrive lui, non una copia
-                # della sua logica riscritta nel test.
+                # Call the real implementation and capture its output: what
+                # ends up in the log must be exactly what it writes, not a
+                # reimplementation of its logic inside the test.
                 with io.StringIO() as buffer, contextlib.redirect_stdout(buffer):
                     super().log_message(format_string, *args)
                     righe.append(buffer.getvalue())
@@ -3302,8 +3280,9 @@ class ImpostazioniHttpTests(unittest.TestCase):
         return self.esegui(richiesta)
 
     def esegui(self, richiesta: Any) -> tuple[int, Any, str]:
-        """Torna anche il corpo grezzo: la chiave si cerca **nei byte**, non in
-        una chiave del dizionario che qualcuno potrebbe aver rinominato."""
+        """Also return the raw body: the key is searched for in the BYTES, not
+        in a dict key someone could have renamed.
+        """
 
         try:
             with urllib.request.urlopen(richiesta, timeout=15) as risposta:
@@ -3328,7 +3307,7 @@ class ImpostazioniHttpTests(unittest.TestCase):
         self.assertEqual(corpo["chiave"]["origine"], "file")
         self.assertEqual(corpo["chiave"]["coda"], CHIAVE_SENZA_FORMA[-4:])
         self.assertNotIn(CHIAVE_SENZA_FORMA, grezzo)
-        # La coda e' quattro caratteri: quello che non deve uscire e' il resto.
+        # The tail is four characters; the rest must never appear.
         self.assertNotIn(CHIAVE_SENZA_FORMA[:-4], grezzo)
 
     def test_lo_stato_espone_le_voci_da_cambiare_e_non_la_versione_del_prompt(self) -> None:
@@ -3339,9 +3318,10 @@ class ImpostazioniHttpTests(unittest.TestCase):
         self.assertNotIn("versione_avversario", corpo["impostazioni"])
 
     def test_la_configurazione_ai_non_entra_nella_risposta_piu_letta(self) -> None:
-        """`GET /api/review` e' la risposta piu' grande e piu' letta: la
-        configurazione della fase AI non deve viaggiarci dentro, e tanto meno
-        qualcosa che riguardi la chiave."""
+        """`GET /api/review` is the biggest, most frequently read response: the
+        AI stage's configuration must not travel inside it, let alone
+        anything about the key.
+        """
 
         AI.salva_chiave(CHIAVE_SENZA_FORMA, self.secrets)
 
@@ -3349,13 +3329,13 @@ class ImpostazioniHttpTests(unittest.TestCase):
 
         self.assertEqual(stato, 200)
         self.assertNotIn(CHIAVE_SENZA_FORMA, grezzo)
-        # Si guardano i **nomi dei campi**, a qualunque profondita': cercare le
-        # parole nel testo grezzo direbbe di sì anche a un prodotto che si
-        # chiama «MODEL», e direbbe di no a una voce annidata in fondo.
+        # Checking field NAMES at any depth: a raw-text search would give a
+        # false positive on a product literally named "MODEL", and a false
+        # negative on a value nested deep inside the response.
         vietati = {*SERVER.VOCI_IMPOSTAZIONI, "versione_prompt", "versione_avversario", "openrouter", "api_key"}
         self.assertEqual(sorted(nomi_dei_campi(corpo) & vietati), [])
 
-    # -- il salvataggio della chiave ----------------------------------------
+    # -- saving the key -------------------------------------------------
 
     def test_la_chiave_si_salva_e_la_risposta_non_la_riporta_indietro(self) -> None:
         stato, corpo, grezzo = self.post("/api/impostazioni/chiave", {"chiave": CHIAVE_SENZA_FORMA})
@@ -3379,8 +3359,9 @@ class ImpostazioniHttpTests(unittest.TestCase):
     # -- la prova ------------------------------------------------------------
 
     def test_la_prova_usa_la_chiave_del_corpo_e_non_la_salva(self) -> None:
-        """Si prova **prima** di salvare: una chiave sbagliata non deve poter
-        sostituire quella che funziona."""
+        """Testing happens BEFORE saving: a wrong key must never be able to
+        overwrite one that already works.
+        """
 
         stato, corpo, _ = self.post("/api/impostazioni/prova", {"chiave": CHIAVE_SENZA_FORMA})
 
@@ -3390,11 +3371,11 @@ class ImpostazioniHttpTests(unittest.TestCase):
         self.assertFalse(self.secrets.exists(), "la prova ha salvato la chiave")
 
     def test_senza_chiave_nel_corpo_la_prova_usa_quella_salvata_qui(self) -> None:
-        """E dev'essere quella del percorso di **questo** servizio.
+        """And it must be the key at THIS service's path.
 
-        Lasciando cercare la chiave a `ClientAI(chiave=None)` si finirebbe sul
-        percorso predefinito del modulo: la prova direbbe com'e' una chiave
-        diversa da quella che la pagina mostra due riquadri piu' su.
+        Letting `ClientAI(chiave=None)` look up the key would fall back to
+        the module's default path: the test would then report the state of
+        a different key than the one the settings page shows.
         """
 
         AI.salva_chiave(CHIAVE_SENZA_FORMA, self.secrets)
@@ -3405,8 +3386,9 @@ class ImpostazioniHttpTests(unittest.TestCase):
         self.assertEqual([client.chiave for client in self.clienti], [CHIAVE_SENZA_FORMA])
 
     def test_senza_nessuna_chiave_la_prova_lo_dichiara_invece_di_cercarla(self) -> None:
-        """La stringa vuota dice al client «la chiave non c'e'», ed e' cosi' che
-        si ottiene `SENZA_CHIAVE` invece di una ricerca a sorpresa altrove."""
+        """The empty string tells the client "there is no key", which is how
+        `SENZA_CHIAVE` is reached instead of an unexpected lookup elsewhere.
+        """
 
         self.esito = esito_finto("SENZA_CHIAVE", "Nessuna chiave configurata.")
 
@@ -3434,9 +3416,10 @@ class ImpostazioniHttpTests(unittest.TestCase):
         self.assertIn("401", corpo["messaggio"])
 
     def test_una_risposta_storta_non_diventa_una_chiave_che_funziona(self) -> None:
-        """`SCHEMA_NON_CONFORME` vuol dire che la chiamata e' partita: la chiave
-        non e' stata respinta, ma quel modello non e' utilizzabile. Dire «tutto
-        a posto» qui sarebbe la bugia piu' costosa di questa pagina."""
+        """`SCHEMA_NON_CONFORME` means the call went through: the key wasn't
+        rejected, but that model isn't usable. Reporting "all good" here
+        would be this page's most expensive lie.
+        """
 
         self.esito = esito_finto("SCHEMA_NON_CONFORME", "Manca «azione»")
 
@@ -3446,36 +3429,37 @@ class ImpostazioniHttpTests(unittest.TestCase):
         self.assertEqual(corpo["tono"], "warning")
         self.assertIn("non è utilizzabile", corpo["messaggio"])
 
-    # -- la trappola numero 4: la chiave dentro un'eccezione -----------------
+    # -- an exception carrying the key must never reach the browser ---------
 
     def test_uneccezione_che_si_porta_dietro_la_chiave_non_arriva_al_browser(self) -> None:
-        """Il corpo dei 500 rimanda `str(exc)`. Un guasto qualunque — urllib, un
-        `KeyError` su un dizionario di intestazioni, una libreria di terze parti —
-        puo' avere la chiave dentro il messaggio."""
+        """A 500's body forwards `str(exc)`. Any failure (urllib, a `KeyError`
+        on a headers dict, a third-party library) could have the key inside
+        its message.
+        """
 
         self.esito = RuntimeError(f"guasto interno chiamando con {CHIAVE_SENZA_FORMA} in corso")
 
         stato, corpo, grezzo = self.post("/api/impostazioni/prova", {"chiave": CHIAVE_SENZA_FORMA})
 
         self.assertEqual(stato, 500)
-        # La proprieta' che conta: la chiave non compare **da nessuna parte** nel
-        # corpo, ne' nel messaggio ne' nel dettaglio tecnico.
+        # The property that matters: the key doesn't appear ANYWHERE in the
+        # body, neither in the message nor in the technical detail.
         self.assertNotIn(CHIAVE_SENZA_FORMA, grezzo)
         self.assertIn(AI.NASCOSTO, grezzo)
-        # L'errore resta visibile: nascondere la chiave non vuol dire nascondere
-        # il guasto, che senza messaggio nessuno andrebbe a cercare nei registri.
-        # Dal 14 agosto 2026 la frase tecnica sta nel dettaglio, e il messaggio
-        # dice all'utente che cosa fare: erano due cose in un campo solo.
+        # The error stays visible: hiding the key doesn't mean hiding the
+        # failure, which nobody would go looking for in the logs without a
+        # message. The technical text lives in the detail field, separate
+        # from the message that tells the user what to do.
         dettaglio = [voce for voce in corpo["errors"] if voce.get("code") == "DETTAGLIO_TECNICO"]
         self.assertEqual(len(dettaglio), 1, corpo["errors"])
         self.assertIn("guasto interno", dettaglio[0]["message"])
         self.assertIn(AI.NASCOSTO, dettaglio[0]["message"])
         self.assertIn("Riprova", corpo["message"])
 
-    # -- le conferme date, come file da salvare -------------------------------
+    # -- given confirmations, downloadable as a file --------------------------
 
     def scarica(self, percorso: str) -> tuple[int, dict[str, str], bytes]:
-        """Anche le intestazioni: qui la metà del lavoro sta lì dentro."""
+        """Also return the headers: half of what this endpoint does lives there."""
 
         richiesta = urllib.request.Request(self.base_url + percorso, method="GET")
         with urllib.request.urlopen(richiesta, timeout=15) as risposta:
@@ -3488,10 +3472,10 @@ class ImpostazioniHttpTests(unittest.TestCase):
         self.assertIn("application/json", intestazioni["Content-Type"])
         disposizione = intestazioni["Content-Disposition"]
         self.assertTrue(disposizione.startswith("attachment;"), disposizione)
-        # ⚠ Il nome porta un em dash e i mesi in italiano, e le intestazioni di
-        # `BaseHTTPRequestHandler` sono latin-1: senza la forma RFC 5987 che
-        # `consegna` costruisce, la risposta morirebbe mentre scrive
-        # l'intestazione, cioe' a corpo gia' promesso.
+        # The filename carries an em dash and Italian month names, and
+        # `BaseHTTPRequestHandler` headers are latin-1: without the RFC 5987
+        # form `consegna` builds, the response would die while writing the
+        # header, after the body has already been promised.
         self.assertIn("filename*=UTF-8''", disposizione)
         self.assertIn("Conferme", disposizione)
         documento = json.loads(corpo.decode("utf-8"))
@@ -3500,12 +3484,11 @@ class ImpostazioniHttpTests(unittest.TestCase):
         self.assertIn("esportate_il", documento)
 
     def test_quello_che_si_scarica_e_quello_che_c_e_dentro(self) -> None:
-        """⚠ Le due prove di prima esercitavano solo il caso vuoto: la rotta
-
-        poteva rispondere `[]` invece di leggere il magazzino e restavano
-        verdi. Qui dentro il magazzino c'e' roba, e deve uscire — conferme
-        **e** uguaglianze, che stanno nello stesso file e sono memoria «per
-        sempre** tutt'e due."""
+        """The two tests above only exercised the empty case: the route could
+        respond `[]` instead of reading the store and stay green. Here the
+        store has data, and it must come out, both confirmations and
+        equivalences, since they live in the same permanent file.
+        """
 
         magazzino = SERVER.MagazzinoConferme(self.store.conferme_path)
         try:
@@ -3537,24 +3520,25 @@ class ImpostazioniHttpTests(unittest.TestCase):
         self.assertIn("8729721830575", json.dumps(codici))
 
     def test_scaricarle_su_un_programma_nuovo_non_crea_il_magazzino(self) -> None:
-        """Aprire Impostazioni non deve lasciarsi dietro un `conferme.db`
+        """Opening Settings must not leave behind an empty `conferme.db`:
 
-        vuoto: SQLite tiene il file aperto finche' la connessione vive, e su
-        Windows un file aperto blocca la cartella che lo contiene."""
+        SQLite keeps the file open as long as the connection lives, and on
+        Windows an open file locks the folder that contains it.
+        """
 
         stato, _intestazioni, _corpo = self.scarica("/api/conferme/esporta")
 
         self.assertEqual(stato, 200)
         self.assertFalse(self.store.conferme_path.exists())
 
-    # -- il traceback di un guasto imprevisto --------------------------------
+    # -- the traceback of an unexpected failure --------------------------------
 
     def stderr_di(self, chiamata) -> str:
-        """Che cosa e' finito sulla finestra del programma durante la richiesta.
+        """What ended up on the program's window during the request.
 
-        `redirect_stderr` sostituisce `sys.stderr` per tutto il processo, e il
-        gestore risponde su un altro filo: la richiesta pero' finisce dentro il
-        `with`, perche' `urlopen` aspetta la risposta.
+        `redirect_stderr` replaces `sys.stderr` process-wide, and the handler
+        responds on another thread; the request still completes inside the
+        `with` block, because `urlopen` waits for the response.
         """
 
         with io.StringIO() as buffer, contextlib.redirect_stderr(buffer):
@@ -3563,10 +3547,10 @@ class ImpostazioniHttpTests(unittest.TestCase):
             return buffer.getvalue()
 
     def test_un_guasto_imprevisto_lascia_il_suo_traceback_sulla_finestra(self) -> None:
-        """In negozio, davanti a un «KeyError», non c'era modo di sapere da
-
-        quale delle 5.200 righe venisse: restava farsi raccontare i passi al
-        telefono."""
+        """Without a traceback, a bare "KeyError" gives no way to know which
+        line of thousands raised it, forcing a slow back-and-forth to
+        reproduce the failure.
+        """
 
         self.esito = RuntimeError("guasto interno di prova")
 
@@ -3578,18 +3562,18 @@ class ImpostazioniHttpTests(unittest.TestCase):
         self.assertIn("POST /api/impostazioni/prova", uscita)
         self.assertIn("Traceback (most recent call last)", uscita)
         self.assertIn("RuntimeError: guasto interno di prova", uscita)
-        # Il traceback dice il file e la riga: e' l'unica cosa che il messaggio
-        # in pagina non puo' dire.
+        # The traceback names the file and line: the one thing the on-page
+        # message can never say.
         self.assertIn("server.py", uscita)
-        # E la risposta non cambia di una virgola: il traceback e' per chi
-        # guarda la finestra, non per chi usa il programma.
+        # And the response doesn't change at all: the traceback is for
+        # whoever watches the window, not for whoever uses the program.
         self.assertIn("Riprova", corpo["message"])
         self.assertNotIn("Traceback", json.dumps(corpo))
 
     def test_la_chiave_non_finisce_nemmeno_nel_traceback(self) -> None:
-        """La chiave puo' comparire in un traceback di `urllib`: e' esattamente
-
-        la ragione per cui `_chiave_in_volo` esiste."""
+        """The key can show up in an `urllib` traceback: that's exactly why
+        `_chiave_in_volo` exists.
+        """
 
         self.esito = RuntimeError(f"il fornitore ha risposto: Bearer {CHIAVE_CON_FORMA}")
 
@@ -3603,15 +3587,16 @@ class ImpostazioniHttpTests(unittest.TestCase):
         self.assertIn(AI.NASCOSTO, uscita)
 
     def test_anche_la_chiave_gia_salvata_si_nasconde(self) -> None:
-        """⚠ Il caso piu' comune di tutti, e fino al 20 agosto era scoperto.
+        """The most common case of all: reusing the saved key, not the pasted one.
 
-        Chi preme «Prova la connessione» senza reincollare niente manda un
-        corpo **senza** `chiave`, e il servizio ripiega su quella salvata.
-        Finche' si metteva da parte solo quella del corpo, li' l'unica difesa
-        restava la forma `sk-...` — che una chiave presa da
-        `OPENROUTER_API_KEY`, mai controllata da nessuno, non e' tenuta ad
-        avere. Questa non ce l'ha, e deve sparire lo stesso: dal corpo della
-        risposta e dal traceback sulla finestra."""
+        Pressing "Test connection" without pasting anything sends a body
+        with no `chiave`, and the service falls back to the saved one. If
+        only the body's key were masked, the sole defense left would be the
+        `sk-...` shape, which a key taken from `OPENROUTER_API_KEY` (never
+        validated) isn't guaranteed to have. This key doesn't have it, and
+        must still be hidden, both from the response body and from the
+        traceback on the window.
+        """
 
         AI.salva_chiave(CHIAVE_SENZA_FORMA, self.secrets)
         self.esito = RuntimeError(f"il fornitore ha risposto 401 per {CHIAVE_SENZA_FORMA}")
@@ -3625,13 +3610,12 @@ class ImpostazioniHttpTests(unittest.TestCase):
         self.assertIn(AI.NASCOSTO, uscita)
 
     def test_un_browser_che_stacca_a_meta_non_e_un_guasto(self) -> None:
-        """⚠ `BrokenPipeError` arriva allo stesso `except Exception` dei guasti
-
-        veri, ma non e' un guasto del programma: e' l'utente che annulla uno
-        scaricamento, o la scheda che si chiude su un file grosso. Succede per
-        davvero — riprodotto su un file da 60 MB interrotto a meta' — e un
-        traceback per ognuno riempirebbe di rumore proprio la finestra in cui
-        il giorno del guasto vero bisogna saper guardare."""
+        """`BrokenPipeError` reaches the same `except Exception` as real failures,
+        but isn't a program failure: it's the user canceling a download, or a
+        tab closing mid-transfer on a large file (reproduced with a real
+        60 MB file cut off mid-download). Logging a traceback for each would
+        drown out the window that matters on the day a real failure happens.
+        """
 
         self.esito = BrokenPipeError(32, "Broken pipe")
 
@@ -3648,10 +3632,10 @@ class ImpostazioniHttpTests(unittest.TestCase):
         self.assertEqual(uscita, "")
 
     def test_un_errore_gia_spiegato_non_stampa_nessun_traceback(self) -> None:
-        """Un 400 e' una risposta, non un guasto: il traceback e' rumore, e
-
-        rumore a ogni campo lasciato vuoto significa che il giorno del guasto
-        vero nessuno guarda piu' quella finestra."""
+        """A 400 is a response, not a failure: a traceback here is noise, and
+        noise on every empty field means nobody watches that window anymore
+        by the day a real failure happens.
+        """
 
         uscita = self.stderr_di(lambda: self.post("/api/impostazioni/chiave", {"chiave": "   "}))
 
@@ -3659,9 +3643,10 @@ class ImpostazioniHttpTests(unittest.TestCase):
         self.assertNotIn("[GUASTO]", uscita)
 
     def test_una_chiave_mai_vista_dal_gestore_la_ferma_la_forma(self) -> None:
-        """La seconda rete: una chiave che arriva da dentro — dall'errore di un
-        fornitore, non dal corpo della richiesta — il gestore non ce l'ha e non
-        puo' sostituirla per uguaglianza. La forma la riconosce lo stesso."""
+        """The second net: a key arriving from inside (a supplier's error, not
+        the request body) is one the handler never had, so it can't match it
+        by equality. Its shape still catches it.
+        """
 
         self.esito = RuntimeError(f"il fornitore ha risposto: Authorization: Bearer {CHIAVE_CON_FORMA}")
 
@@ -3671,13 +3656,14 @@ class ImpostazioniHttpTests(unittest.TestCase):
         self.assertNotIn(CHIAVE_CON_FORMA, grezzo)
         self.assertIn(AI.NASCOSTO, grezzo)
 
-    # -- la trappola numero 3: la chiave nella riga di richiesta -------------
+    # -- the key must never end up in the request-line log -------------------
 
     def test_la_chiave_non_finisce_nel_registro_del_servizio(self) -> None:
-        """`log_message` stampa la riga di richiesta a ogni chiamata. Le rotte
-        delle impostazioni che portano la chiave sono POST con corpo JSON, e
-        nessuna legge la query: se un domani qualcuno ce la mettesse, non
-        arriverebbe comunque nel registro."""
+        """`log_message` prints the request line on every call. Settings routes
+        carrying the key are POST with a JSON body, and none of them read
+        the query string, so even if one did in the future, the key still
+        wouldn't reach the log.
+        """
 
         self.post("/api/impostazioni/prova", {"chiave": CHIAVE_SENZA_FORMA})
         self.get(f"/api/impostazioni?chiave={CHIAVE_CON_FORMA}")
@@ -3692,7 +3678,7 @@ class ImpostazioniHttpTests(unittest.TestCase):
             stato, _, _ = self.get(percorso)
             self.assertEqual(stato, 404, f"{percorso} risponde anche in GET")
 
-    # -- il salvataggio delle impostazioni ----------------------------------
+    # -- saving settings -------------------------------------------------
 
     def test_le_impostazioni_si_salvano_e_tornano_lette_dal_file(self) -> None:
         stato, corpo, _ = self.post("/api/impostazioni", {"impostazioni": {"tetto_spesa_usd": 5.5, "parallelismo": 8}})
@@ -3703,8 +3689,7 @@ class ImpostazioniHttpTests(unittest.TestCase):
         self.assertEqual(json.loads(self.settings.read_bytes().decode("utf-8"))["tetto_spesa_usd"], 5.5)
 
     def test_la_versione_del_prompt_non_si_cambia_da_questa_pagina(self) -> None:
-        """E' un componente del programma, scelto misurando quanti `ALTA`
-        sbagliati produce, non una preferenza."""
+        """A program component chosen by measuring wrong `ALTA` results, not a user preference."""
 
         stato, corpo, _ = self.post("/api/impostazioni", {"impostazioni": {"versione_prompt": "v1"}})
 
@@ -3713,8 +3698,10 @@ class ImpostazioniHttpTests(unittest.TestCase):
         self.assertFalse(self.settings.exists(), "una voce rifiutata ha scritto il file lo stesso")
 
     def test_un_numero_con_la_virgola_e_un_errore_spiegato_non_uno_zero_zitto(self) -> None:
-        """Il difetto misurato nella 5a: `3,0` azzerava il tetto di spesa e il
-        messaggio ripeteva all'utente il numero che credeva di aver impostato."""
+        """`3,0` must be rejected explicitly, not silently zero the spending cap
+        while the error message parrots back the number the user thought
+        they had set.
+        """
 
         stato, corpo, _ = self.post("/api/impostazioni", {"impostazioni": {"tetto_spesa_usd": "3,0"}})
 
@@ -3722,12 +3709,13 @@ class ImpostazioniHttpTests(unittest.TestCase):
         self.assertIn("separatore decimale", corpo["message"])
         self.assertFalse(self.settings.exists())
 
-    # -- l'elenco dei modelli ------------------------------------------------
+    # -- the model list --------------------------------------------------
 
     def test_lelenco_dei_modelli_arriva_dal_servizio_e_dice_di_non_essere_una_prova(self) -> None:
-        """La CSP e' `connect-src 'self'`: il menu' non si puo' popolare dal
-        programma di navigazione. E l'elenco e' pubblico, quindi popolarsi non
-        dimostra niente sulla chiave — e la risposta lo porta scritto."""
+        """The CSP is `connect-src 'self'`: the menu can't be populated straight
+        from the browser. The list is public, so populating it proves
+        nothing about the key, and the response states that explicitly.
+        """
 
         stato, corpo, _ = self.get("/api/impostazioni/modelli")
 
@@ -3738,8 +3726,9 @@ class ImpostazioniHttpTests(unittest.TestCase):
         self.assertIn("anche senza chiave", corpo["avviso"])
 
     def test_un_elenco_irraggiungibile_non_spegne_la_pagina(self) -> None:
-        """L'identificativo si scrive comunque a mano: e' l'unico modo di usare
-        un modello uscito dopo l'ultimo aggiornamento dell'elenco."""
+        """The model id can still be typed by hand: the only way to use a model
+        released after the list was last refreshed.
+        """
 
         self.modelli = OSError("la rete non risponde")
 
@@ -3751,8 +3740,9 @@ class ImpostazioniHttpTests(unittest.TestCase):
         self.assertIn("a mano", corpo["messaggio"])
 
     def test_la_pagina_non_allenta_la_politica_dei_contenuti(self) -> None:
-        """Il menu' si popola perche' c'e' una rotta sul servizio locale, non
-        perche' qualcuno ha aperto la CSP verso openrouter.ai."""
+        """The menu populates through a local-service route, not because the CSP
+        was opened up toward openrouter.ai.
+        """
 
         richiesta = urllib.request.Request(self.base_url + "/api/health", method="GET")
         with urllib.request.urlopen(richiesta, timeout=15) as risposta:
@@ -3763,11 +3753,11 @@ class ImpostazioniHttpTests(unittest.TestCase):
 
 
 class ImpostazioniInterfacciaTests(unittest.TestCase):
-    """Le regole della pagina che nessun test del servizio locale può difendere.
+    """Page rules no local-service test can defend.
 
-    Il valore della chiave non attraversa mai il servizio locale in uscita: la
-    sola cosa che può farlo comparire dove non deve è il programma di
-    navigazione, cioè app.js.
+    The key value never leaves the local service on any outbound response;
+    the only thing that could make it show up somewhere it shouldn't is the
+    browser side, i.e. app.js.
     """
 
     @classmethod
@@ -3782,10 +3772,10 @@ class ImpostazioniInterfacciaTests(unittest.TestCase):
     def test_il_campo_della_chiave_e_un_campo_password_senza_valore_nellhtml(self) -> None:
         corpo = self.body("renderSettingsKeyPanel")
         self.assertIn('type="password"', corpo)
-        # Gli altri campi della pagina si ridisegnano con
-        # `value="${escapeHtml(...)}"`: per una chiave che si salva quello
-        # metterebbe il valore nel sorgente della pagina. Qui il valore arriva
-        # come proprieta' del nodo.
+        # Other fields on the page re-render with
+        # `value="${escapeHtml(...)}"`: for a saved key that would put the
+        # value straight into the page source. Here the value arrives as a
+        # DOM node property instead.
         self.assertNotIn("value=\"${escapeHtml(state.impostazioni.nuovaChiave", corpo)
         self.assertNotIn("state.impostazioni.nuovaChiave}", corpo)
         self.assertIn("data-chiave-openrouter", corpo)
@@ -3797,10 +3787,10 @@ class ImpostazioniInterfacciaTests(unittest.TestCase):
 
     def test_la_chiave_incollata_si_azzera_in_tutti_i_rami_dopo_linvio(self) -> None:
         corpo = self.body("saveApiKey")
-        # Nel `finally`, cioe' anche quando il salvataggio fallisce.
+        # In the `finally` block, so also when the save fails.
         coda = corpo.split("finally")[-1]
         self.assertIn('state.impostazioni.nuovaChiave = ""', coda)
-        # E uscendo dalla pagina, salvata o no.
+        # And when leaving the page, saved or not.
         self.assertIn('state.impostazioni.nuovaChiave = ""', self.body("closeSettings"))
         self.assertIn('state.impostazioni.nuovaChiave = ""', self.body("goToStep"))
 
@@ -3814,17 +3804,17 @@ class ImpostazioniInterfacciaTests(unittest.TestCase):
             corpo = self.body(nome)
             self.assertIn('method: "POST"', corpo)
             self.assertNotIn("?chiave=", corpo)
-        # Nessun indirizzo delle impostazioni porta parametri.
+        # No settings endpoint carries query parameters.
         indirizzi = self.app_js.split("const API = {")[1].split("};")[0]
         self.assertIn('"/api/impostazioni"', indirizzi)
         self.assertNotIn("impostazioni?", indirizzi)
 
     def test_il_modello_si_puo_sempre_scrivere_a_mano(self) -> None:
-        """Gli elenchi invecchiano: un modello uscito ieri non c'e' dentro.
+        """Lists go stale: a model released yesterday isn't in them.
 
-        Il campo dev'essere davvero scrivibile, e quello che ci si scrive deve
-        arrivare fino al salvataggio. Un `readonly` sfuggito lascerebbe la
-        pagina identica a vedersi e il modello nuovo impossibile da mettere.
+        The field must be genuinely editable, and what's typed must reach
+        the save call. A stray `readonly` would leave the page looking
+        identical while making a new model impossible to enter.
         """
 
         corpo = self.body("renderSettingsModelPanel")
@@ -3833,38 +3823,39 @@ class ImpostazioniInterfacciaTests(unittest.TestCase):
         self.assertIn('type="text"', blocco + campo)
         self.assertNotIn("readonly", blocco)
         self.assertNotIn("disabled", blocco)
-        # Quello che si scrive finisce nello stato...
+        # What's typed lands in state...
         ascolto = self.app_js.split("if (target.dataset.impostazione) {")[1].split("}")[0]
         self.assertIn("state.impostazioni.valori[target.dataset.impostazione] = target.value", ascolto)
-        # ...e dallo stato parte al salvataggio, senza passare dall'elenco.
+        # ...and from state it flows to the save call, bypassing the list.
         self.assertIn("model: modelloConfigurato()", self.body("saveSettings"))
         self.assertIn('state.impostazioni.valori?.model || ""', self.body("modelloConfigurato"))
-        # Il menu' riempie il campo di testo, che resta il valore vero.
+        # The dropdown fills the text field, which remains the source of truth.
         scelta = self.app_js.split("if (target.dataset.elencoModelli !== undefined)")[1].split("return;")[0]
         self.assertIn("state.impostazioni.valori.model = String(target.value)", scelta)
 
     def test_la_pagina_non_racconta_che_lelenco_dimostri_la_chiave(self) -> None:
         corpo = self.body("renderSettingsTestPanel")
         self.assertIn("l’unica cosa che dimostra", corpo)
-        # E l'avviso che accompagna l'elenco arriva dal servizio locale, dove sta
-        # scritto una volta sola.
+        # The warning accompanying the list comes from the local service,
+        # where it's written once.
         self.assertIn("elenco.avviso", self.body("renderSettingsModelPanel"))
 
     def test_le_impostazioni_non_sono_un_quarto_passo_del_flusso(self) -> None:
-        """`currentStep` vale 1..3 qui e sul servizio locale: un quarto valore
-        verrebbe tagliato al salvataggio e la pagina tornerebbe da sola alla
-        terza schermata."""
+        """`currentStep` ranges 1..3 both here and on the local service: a fourth
+        value would be truncated on save and the page would snap back to
+        the third screen on its own.
+        """
 
         self.assertIn("state.impostazioni.aperta", self.body("render"))
         self.assertNotIn("state.currentStep = 4", self.app_js)
-        # ⚠ La barra dei passi mostra una quarta voce mentre le impostazioni
-        # sono aperte, ma NON e' un quarto passo: non porta `data-step`, non
-        # tocca `currentStep`, e sparisce appena si chiudono. Quello che questa
-        # prova protegge e' che `STEPS` resti di tre.
+        # The step bar shows a fourth entry while settings are open, but it
+        # is NOT a fourth step: it carries no `data-step`, never touches
+        # `currentStep`, and disappears as soon as settings close. This test
+        # protects `STEPS` staying at three entries.
         self.assertIn('{ id: 3, label: "Riepilogo e compilazione" }', self.app_js)
         self.assertNotIn("{ id: 4,", self.app_js)
-        # E la quarta voce si disegna a mano dentro `renderStepper`, senza
-        # passare da `STEPS`.
+        # And the fourth entry is drawn by hand inside `renderStepper`,
+        # without going through `STEPS`.
         barra = self.body("renderStepper")
         self.assertIn('data-action="chiudi-impostazioni"', barra)
         self.assertNotIn("data-step", barra.split('data-action="chiudi-impostazioni"', 1)[1])
@@ -3873,8 +3864,10 @@ class ImpostazioniInterfacciaTests(unittest.TestCase):
         self.assertIn('data-action="apri-impostazioni"', self.body("renderUploadStep"))
 
     def test_i_numeri_partono_come_numeri_e_il_resto_lo_spiega_il_servizio(self) -> None:
-        """Il servizio locale rifiuta la stringa «3» per un tetto che vale 3.0:
-        e' giusto che sia severo, ed e' qui che si converte prima di spedire."""
+        """The local service rejects the string "3" for a cap that's meant to be
+        3.0, and it's right to be strict: this is where the conversion
+        happens before sending.
+        """
 
         corpo = self.body("settingsNumber")
         self.assertIn("Number.isFinite(numero) ? numero : testo", corpo)
@@ -3882,14 +3875,14 @@ class ImpostazioniInterfacciaTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Fase 6d: la consegna — una cartella datata per ogni compilazione
+# Delivery: a dated folder per compile
 # ---------------------------------------------------------------------------
 
 CONSEGNA = SERVER.consegna
 
 
 def listino_finto(percorso: Path, foglio: str = "LISTINO") -> Path:
-    """Un .xlsx vero, non un file finto: le prove lo riaprono con openpyxl."""
+    """A real .xlsx, not a fake file: these tests reopen it with openpyxl."""
 
     workbook = Workbook()
     sheet = workbook.active
@@ -3902,28 +3895,28 @@ def listino_finto(percorso: Path, foglio: str = "LISTINO") -> Path:
 
 
 class ScrittoreFinto:
-    """Il writer Node sostituito da qualcosa che scrive dove gli si dice.
+    """A stand-in for the Node writer that writes wherever it's told.
 
-    Il writer vero ha una catena di verifiche tutta sua, gia' provata altrove e
-    intoccabile, e su molte macchine Node non c'e' nemmeno. Qui interessa
-    soltanto che *qualcuno* metta dei documenti nella cartella della
-    compilazione: quello che si prova e' la rinomina ai nomi leggibili, l'audit
-    costruito scandendo il disco e le rotte che li consegnano.
+    The real writer has its own verification chain, already tested
+    elsewhere and off-limits here, and Node isn't even installed on many
+    machines. All that matters here is that *something* puts documents in
+    the compile folder: what's under test is the rename to readable names,
+    the audit built by scanning disk, and the routes that deliver them.
 
-    ⚠ La copia e' una **copia del listino di partenza**, non un documento nuovo
-    che gli somiglia.  Dal 12 agosto 2026 la compilazione riapre ogni copia e la
-    confronta cella per cella con il suo listino (`app/copia_fedele.py`): uno
-    scrittore finto che consegnasse un documento senza rapporto con l'originale
-    verrebbe fermato dalla guardia, e queste prove non parlerebbero piu' di
-    quello di cui vogliono parlare.
+    The copy must be a copy of the ORIGINAL price list, not an unrelated
+    document that merely resembles it: compile reopens every copy and
+    compares it cell by cell against its price list
+    (`app/copia_fedele.py`), so a fake writer delivering an unrelated
+    document would be caught by that guard, defeating the point of these
+    tests.
 
-    ⚠ E **le quantita' del piano le scrive davvero**, dal 14 agosto 2026.  Prima
-    faceva soltanto `shutil.copy2`, cioe' consegnava una copia identica
-    all'originale, con la colonna d'ordine vuota: tutte le prove di consegna —
-    rinomina, audit, zip — giravano su ordini vuoti senza accorgersene, perche'
-    il controllo di fedelta' guardava solo le celle *diverse* e una quantita'
-    mai scritta non e' una differenza.  Chiusa quella falla, uno scrittore che
-    non scrive niente e' esattamente cio' che la guardia deve fermare.
+    It also writes the plan's quantities for real. An earlier version only
+    did `shutil.copy2`, delivering a copy identical to the original with an
+    empty order column: every delivery test (rename, audit, zip) ran on
+    empty orders without anyone noticing, because the fidelity check only
+    compared cells that DIFFER, and a quantity never written isn't a
+    difference. With that gap closed, a writer that writes nothing is
+    exactly what the guard is meant to catch.
     """
 
     def __init__(
@@ -3935,19 +3928,19 @@ class ScrittoreFinto:
     ) -> None:
         self.fornitori = fornitori
         self.sorpresa = sorpresa
-        # Le frasi che il writer vero dichiara nel suo riepilogo (righe scritte
-        # senza aver potuto verificare che fossero quelle giuste): qui si
-        # possono iniettare, perche' devono arrivare fino alla pagina.
+        # The messages the real writer reports in its summary (rows written
+        # without being able to verify they were the right ones): injectable
+        # here because they must reach the page.
         self.avvisi = list(avvisi)
         self.destinazioni: list[Path] = []
 
     @staticmethod
     def _scrivi_le_quantita(piano: dict[str, Any], fornitore: str, copia: Path) -> None:
-        """Mette i colli del piano nella colonna d'ordine, come fa il writer vero.
+        """Write the plan's cartons into the order column, like the real writer does.
 
-        La colonna la si chiede alla stessa regola che usera' il controllo di
-        fedelta' (`default_write_rule`): scriverla a mano qui vorrebbe dire
-        avere due verita' e scoprirlo il giorno che una delle due cambia.
+        The column comes from the same rule the fidelity check will use
+        (`default_write_rule`): hardcoding it here would mean two sources of
+        truth, and finding out only when one of them changes.
         """
 
         righe: dict[int, int] = {}
@@ -3986,28 +3979,25 @@ class ScrittoreFinto:
             generati.append(copia)
             prodotte.append((fornitore, sorgente, copia))
         if self.sorpresa:
-            # Un file che nessuno aspettava: l'audit lo deve dire lo stesso.
+            # A file nobody expected: the audit must report it anyway.
             (destinazione / self.sorpresa).write_bytes(b"nessuno mi aspettava")
         return generati, prodotte, list(self.avvisi)
 
 
 class ConsegnaBase(unittest.TestCase):
-    """Le fondamenta comuni alle prove della 6d: uno store con due fornitori."""
+    """Shared fixture for the delivery tests: a store with two suppliers."""
 
     def setUp(self) -> None:
         temporanea = tempfile.TemporaryDirectory()
         self.addCleanup(temporanea.cleanup)
-        # `.resolve()` non e' un vezzo: la cartella temporanea arriva col
-        # percorso NON risolto, e il codice sotto prova lo risolve. Su macOS
-        # `/var` e' un collegamento a `/private/var`, su Windows TEMP esce in
-        # forma corta (`RUNNER~1`): in tutti e due i casi i confronti fra
-        # percorsi fallirebbero, e con loro venticinque prove che non hanno
-        # niente che non va.
+        # `.resolve()` matters: the temp dir comes back unresolved, but the
+        # code under test resolves it. On macOS `/var` is a symlink to
+        # `/private/var`, and on Windows TEMP can come back in short form
+        # (`RUNNER~1`); either way path comparisons would fail otherwise.
         self.root = Path(temporanea.name).resolve()
-        # `dati` esiste perche' la radice degli ordini deve avere due livelli
-        # sopra di se': senza, `/ordini/../../secrets.json` uscirebbe dalla
-        # cartella temporanea e la prova del traversal non potrebbe creare
-        # davvero il file bersaglio.
+        # `dati` needs two levels above the orders root, or
+        # `/ordini/../../secrets.json` couldn't reach outside the temp dir
+        # and the traversal test below couldn't create its target file.
         self.dati = self.root / "dati"
         run_dir = self.dati / "run-corrente"
         run_dir.mkdir(parents=True)
@@ -4021,9 +4011,9 @@ class ConsegnaBase(unittest.TestCase):
         }
         self.writer_config = self.dati / "writer_config.json"
         self.writer_config.write_text(json.dumps({
-            # `prepare_writer_config` scrive sempre la run di appartenenza, e la
-            # compilazione pretende che sia quella del confronto attivo: una
-            # configurazione che non la dichiara e' una configurazione vecchia.
+            # `prepare_writer_config` always writes the owning run, and compile
+            # requires it to match the active comparison: a config without it
+            # is a stale one.
             "run_id": "run-sintetica",
             "supplier_files": {nome: str(percorso) for nome, percorso in self.listini.items()},
         }), encoding="utf-8")
@@ -4078,7 +4068,7 @@ class ConsegnaBase(unittest.TestCase):
         *,
         sorpresa: str | None = None,
     ) -> dict[str, Any]:
-        """Una compilazione che produce davvero le copie, senza chiamare Node."""
+        """Run a compile that produces real copies, without invoking Node."""
 
         scrittore = ScrittoreFinto({nome: self.listini[nome] for nome in fornitori}, sorpresa=sorpresa)
         with mock.patch.object(self.store, "writer_configuration_issues", return_value=[]), \
@@ -4088,7 +4078,7 @@ class ConsegnaBase(unittest.TestCase):
         return esito
 
     def compila_senza_listini(self, quantita: int = 2) -> dict[str, Any]:
-        """Il writer non è configurato: resta il solo piano, e va bene così."""
+        """Compile with no writer configured: only the plan is produced."""
 
         with mock.patch.object(self.store, "writer_config", None):
             return self.store.compile(self.snapshot(quantita))
@@ -4109,10 +4099,11 @@ class ConsegnaBase(unittest.TestCase):
 
     @staticmethod
     def orologio_fermo(minuto: int = 35) -> Any:
-        """Un `datetime` che sta sempre alle 14:35 del 12 agosto 2026.
+        """Return a `datetime` frozen at a fixed moment.
 
-        Serve al caso «due compilazioni nello stesso minuto», che dal vivo
-        capita e che con l'orologio libero non si riesce a provocare a comando.
+        Needed for the "two compilations in the same minute" case: it does
+        happen in practice, but isn't reproducible on demand with the real
+        clock.
         """
 
         class Orologio(SERVER.datetime):
@@ -4124,19 +4115,13 @@ class ConsegnaBase(unittest.TestCase):
 
 
 class LaCompilazioneRiuscitaNonHaErroriPerFornitoreTests(ConsegnaBase):
-    """Il contratto che la pagina traduceva senza che nessuno lo scrivesse.
+    """Pins the shape of a successful compile response.
 
-    Fino al 17 agosto 2026 `app/static/app.js` aveva una funzione che
-    traduceva, per ogni fornitore, un `errors: [{code:
-    "FORNITORE_SENZA_COPIA", …}]` dentro la risposta di una compilazione
-    **riuscita**. Quel campo non esiste: `run_writer` si ferma se una copia
-    attesa non c'è, quindi o la compilazione produce tutto, o non risponde
-    `ok: True` affatto. Era codice morto tenuto in vita dal suo stesso test.
-
-    Questo test è la difesa dalla parte giusta: inchioda la forma della
-    risposta. Il giorno in cui una compilazione dovesse davvero riuscire a
-    metà, questo test diventa rosso — ed è il momento in cui va deciso, e
-    scritto, che cosa la pagina mostra.
+    A successful compile never carries a per-supplier `errors` field:
+    `run_writer` stops as soon as an expected copy is missing, so a compile
+    either produces everything or never reports `ok: True` at all. If a
+    partial success ever becomes possible, this test goes red, which is the
+    point where the response shape needs to be decided again.
     """
 
     def test_la_risposta_di_una_compilazione_riuscita_non_porta_errori(self) -> None:
@@ -4144,23 +4129,19 @@ class LaCompilazioneRiuscitaNonHaErroriPerFornitoreTests(ConsegnaBase):
 
         self.assertTrue(esito["ok"])
         self.assertNotIn("errors", esito)
-        # Gli avvisi hanno i loro tre campi, e sono quelli che la pagina legge.
+        # Warnings live in their own three fields, which the page reads.
         for campo in ("writerIssues", "deliveryIssues", "historyIssues"):
             self.assertIn(campo, esito)
 
     def test_una_compilazione_senza_nessuna_copia_lo_mette_fra_gli_avvisi(self) -> None:
-        """⚠ Il difetto che il contratto morto nascondeva.
+        """A `run_writer` failure must surface through `writerIssues`, not just `message`.
 
-        `run_writer` che fallisce non ferma la compilazione — il piano resta
-        consegnabile, ed è voluto. Ma il motivo finiva **solo** dentro
-        `message`, e `message` da solo non fa niente: la pagina decide se la
-        compilazione è riuscita a metà guardando `writerIssues`,
-        `deliveryIssues` e `historyIssues`. Con tutti e tre vuoti mostrava il
-        riquadro verde e il pulsante primario per una compilazione che non ha
-        prodotto **nessuna** copia.
-
-        Ora il motivo sta nel campo che la pagina legge, com'è già per il ramo
-        gemello (configurazione di scrittura incompleta).
+        A failing `run_writer` doesn't stop the compile — the plan stays
+        deliverable, by design — but the page decides whether a compile is
+        only half done by checking `writerIssues`, `deliveryIssues` and
+        `historyIssues`; `message` alone isn't enough. The reason must land in
+        the field the page actually reads, matching the sibling case
+        (incomplete writer configuration).
         """
 
         with mock.patch.object(self.store, "writer_configuration_issues", return_value=[]), \
@@ -4172,20 +4153,19 @@ class LaCompilazioneRiuscitaNonHaErroriPerFornitoreTests(ConsegnaBase):
         self.assertEqual(esito["status"], "PLAN_READY")
         self.assertEqual(len(esito["writerIssues"]), 1)
         self.assertIn("LARICE", esito["writerIssues"][0])
-        # E resta detto anche nella frase, come nel ramo della configurazione.
+        # Also stated in the message, matching the configuration-issue branch.
         self.assertIn("LARICE", esito["message"])
         self.assertNotIn("errors", esito)
 
 
 class ConsegnaCartellaDatataTests(ConsegnaBase):
-    """La cartella datata, la rinomina che non sovrascrive e l'audit del disco."""
+    """The dated output folder, the non-overwriting rename, and the disk audit."""
 
     def test_due_compilazioni_di_fila_non_si_sovrascrivono(self) -> None:
-        """La prova di accettazione n. 1: compilare due volte, due cartelle.
+        """Two compiles in a row must produce two separate folders.
 
-        E' il difetto che la 6d chiude: fino a ieri la seconda compilazione
-        scriveva sui listini pronti della prima, con lo stesso nome e nella
-        stessa cartella, senza dire niente a nessuno.
+        A second compile must not silently overwrite the first compile's
+        ready price lists in the same folder under the same name.
         """
 
         prima = self.compila_con_listini(2)
@@ -4197,17 +4177,17 @@ class ConsegnaCartellaDatataTests(ConsegnaBase):
         for esito, quantita in ((prima, 2), (seconda, 3)):
             cartella = self.cartella_di(esito)
             piano = json.loads((cartella / "final_order_plan.json").read_text(encoding="utf-8"))
-            # Il piano della prima dice ancora 2: se fosse stato sovrascritto
-            # direbbe 3, ed e' esattamente il danno da cui si parte.
+            # The first plan must still say 2: an overwrite would make it say
+            # 3, which is exactly the failure this test guards against.
             self.assertEqual(piano["orders"][0]["quantity"], quantita)
             copia = cartella / self.nome_del_listino(esito)
             self.assertTrue(copia.is_file())
-            # «Ancora apribili»: non basta che il file ci sia, deve aprirsi.
+            # Must still open, not just exist on disk.
             from openpyxl import load_workbook
 
             libro = load_workbook(copia, read_only=True)
             try:
-                # La copia e' il listino di partenza: stesso foglio, stesso nome.
+                # The copy is the source price list: same sheet name.
                 self.assertEqual(libro.sheetnames, ["LARICE"])
             finally:
                 libro.close()
@@ -4268,7 +4248,7 @@ class ConsegnaCartellaDatataTests(ConsegnaBase):
 
         self.assertTrue((self.cartella_di(esito) / "final_order_plan.json").is_file())
         self.assertFalse((self.output_dir / "final_order_plan.json").exists())
-        # E gli URL della risposta portano alla cartella, non piu' a /outputs/.
+        # Response URLs point at the dated folder, not at /outputs/.
         piano = next(item for item in esito["outputs"] if item["name"] == "final_order_plan.json")
         self.assertEqual(piano["tipo"], "piano")
         self.assertEqual(piano["url"], f"/ordini/{esito['cartella']}/final_order_plan.json")
@@ -4279,16 +4259,17 @@ class ConsegnaCartellaDatataTests(ConsegnaBase):
 
         cartella = self.cartella_di(esito)
         self.assertTrue((cartella / "Ordine LARICE — 12 agosto 2026.xlsx").is_file())
-        # Il nome tecnico del writer non deve restare li' accanto: sarebbe una
-        # seconda copia dello stesso listino, e finirebbe nell'audit e nello zip.
+        # The writer's technical filename must not linger next to it: it would
+        # be a second copy of the same price list, and would leak into the
+        # audit and the zip.
         self.assertEqual(list(cartella.glob("ORDINE_*.xlsx")), [])
 
     def test_la_rinomina_non_sovrascrive_mai_un_documento_gia_presente(self) -> None:
-        """La difesa dell'`os.rename`, provata dove si puo' provocare la collisione.
+        """Guard the rename against a name collision.
 
-        Spegnendo il controllo, su Windows arriva un `FileExistsError` e su
-        Linux il documento di prima sparisce in silenzio: due modi diversi di
-        far fallire questa prova, che e' il punto.
+        Without the guard, a rename onto an existing name raises
+        `FileExistsError` on Windows and silently replaces the earlier
+        document on Linux; either way this test would fail.
         """
 
         cartella = self.orders_dir / "2026-08-12_1435"
@@ -4305,8 +4286,8 @@ class ConsegnaCartellaDatataTests(ConsegnaBase):
 
         self.assertEqual(gia_li.read_bytes(), b"il listino della volta prima")
         self.assertTrue(prodotta.is_file())
-        # La copia resta consegnabile con il nome che ha: un nome brutto non e'
-        # un motivo per buttare via un ordine giusto.
+        # The copy stays deliverable under its current name: an ugly name is
+        # no reason to discard a valid order.
         self.assertEqual(copie, [("larice", self.listini["larice"], prodotta)])
         self.assertEqual(len(problemi), 1)
         self.assertIn("c'era già un documento", problemi[0])
@@ -4324,14 +4305,14 @@ class ConsegnaCartellaDatataTests(ConsegnaBase):
         self.assertEqual(audit["totali_netti"], {"larice": 18.0})
         self.assertEqual(audit["totale_netto"], 18.0)
         self.assertEqual(audit["righe"], 1)
-        # L'ora locale con lo scarto, non UTC: si legge accanto al nome della
-        # cartella, che e' ora locale, e due fusi nello stesso documento sono
-        # un errore che aspetta.
+        # Local time with UTC offset, not UTC: it's read next to the folder
+        # name, which is local time, and mixing timezones in one document
+        # invites a bug.
         self.assertRegex(audit["creato_il"], r"[+-]\d{2}:\d{2}$")
 
-        # Il punto della prova: l'elenco dell'audit e' quello che c'e' davvero
-        # sul disco. `compilazione.json` non c'e' perche' si scrive per ultimo,
-        # quando la scansione e' gia' stata fatta.
+        # The audit's file list must match what's actually on disk.
+        # `compilazione.json` is absent because it's written last, after the
+        # scan already ran.
         sul_disco = set(os.listdir(cartella)) - {"compilazione.json"}
         self.assertEqual({item["nome"] for item in audit["file"]}, sul_disco)
 
@@ -4341,7 +4322,7 @@ class ConsegnaCartellaDatataTests(ConsegnaBase):
         self.assertEqual(listino["origine"], str(self.listini["larice"]))
         self.assertEqual(listino["byte"], (cartella / listino["nome"]).stat().st_size)
         self.assertEqual(per_nome["final_order_plan.json"]["tipo"], "piano")
-        # Il file che nessuno aspettava c'e', e si dichiara per quello che e'.
+        # The unexpected file is listed too, tagged as what it is.
         self.assertEqual(per_nome["sorpresa.xlsx"]["tipo"], "altro")
         self.assertNotIn("origine", per_nome["sorpresa.xlsx"])
 
@@ -4351,17 +4332,16 @@ class ConsegnaCartellaDatataTests(ConsegnaBase):
 
         self.assertEqual(audit["stato"], "PLAN_READY")
         self.assertEqual([item["nome"] for item in audit["file"]], ["final_order_plan.json"])
-        # Senza listini non c'e' niente da consegnare: il pulsante non deve
-        # comparire, quindi l'URL dello zip e' nullo e non un indirizzo che
-        # risponderebbe 404.
+        # Nothing to deliver without price lists: the download button must not
+        # appear, so the zip URL is null rather than a link that would 404.
         self.assertIsNone(esito["zipUrl"])
         self.assertEqual(esito["zipNome"], CONSEGNA.nome_zip(esito["cartella"]))
 
     def test_il_writer_riceve_la_cartella_della_compilazione(self) -> None:
-        """`--output-dir` e' la cartella datata: il writer scrive li' e basta.
+        """`--output-dir` is the dated folder: the writer writes straight there.
 
-        Se puntasse ancora a `outputs`, fra la scrittura e lo spostamento ci
-        sarebbe un istante in cui la compilazione precedente e' gia' perduta.
+        Writing to `outputs` first and moving afterward would leave a window
+        where the previous compile's output is already gone.
         """
 
         node = self.root / "node.exe"
@@ -4388,8 +4368,8 @@ class ConsegnaCartellaDatataTests(ConsegnaBase):
         with mock.patch.object(SERVER.subprocess, "run", esecuzione_finta):
             generati, prodotte, avvisi = self.store.run_writer(plan_path, cartella)
 
-        # Questo writer finto non dichiara nessun riepilogo: il nome della copia
-        # resta quello che il servizio ricalcola, e non c'e' niente da dire.
+        # This fake writer reports no summary: the copy's name is whatever
+        # the service recomputes, with no warnings.
         self.assertEqual(avvisi, [])
         self.assertEqual(comandi[0][comandi[0].index("--output-dir") + 1], str(cartella))
         self.assertEqual(prodotte, [(
@@ -4401,15 +4381,12 @@ class ConsegnaCartellaDatataTests(ConsegnaBase):
         self.assertFalse(any(self.output_dir.glob("*.xlsx")))
 
     def test_una_rinomina_impossibile_non_butta_via_un_ordine_giusto(self) -> None:
-        """`os.rename` fallisce e la compilazione deve reggere lo stesso.
+        """A failing `os.rename` must not fail the whole compile.
 
-        Su Windows basta che qualcuno tenga aperto il file — l'antivirus che lo
-        scansiona, OneDrive che lo sincronizza, l'utente che l'ha aperto in
-        Excel — perche' `os.rename` alzi `PermissionError`. Prima questo
-        diventava un 500: la pagina diceva «Compilazione non riuscita», la
-        cartella restava senza audit, e i listini erano li', giusti e
-        scaricabili. Adesso il documento tiene il nome brutto e il programma lo
-        dice.
+        On Windows, `PermissionError` from `os.rename` can come from an
+        antivirus scan, OneDrive sync, or the file being open in Excel. The
+        compile must still succeed, keeping the document under its ugly
+        technical name and reporting why.
         """
 
         def rename_che_fallisce(sorgente: Any, destinazione: Any) -> None:
@@ -4423,8 +4400,8 @@ class ConsegnaCartellaDatataTests(ConsegnaBase):
         self.assertIn("è rimasto con questo nome", esito["message"])
         self.assertIn("Il file è in uso", esito["message"])
 
-        # Il documento c'e', si sa di chi e', ed e' consegnabile: l'unica cosa
-        # che manca e' il nome leggibile.
+        # The document is there, attributed to its supplier, and deliverable;
+        # only the readable name is missing.
         audit = self.audit_di(esito)
         listini = [riga for riga in audit["file"] if riga["tipo"] == "listino"]
         self.assertEqual(len(listini), 1)
@@ -4437,16 +4414,16 @@ class ConsegnaCartellaDatataTests(ConsegnaBase):
 
 
 class ElencoDeiProdottiDaReperireTests(ConsegnaBase):
-    """La compilazione produce anche l'elenco di quello che non si può ordinare.
+    """Compile also produces the list of items that couldn't be ordered.
 
-    Decisione di Daniele del 16 agosto 2026.  Il file nasce **solo** se c'è
-    almeno una riga, sta nella stessa cartella datata dei listini compilati, ed
-    esce sia da solo sia dentro lo zip: chi scarica lo zip sta preparando la
-    settimana, e quell'elenco è parte del lavoro di quella settimana.
+    The file is created only if it has at least one row, lives in the same
+    dated folder as the compiled price lists, and is downloadable both on its
+    own and inside the zip: whoever downloads the zip is preparing the week's
+    order, and that list is part of it.
     """
 
     def con_un_introvabile(self, quantita: int = 4) -> dict[str, Any]:
-        """Aggiunge al confronto un prodotto che nessun fornitore porta."""
+        """Add to the comparison a product no supplier carries."""
 
         review = json.loads(self.review_path.read_text(encoding="utf-8"))
         review["products"].append({
@@ -4483,8 +4460,8 @@ class ElencoDeiProdottiDaReperireTests(ConsegnaBase):
 
     def setUp(self) -> None:
         super().setUp()
-        # Il servizio vero: le prove dello zip e del download singolo devono
-        # passare dalle rotte, non da un filtro riscritto nel test.
+        # The real service: the zip and single-download tests must go through
+        # the routes, not a filter reimplemented in the test.
 
         class HandlerMuto(SERVER.AppHandler):
             def log_message(self, format_string: str, *args: object) -> None:
@@ -4549,7 +4526,7 @@ class ElencoDeiProdottiDaReperireTests(ConsegnaBase):
         self.assertIn("Nessun fornitore", str(riga[4]))
 
     def test_chi_non_si_puo_ordinare_non_finisce_nel_piano(self) -> None:
-        """Non c'è nessuna riga di listino su cui scrivergli una quantità."""
+        """No price-list row exists to write a quantity into."""
 
         esito = self.compila(self.con_un_introvabile())
 
@@ -4557,7 +4534,7 @@ class ElencoDeiProdottiDaReperireTests(ConsegnaBase):
         self.assertEqual([voce["product_id"] for voce in piano["orders"]], ["product-standard"])
 
     def test_senza_prodotti_da_reperire_il_file_non_nasce(self) -> None:
-        """Nessun riquadro, nessun messaggio, nessun file: è la settimana normale."""
+        """No box, no message, no file: the normal case."""
 
         esito = self.compila(self.snapshot(2))
 
@@ -4575,7 +4552,7 @@ class ElencoDeiProdottiDaReperireTests(ConsegnaBase):
         self.assertNotIn("da_reperire", [item["tipo"] for item in self.audit_di(esito)["file"]])
 
     def test_se_tutto_e_introvabile_la_compilazione_non_e_un_ordine_vuoto(self) -> None:
-        """Il caso che la decisione prevede espressamente."""
+        """An unreachable product isn't a zero-quantity order: compile must still succeed."""
 
         istantanea = self.con_un_introvabile()
         istantanea["products"][0]["quantity"] = 0
@@ -4587,10 +4564,10 @@ class ElencoDeiProdottiDaReperireTests(ConsegnaBase):
         self.assertEqual(piano["orders"], [])
 
     def test_soli_introvabili_non_fanno_scattare_le_soglie_dei_fornitori(self) -> None:
-        """Un percorso che prima non si poteva raggiungere: `ORDINE_VUOTO` fermava
-        tutto prima.  Ora si arriva al controllo delle soglie con i totali di
-        **tutti** i fornitori a zero, e nessuno di loro deve risultare sotto
-        soglia — non si sta ordinando niente da nessuno.
+        """All-unreachable products reach the threshold check with every supplier at zero.
+
+        None of them can be below threshold: nothing is being ordered from
+        anyone.
         """
 
         istantanea = self.con_un_introvabile()
@@ -4602,7 +4579,7 @@ class ElencoDeiProdottiDaReperireTests(ConsegnaBase):
         self.assertTrue((self.cartella_di(esito) / self.nome_dell_elenco(esito)).is_file())
 
     def test_un_ordine_davvero_vuoto_resta_rifiutato(self) -> None:
-        """L'altro lato: senza niente da ordinare e niente da reperire non si compila."""
+        """The other side: nothing to order and nothing to source means no compile."""
 
         with self.assertRaises(SnapshotError) as errore:
             self.compila(self.snapshot(0))
@@ -4610,12 +4587,11 @@ class ElencoDeiProdottiDaReperireTests(ConsegnaBase):
         self.assertEqual({voce.get("code") for voce in errore.exception.errors}, {"ORDINE_VUOTO"})
 
     def test_lo_zip_della_rotta_porta_dentro_l_elenco(self) -> None:
-        """⚠ Si passa dalla **rotta**, non dal filtro riscritto nel test.
+        """Must go through the real route, not a type filter reimplemented in the test.
 
-        La prima versione di questa prova ricostruiva a mano il filtro dei tipi
-        e chiamava `zip_in_memoria`: restava verde anche riportando `servi_zip`
-        ai soli listini, cioè misurava se stessa.  L'ha trovata una mutazione
-        rimasta verde il 17 agosto 2026.
+        Reimplementing the filter and calling `zip_in_memoria` directly would
+        still pass if `servi_zip` were narrowed back to price lists only,
+        because the test would just be measuring itself.
         """
 
         esito = self.compila(self.con_un_introvabile())
@@ -4627,7 +4603,7 @@ class ElencoDeiProdottiDaReperireTests(ConsegnaBase):
         self.assertEqual(intestazioni["Content-Type"], "application/zip")
         with zipfile.ZipFile(io.BytesIO(corpo)) as archivio:
             self.assertIn(atteso, archivio.namelist())
-            # Non il nome soltanto: il contenuto è quello del file in cartella.
+            # Not just the name: the content must match the file on disk.
             self.assertEqual(archivio.read(atteso), (self.cartella_di(esito) / atteso).read_bytes())
 
     def test_il_singolo_elenco_si_scarica_anche_da_solo(self) -> None:
@@ -4642,7 +4618,7 @@ class ElencoDeiProdottiDaReperireTests(ConsegnaBase):
         self.assertEqual(corpo, (self.cartella_di(esito) / nome).read_bytes())
 
     def test_una_compilazione_di_soli_introvabili_resta_scaricabile(self) -> None:
-        """Senza questo, l'unica uscita di quella settimana non avrebbe un link."""
+        """A compile with only unreachable products must still have a download link."""
 
         istantanea = self.con_un_introvabile()
         istantanea["products"][0]["quantity"] = 0
@@ -4652,9 +4628,9 @@ class ElencoDeiProdottiDaReperireTests(ConsegnaBase):
         self.assertIsNotNone(voce["zipUrl"])
 
     def test_l_elenco_non_si_conta_fra_i_listini(self) -> None:
-        # La pagina scrive «N listini» leggendo questo numero, e un elenco di
-        # prodotti che nessuno ha non è un listino: contarlo lì direbbe a chi
-        # guarda che ha un documento in più da spedire.
+        # The page reads this number for "N price lists"; a list of items
+        # nobody has isn't a price list, and counting it would tell the
+        # operator there's one more document to send.
         voce = consegna.voce(self.cartella_di(self.compila(self.con_un_introvabile())))
 
         self.assertEqual(voce["listini"], 0)
@@ -4663,21 +4639,19 @@ class ElencoDeiProdottiDaReperireTests(ConsegnaBase):
 
 
 class ConsegnaHttpTests(ConsegnaBase):
-    """Le rotte della consegna provate **via HTTP**, non chiamando `do_GET`.
+    """Delivery routes exercised over real HTTP, not by calling `do_GET` directly.
 
-    Il punto delicato e' la decodifica del percorso: `route = unquote(...)`
-    trasforma `..%2f..%2fsecrets.json` in `../../secrets.json` prima che le
-    difese lo vedano. Un test che chiamasse il gestore a mano salterebbe
-    proprio il passaggio che si vuole provare.
+    The path decoding matters: `route = unquote(...)` turns
+    `..%2f..%2fsecrets.json` into `../../secrets.json` before the path
+    guards see it. Calling the handler directly would skip that step.
     """
 
     PAROLA_SEGRETA = "PAROLA-SEGRETA-DA-NON-CONSEGNARE"
 
     def setUp(self) -> None:
         super().setUp()
-        # I bersagli del traversal esistono **davvero**: con un file che non c'e'
-        # la prova passerebbe anche a difesa spenta, ed e' l'errore che questo
-        # progetto ha gia' fatto una volta.
+        # The traversal targets must exist for real: a missing file would let
+        # the test pass even with the guard disabled.
         for percorso in (self.root / "secrets.json", self.dati / "secrets.json"):
             percorso.write_text(json.dumps({"api_key": self.PAROLA_SEGRETA}), encoding="utf-8")
 
@@ -4698,11 +4672,11 @@ class ConsegnaHttpTests(ConsegnaBase):
         self.httpd.server_close()
 
     def chiedi(self, percorso: str) -> tuple[int, bytes, Any]:
-        """Una GET con il percorso **cosi' com'e**.
+        """Issue a GET with the path exactly as given, unnormalized.
 
-        Si usa `http.client` e non `urllib.request` perche' urllib normalizza i
-        segmenti `..` prima di spedire: la richiesta che il servizio riceverebbe
-        non sarebbe piu' quella che si voleva provare.
+        Uses `http.client` rather than `urllib.request`, which normalizes
+        `..` segments before sending and would change what the service
+        actually receives.
         """
 
         connessione = http.client.HTTPConnection("127.0.0.1", self.porta, timeout=15)
@@ -4747,8 +4721,8 @@ class ConsegnaHttpTests(ConsegnaBase):
         self.assertEqual(vecchia["listini"], 1)
         self.assertEqual(vecchia["zipUrl"], f"/ordini/{prima['cartella']}/zip")
         self.assertTrue(vecchia["completa"])
-        # Il nome del fornitore arriva da `supplier_label` di server.py, non
-        # dall'id maiuscolo di ripiego di consegna.py.
+        # The supplier name comes from `supplier_label` in server.py, not
+        # from consegna.py's uppercased-id fallback.
         self.assertEqual(vecchia["fornitori"], [{"id": "larice", "nome": "LARICE", "totaleNetto": 18.0}])
         self.assertEqual(vecchia["righe"], 1)
 
@@ -4841,12 +4815,12 @@ class ConsegnaHttpTests(ConsegnaBase):
         self.assertEqual(corpo, (cartella / nome).read_bytes())
 
     def test_il_nome_con_l_em_dash_non_uccide_la_risposta(self) -> None:
-        """Sarebbe rosso senza la correzione del §0bis del contratto.
+        """A filename with an em dash can't go straight into `Content-Disposition`.
 
-        `attachment; filename="Ordine LARICE — 12 agosto 2026.xlsx"` non si
-        codifica in latin-1, e le intestazioni di BaseHTTPRequestHandler sono
-        latin-1: la rotta moriva mentre scriveva l'intestazione, a corpo gia'
-        promesso.
+        `attachment; filename="Ordine LARICE — 12 agosto 2026.xlsx"` isn't
+        latin-1-encodable, and `BaseHTTPRequestHandler` headers are latin-1:
+        without a fallback the route would fail while writing the header,
+        after the body was already promised.
         """
 
         esito = self.compila_con_listini()
@@ -4862,13 +4836,13 @@ class ConsegnaHttpTests(ConsegnaBase):
         disposizione = intestazioni["Content-Disposition"]
         self.assertIn("filename*=UTF-8''", disposizione)
         self.assertIn("Ordine%20LARICE%20%E2%80%94", disposizione)
-        # Il ripiego fra virgolette e' ASCII, e l'intestazione intera si scrive
-        # in latin-1: e' la prova che la risposta poteva partire.
+        # The quoted fallback must be ASCII, and the whole header latin-1
+        # encodable: proof the response could actually be sent.
         self.assertNotIn("—", disposizione)
         disposizione.encode("latin-1")
 
     def test_anche_la_vecchia_rotta_outputs_regge_un_nome_non_ascii(self) -> None:
-        """`serve_file` è condivisa: la correzione vale per tutte le rotte."""
+        """`serve_file` is shared: the fix applies to every route."""
 
         nome = "Richiesta — prova.json"
         (self.output_dir / nome).write_bytes(b'{"ok": true}')
@@ -4880,11 +4854,10 @@ class ConsegnaHttpTests(ConsegnaBase):
         self.assertIn("filename*=UTF-8''", intestazioni["Content-Disposition"])
 
     def test_un_documento_vero_di_outputs_si_scarica_ancora_con_la_difesa_nuova(self) -> None:
-        """La difesa nuova (`consegna.file_sicuro`) non deve fermare un file vero.
+        """`consegna.file_sicuro` must not block a legitimate file.
 
-        Rilievo [39]: prima della correzione `/outputs/<nome>` usava solo
-        `.name` per difendersi. Questa prova copre il verso «giusto»: un file
-        che esiste davvero nella cartella deve continuare a scaricarsi.
+        Covers the positive case for the containment check on `/outputs/`: a
+        file that genuinely exists in the folder must still download.
         """
 
         nome = "listino_pronto.xlsx"
@@ -4897,14 +4870,13 @@ class ConsegnaHttpTests(ConsegnaBase):
         self.assertEqual(corpo, contenuto)
 
     def test_un_collegamento_simbolico_dentro_outputs_non_esce_dalla_cartella(self) -> None:
-        """La fuga verificata per `/outputs/` e' per collegamento simbolico, non per traversal.
+        """The `/outputs/` escape route is a symlink, not a `../` traversal.
 
-        Rilievo [39]: `.name` da solo scarta gia' i segmenti `../`, quindi il
-        traversal classico non passava nemmeno prima. Quello che mancava era
-        il controllo di contenimento dopo `resolve()` che `consegna.file_sicuro`
-        applica gia' alla rotta gemella `/ordini/<cartella>/<nome>`: senza,
-        un collegamento simbolico piazzato dentro `outputs/` viene seguito
-        fuori dalla cartella.
+        `.name` alone already strips `../` segments, so classic traversal
+        never worked. What's missing without the containment check after
+        `resolve()` (which `consegna.file_sicuro` already applies to the
+        sibling route `/ordini/<cartella>/<nome>`) is protection against a
+        symlink placed inside `outputs/` that resolves outside it.
         """
 
         bersaglio = self.root / "segreto-fuori-da-outputs.txt"
@@ -4920,7 +4892,7 @@ class ConsegnaHttpTests(ConsegnaBase):
     def test_un_percorso_costruito_a_mano_non_esce_dalla_cartella(self) -> None:
         esito = self.compila_con_listini()
         cartella = esito["cartella"]
-        # Precondizione: i file bersaglio ci sono e si leggono davvero.
+        # Precondition: the target files exist and are actually readable.
         self.assertIn(self.PAROLA_SEGRETA, (self.root / "secrets.json").read_text(encoding="utf-8"))
         self.assertIn(self.PAROLA_SEGRETA, (self.dati / "secrets.json").read_text(encoding="utf-8"))
         self.assertTrue((self.orders_dir / ".." / ".." / "secrets.json").resolve().is_file())
@@ -4943,8 +4915,8 @@ class ConsegnaHttpTests(ConsegnaBase):
                 stato, corpo, _ = self.chiedi(percorso)
                 self.assertEqual(stato, 404)
                 self.assertNotIn(self.PAROLA_SEGRETA, corpo.decode("utf-8"))
-                # Il messaggio non ripete il percorso chiesto: direbbe a chi
-                # prova che cosa ha provato.
+                # The error message doesn't echo the requested path: that
+                # would confirm to an attacker what they tried.
                 self.assertNotIn("secrets", corpo.decode("utf-8"))
 
     def test_il_flusso_alternativo_ntfs_non_consegna_l_audit(self) -> None:
@@ -4985,7 +4957,7 @@ class ConsegnaHttpTests(ConsegnaBase):
                 sorted(archivio.namelist()),
                 ["Ordine BETULLA — 12 agosto 2026.xlsx", "Ordine LARICE — 12 agosto 2026.xlsx"],
             )
-            # Dentro non ci sono ne' il piano ne' il file che nessuno aspettava.
+            # Neither the plan nor the unexpected file is inside.
             for nome in archivio.namelist():
                 self.assertEqual(
                     archivio.read(nome),
@@ -4993,14 +4965,11 @@ class ConsegnaHttpTests(ConsegnaBase):
                 )
 
     def test_un_listino_allegato_a_una_mail_non_ferma_la_consegna_degli_altri(self) -> None:
-        """Il gesto piu' normale che ci sia, e prima rompeva tutto.
+        """One file moved out of the folder (e.g. attached to an email) must not block the rest of the zip.
 
-        L'utente allega un listino alla mail per BETULLA e lo sposta sul desktop.
-        Con l'elenco costruito dall'audit, `zip_in_memoria` chiedeva anche il
-        documento sparito, il primo che mancava alzava, e la rotta rispondeva
-        «In questa compilazione non ci sono listini da scaricare» — mentre
-        quello di LARICE era li' e doveva ancora essere spedito. L'utente ne
-        deduceva che la compilazione fosse vuota e rifaceva il lavoro.
+        If the file list came from the audit rather than a fresh disk scan,
+        the first missing document would abort the whole zip, even though the
+        other supplier's file is still there and ready to send.
         """
 
         with self.orologio_fermo():
@@ -5015,8 +4984,8 @@ class ConsegnaHttpTests(ConsegnaBase):
         with zipfile.ZipFile(io.BytesIO(corpo)) as archivio:
             self.assertEqual(archivio.namelist(), ["Ordine LARICE — 12 agosto 2026.xlsx"])
 
-        # E la pagina non deve dire che i listini sono ancora due, ne' offrire
-        # un collegamento a un documento che non c'e' piu'.
+        # The page must not report two price lists, or link to a document
+        # that's no longer there.
         _stato, elenco_grezzo, _intestazioni = self.chiedi("/api/ordini")
         voce = json.loads(elenco_grezzo.decode("utf-8"))["compilazioni"][0]
         self.assertEqual(voce["listini"], 1)
@@ -5037,11 +5006,11 @@ class ConsegnaHttpTests(ConsegnaBase):
 
 
 class RottePipelineTests(unittest.TestCase):
-    """Le due rotte del ricalcolo, provate dalla parte della rete.
+    """The two recompute routes, exercised over the network.
 
-    Il punto non e' che rispondano: e' che la seconda richiesta di avvio,
-    mentre la prima lavora, riceva un 409 invece di far partire una seconda
-    catena sugli stessi file.
+    The point isn't that they respond: it's that a second start request,
+    while the first is still running, gets a 409 instead of launching a
+    second pipeline run over the same files.
     """
 
     def setUp(self) -> None:
@@ -5051,9 +5020,9 @@ class RottePipelineTests(unittest.TestCase):
         review_path = self.root / "review_data.json"
         review_path.write_text(json.dumps(synthetic_review()), encoding="utf-8")
         (self.root / "uploads").mkdir()
-        # Un documento ci vuole: senza, la catena si ferma al primo passo con
-        # «nessun documento» e il lucchetto torna libero prima che la seconda
-        # richiesta arrivi — cioe' la prova passerebbe per il motivo sbagliato.
+        # A file is required: without one the pipeline stops immediately with
+        # "no document" and releases the lock before the second request
+        # arrives, making the test pass for the wrong reason.
         (self.root / "uploads" / "finto.xlsx").write_bytes(b"non importa")
         self.store = SERVER.ReviewStore(
             review_path, self.root / "state.json", self.root / "uploads", self.root / "outputs"
@@ -5144,10 +5113,10 @@ class RottePipelineTests(unittest.TestCase):
         self.assertFalse(corpo_due["ok"])
 
     def test_le_rotte_del_sito_noce_non_esistono_piu(self) -> None:
-        """Smontaggio del 12 agosto 2026: la suite deve inchiodarlo.
+        """Pins the removal of the Noce site-scraper routes.
 
-        Senza questa prova le tre rotte potrebbero tornare — con lo scraper,
-        le credenziali e il carrello dietro — e nessun test se ne accorgerebbe.
+        Without this test, the scraper routes (and the credentials and cart
+        logic behind them) could silently reappear.
         """
 
         codice_stato, _ = self.chiedi("/api/noce/status")
@@ -5156,11 +5125,10 @@ class RottePipelineTests(unittest.TestCase):
         self.assertEqual((codice_stato, codice_avvio, codice_carrello), (404, 404, 404))
 
     def test_lo_stato_finale_resta_ripescabile_a_run_conclusa(self) -> None:
-        """La rotta deve continuare a dire com'e' finita, anche a run finita.
+        """The status route must keep reporting the outcome after the run ends.
 
-        E' la meta' lato servizio del difetto «chi ricarica la pagina non vede
-        piu' ne' fermate ne' avvisi»: se la rotta smettesse di raccontare
-        l'ultimo esito, nessuna correzione della pagina potrebbe rimediarci.
+        The page relies on this to show stops and warnings on reload; if the
+        route stopped reporting the last outcome, no page fix could recover it.
         """
 
         codice, _ = self.chiedi("/api/pipeline/avvia", b"{}")
@@ -5176,8 +5144,8 @@ class RottePipelineTests(unittest.TestCase):
         self.assertTrue(corpo["messaggio"])
         self.assertIn("avvisi", corpo)
 
-        # E anche dopo un riavvio del servizio: lo stato sta su disco, non solo
-        # nella memoria del processo che ha fatto girare la catena.
+        # Also survives a service restart: state lives on disk, not just in
+        # the process memory of whichever run produced it.
         riavviato = SERVER.ReviewStore(
             self.root / "review_data.json",
             self.root / "state.json",
@@ -5189,21 +5157,21 @@ class RottePipelineTests(unittest.TestCase):
         self.assertTrue(ripescato["fermata"], ripescato)
 
     def test_il_lucchetto_dei_lavori_arriva_alla_pipeline_dal_negozio(self) -> None:
-        """`ReviewStore` possiede il lucchetto e la pipeline deve ricevere LUI.
+        """`ReviewStore` owns the job lock, and the pipeline must receive that same instance.
 
-        Se `PipelineJobManager` si facesse un lucchetto suo, il giorno in cui
-        un secondo lavoro tornasse a sostituire `review_data.json` i due non si
-        escluderebbero piu' — e nessun test comportamentale distinguerebbe i
-        due lucchetti finche' i lavori restano uno.
+        A `PipelineJobManager` with its own lock would stop mutually
+        excluding with a second job writing `review_data.json`; a
+        behavioral test wouldn't catch it as long as there's only one job.
         """
 
         self.assertIs(self.store.pipeline_jobs.lucchetto_lavori, self.store.lucchetto_lavori)
 
 
 class LaVersionePubblicataInApiHealthTests(unittest.TestCase):
-    """`/api/health` e' la rotta con cui il lanciatore decide se riusare il
-    servizio: deve portare `versionePubblicata` anche quando vale `null`,
-    perche' la pagina distingue «non lo so» da «non c'e' il campo».
+    """`/api/health` is what the launcher checks to decide whether to reuse the service.
+
+    It must carry `versionePubblicata` even when its value is `null`,
+    because the page distinguishes "unknown" from "field absent".
     """
 
     def setUp(self) -> None:
@@ -5243,10 +5211,10 @@ class LaVersionePubblicataInApiHealthTests(unittest.TestCase):
 
 
 def listino_noce_finto(percorso: Path, righe: dict[int, str]) -> Path:
-    """Un `.xls` verosimile: EAN in B, prezzo in H, colonna d'ordine RK in I.
+    """Build a realistic `.xls`: EAN in B, price in H, order column RK in I.
 
-    Lo costruisce il banco di `test_xls_reader`, cioe' contenitore OLE2 vero e
-    record BIFF8 veri: qui non si finge il formato, si finge solo il contenuto.
+    Built with the `test_xls_reader` fixture, so it's a real OLE2 container
+    with real BIFF8 records; only the content is fake, not the format.
     """
 
     import test_xls_reader as banco_xls
@@ -5263,15 +5231,13 @@ def listino_noce_finto(percorso: Path, righe: dict[int, str]) -> Path:
 
 
 class LaProceduraDiScritturaVieneDallaRegolaTests(ConsegnaBase):
-    """Come si compila lo dice la regola, non il nome del fornitore.
+    """The write rule decides how to compile, not the supplier's name.
 
-    Fino al 17 agosto 2026 la scelta fra writer Node e patch in posizione era
-    `supplier == "noce"`, scritta in due punti di `app/server.py`, mentre il
-    registro la dichiara da sempre (`order_write.mode`) e `launcher.source_rule`
-    la porta nella regola come `compilazione`. Costava in tutte e due le
-    direzioni, e questa classe prova quella che costa di più: un fornitore
-    **nuovo** che manda un `.xls` — il caso che il programma promette di saper
-    imparare dalla pagina — finiva nel ramo del writer Node.
+    The choice between the Node writer and an in-place `.xls` patch must
+    come from the adapter registry's `order_write.mode`, surfaced by
+    `launcher.source_rule` as `compilazione`; hardcoding it against a
+    specific supplier name would break for a new supplier that sends `.xls`,
+    the exact case the adapter-learning flow promises to support.
     """
 
     def setUp(self) -> None:
@@ -5321,15 +5287,15 @@ class LaProceduraDiScritturaVieneDallaRegolaTests(ConsegnaBase):
         return review
 
     def test_un_fornitore_qualsiasi_che_lo_dichiara_si_compila_in_posizione(self) -> None:
-        """Il caso che prima era irraggiungibile: nessun `.xls` che non fosse Noce."""
+        """Any supplier that declares in-place `.xls` patching gets it, not only a hardcoded name."""
 
         esito = self.store.compile(self.snapshot(3, "nuovo_fornitore"))
 
         self.assertEqual(esito["status"], "FILES_READY", esito["message"])
         listini = [voce["name"] for voce in esito["outputs"] if voce["name"].casefold().endswith(".xls")]
         self.assertEqual(len(listini), 1, [voce["name"] for voce in esito["outputs"]])
-        # E la copia è il **loro** documento, non una conversione: stessa
-        # estensione, e la quantità scritta nella colonna dichiarata.
+        # The copy is the supplier's own document, not a converted one: same
+        # extension, with the quantity written into the declared column.
         copia = next(
             percorso for percorso in self.cartella_di(esito).iterdir()
             if percorso.suffix.casefold() == ".xls"
@@ -5340,19 +5306,13 @@ class LaProceduraDiScritturaVieneDallaRegolaTests(ConsegnaBase):
         self.assertEqual(foglio.rows[19][8][0], 3)
 
     def test_senza_la_dichiarazione_lo_stesso_xls_accusa_la_configurazione(self) -> None:
-        """⚠ L'altra metà del difetto, e la parte che non va persa.
+        """A rule missing `compilazione` must blame the configuration, not the supplier's file.
 
-        Senza `compilazione` nella regola, quel `.xls` passa dal writer Node —
-        che è la strada normale — e lì non si può scrivere. Il messaggio deve
-        mandare a correggere **la configurazione**: prima diceva «Il listino
-        configurato per … non è disponibile in formato XLSX», cioè accusava il
-        documento del fornitore, che è l'unica cosa che l'utente non può
-        cambiare.
-
-        Dal 4 settembre 2026 dice anche l'altra metà, che è quella che l'utente
-        può mettere in pratica da solo: salvare il documento in `.xlsx` con
-        Excel. Prima mandava alla pagina «Importa i dati», dove non c'è nessun
-        comando che converta un formato, e da lì si tornava indietro uguali.
+        Without `compilazione`, the `.xls` falls through to the Node writer
+        (the default path), which can't write to `.xls`. The message must
+        point at the configuration, since the supplier's document is the one
+        thing the operator can't change; it also states the fix the operator
+        can apply directly, saving the file as `.xlsx` in Excel.
         """
 
         regola = {chiave: valore for chiave, valore in self.regola.items() if chiave != "compilazione"}
@@ -5367,19 +5327,18 @@ class LaProceduraDiScritturaVieneDallaRegolaTests(ConsegnaBase):
         self.assertEqual(esito["status"], "PLAN_READY")
         self.assertIn("non dichiara come compilarlo", esito["message"])
         self.assertNotIn("non è disponibile in formato XLSX", esito["message"])
-        # E il rimedio che l'utente può mettere in pratica da solo.
+        # The fix the operator can apply without help.
         self.assertIn("salvalo come «Cartella di lavoro di Excel (.xlsx)»", esito["message"])
         self.assertNotIn("va riconfigurato dalla pagina", esito["message"])
 
 
 class CompilazioneNoceTests(ConsegnaBase):
-    """La compilazione Noce: il loro documento, con la sola colonna d'ordine.
+    """Compiling for Noce: their own document, with only the order column touched.
 
-    Non si finge il writer: qui gira `app/xls_writer.py` per davvero, su un
-    `.xls` vero. Quello che si prova e' che la copia esca dalla compilazione con
-    il nome leggibile e l'estensione giusta, e che le due guardie — EAN della
-    riga e colonna ancora tutta a lunghezza fissa — fermino la compilazione
-    invece di consegnare un ordine sbagliato.
+    Runs the real `app/xls_writer.py` against a real `.xls`, not a stub.
+    Verifies that the compiled copy keeps its readable name and correct
+    extension, and that both guards — row EAN and fixed-length column layout
+    — stop the compile rather than deliver a wrong order.
     """
 
     def setUp(self) -> None:
@@ -5397,11 +5356,10 @@ class CompilazioneNoceTests(ConsegnaBase):
             "header_row": 5,
             "ean_column_name": "CodiceABarre",
             "source_sha256": hashlib.sha256(self.noce.read_bytes()).hexdigest(),
-            # ⚠ È la regola a dire come si compila, non il nome del fornitore:
-            # `launcher.regola_noce` scrive questa chiave da sempre, e dal
-            # 17 agosto 2026 è quella che il servizio guarda. Un banco che non
-            # la dichiarava provava un percorso che la configurazione vera non
-            # produce mai.
+            # It's the rule that decides how to compile, not the supplier
+            # name: `launcher.regola_noce` writes this key, and the service
+            # reads it. A fixture without it would exercise a code path the
+            # real configuration never produces.
             "compilazione": "patch_xls_in_posizione",
         }
         regola.update(cambiamenti)
@@ -5441,7 +5399,7 @@ class CompilazioneNoceTests(ConsegnaBase):
         self.assertEqual(self.noce.read_bytes(), prima)
 
     def test_un_ean_diverso_ferma_la_compilazione_e_lo_dice(self) -> None:
-        """La riga 2600 che era olio Carapelli: questo è il controllo che l'avrebbe visto."""
+        """A row whose EAN no longer matches the expected product must stop the compile."""
 
         listino_noce_finto(self.noce, {20: "8009999999999", 21: "8000000000099"})
         self.scrivi_configurazione()
@@ -5458,7 +5416,7 @@ class CompilazioneNoceTests(ConsegnaBase):
         self.assertIn("cambiato dopo la verifica", esito["message"])
 
     def test_una_colonna_d_ordine_non_compilabile_ferma_prima_di_scrivere(self) -> None:
-        """Basta che una settimana Noce ci metta una formula."""
+        """A formula in the order column, instead of a fixed-length number, must stop the compile."""
 
         import test_xls_reader as banco_xls
 
@@ -5473,14 +5431,13 @@ class CompilazioneNoceTests(ConsegnaBase):
         self.assertIn("non sono numeri a lunghezza fissa", esito["message"])
 
     def piano_con_riga_noce(self) -> dict[str, Any]:
-        """Un piano d'ordine con dentro una riga Noce.
+        """Build an order plan with a Noce row.
 
-        E' un piano di **compilazione** (Fase 6e), non ha niente a che vedere
-        con il vecchio percorso sul sito: serve a far arrivare
-        `writer_configuration_issues` fino ai controlli sul listino Noce.
-        Il `run_id` c'e' perche' il programma vero lo scrive in ogni piano
-        (dalla run del confronto che l'ha prodotto): senza, la guardia della
-        run fermerebbe tutto prima dei controlli che queste prove misurano.
+        Exercises `writer_configuration_issues` against the Noce price-list
+        checks. `run_id` is required because the real program always writes
+        it into every plan (from the comparison run that produced it);
+        without it, the run guard would stop the compile before reaching the
+        checks under test here.
         """
         return {"run_id": "run-sintetica", "orders": [{
             "supplier": "noce",
@@ -5490,11 +5447,11 @@ class CompilazioneNoceTests(ConsegnaBase):
         }]}
 
     def test_il_controllo_preventivo_vede_l_impronta_diversa(self) -> None:
-        """La difesa sull'impronta sta in due punti, e ognuno ha la sua prova.
+        """The fingerprint guard runs at two points, each with its own test.
 
-        Il controllo prima di scrivere e quello dentro la compilazione dicono la
-        stessa frase: senza una prova per ciascuno, spegnerne uno lascerebbe la
-        suite verde e nessuno saprebbe che una delle due porte e' aperta.
+        The pre-write check and the compile-time check report the same
+        message; without a test for each, disabling one would leave the
+        suite green while that guard was silently open.
         """
 
         self.scrivi_configurazione(source_sha256="0" * 64)
@@ -5505,7 +5462,7 @@ class CompilazioneNoceTests(ConsegnaBase):
         self.assertEqual(self.store.writer_configuration_issues(self.piano_con_riga_noce()), [])
 
     def configurazione_larice(self, impronta: str) -> dict[str, Any]:
-        """Una configurazione con il solo LARICE, e l'impronta che le si passa."""
+        """Build a config with only LARICE, using the given fingerprint."""
 
         return {
             "run_id": "run-sintetica",
@@ -5527,15 +5484,15 @@ class CompilazioneNoceTests(ConsegnaBase):
         }]}
 
     def test_l_impronta_si_verifica_per_ogni_fornitore_non_solo_per_cipresso(self) -> None:
-        """«Ho eliminato il listino sbagliato, ho ricaricato quello giusto, ho compilato.»
+        """The fingerprint check must run for every supplier, not one hardcoded name.
 
-        Con lo stesso nome di file il percorso non cambia, e senza ricalcolo la
-        run e' la stessa: la guardia sulla run non vede niente.  L'unica difesa
-        e' l'impronta — che `source_rule` scrive da sempre per **tutti** i
-        fornitori, ma che fino al 14 agosto 2026 si controllava soltanto per
-        CIPRESSO, dietro un `if supplier != "cipresso": continue`.  Le quantita'
-        finivano nelle righe del listino nuovo scelte con i numeri di riga del
-        confronto vecchio, e la copia usciva consegnabile.
+        Replacing a supplier's file under the same filename, without a
+        recompute, leaves the run guard blind: the file path is unchanged
+        and the run id is the same. Only the fingerprint (which
+        `source_rule` always writes, for every supplier) can catch it; if the
+        check were scoped to a single supplier, quantities from an old
+        comparison would land on the wrong rows of the new price list and the
+        copy would still come out deliverable.
         """
 
         self.writer_config.write_text(
@@ -5548,12 +5505,12 @@ class CompilazioneNoceTests(ConsegnaBase):
         self.assertTrue(any("LARICE" in voce for voce in problemi), problemi)
 
     def test_un_larice_intatto_non_viene_fermato_dall_impronta(self) -> None:
-        """L'altro ramo: la severita' nuova non deve fermare una compilazione buona.
+        """The other branch: an unchanged file must not trip the fingerprint check.
 
-        Si guarda **solo** l'impronta: questa configurazione minima non dichiara
-        Node ne' lo strumento di scrittura, quindi altri avvisi ci sono e sono
-        giusti.  Asserire «nessun avviso» qui misurerebbe quelli invece di
-        quello che la prova vuole misurare.
+        Only the fingerprint-related warnings are asserted here: this minimal
+        config doesn't declare Node or the writer, so other warnings are
+        expected and legitimate; asserting "no warnings" would measure those
+        instead of what this test targets.
         """
 
         impronta = hashlib.sha256(self.listini["larice"].read_bytes()).hexdigest()
@@ -5577,12 +5534,12 @@ class CompilazioneNoceTests(ConsegnaBase):
         self.assertIn("regola di scrittura", esito["message"])
 
     def test_la_guardia_sulla_run_vale_anche_per_noce(self) -> None:
-        """NOCE non passa da Node, ma prende il listino dalla stessa configurazione.
+        """NOCE doesn't go through Node, but reads its price list from the same config.
 
-        La sua copia e' una patch in posizione sul `.xls`: se il percorso e' di
-        un'altra settimana, le righe sono quelle di un altro documento esatta-
-        mente come per gli altri.  La guardia non puo' valere «per chi passa
-        dal writer».
+        Its copy is an in-place `.xls` patch: a stale run leaves the rows
+        pointing at another document's data, exactly as for the other
+        suppliers. The run guard can't be scoped to writer-based suppliers
+        only.
         """
 
         self.scrivi_configurazione()
@@ -5598,26 +5555,24 @@ class CompilazioneNoceTests(ConsegnaBase):
 
 
 class LaConfigurazioneDiUnAltraRun(ConsegnaBase):
-    """La difesa decisiva del bloccante del 12 agosto 2026.
+    """Guards against compiling with a stale `writer_config.json` after a recompute.
 
-    Dopo un ricalcolo i listini sono altri file, con altri nomi e altre righe.
-    Se `writer_config.json` resta quello di prima, la compilazione scrive le
-    quantita' di oggi nelle righe del listino della settimana scorsa: dal vivo
-    la quantita' di un prodotto e' finita sulla riga di un altro, con
-    `writerIssues: []`.  L'impronta non se ne accorge — controlla che il file
-    non sia cambiato da quando e' stato verificato, ed e' vera anche quando il
-    file e' quello sbagliato ma coerente con se stesso — e comunque la si
-    guardava solo per due fornitori su quattro.
+    A recompute replaces the price lists with different files, names and
+    rows. If `writer_config.json` still points at the previous run, the
+    compile writes today's quantities into last week's rows, silently: the
+    fingerprint check alone can't catch this, since it only verifies a file
+    hasn't changed since it was checked, which stays true even for a stale
+    but internally consistent file.
 
-    Qui si prova che il confronto fra i due `run_id` c'e', che si ferma
-    **prima** di invocare qualunque writer, e che fallisce chiuso su ognuno dei
-    modi in cui la domanda puo' restare senza risposta.
+    Verifies that the two `run_id` values are compared before any writer
+    runs, and that every way this comparison could go unanswered fails
+    closed.
     """
 
     def setUp(self) -> None:
         super().setUp()
-        # Una configurazione completa: cosi' l'unica cosa che puo' fermare la
-        # compilazione e' la run, ed e' quella che le prove muovono.
+        # A complete config: the only thing left that can stop the compile
+        # is the run check, which is what these tests exercise.
         self.config = json.loads(self.writer_config.read_text(encoding="utf-8"))
         self.config["node_executable"] = str(self.root / "node.exe")
         self.config["writer_script"] = str(self.root / "writer.mjs")
@@ -5653,24 +5608,24 @@ class LaConfigurazioneDiUnAltraRun(ConsegnaBase):
         self.assertEqual(esito["status"], "PLAN_READY")
         self.assertEqual(len(esito["writerIssues"]), 1)
         avviso = esito["writerIssues"][0]
-        # La frase non pretende di sapere chi dei due sia rimasto indietro:
-        # senza tener traccia dell'ordine sarebbe una diagnosi inventata.
+        # The message doesn't claim to know which of the two is stale:
+        # without tracking order, that would be a fabricated diagnosis.
         self.assertIn("non appartiene allo stesso confronto", avviso)
-        # Il rimedio dice quale azione dell'utente rigenera la configurazione.
+        # The fix names the user action that regenerates the configuration.
         self.assertIn("Ricalcola il confronto", avviso)
         self.assertIn(avviso, esito["message"])
-        # ⚠ Il writer non e' stato nemmeno invocato: ci si ferma prima.
+        # The writer must never be invoked: the guard stops the compile first.
         self.assertEqual(self.scrittore.destinazioni, [])
         self.assertFalse(list(self.cartella_di(esito).glob("*.xlsx")))
-        # E resta scritto nell'audit della compilazione, non solo nella risposta.
+        # Also recorded in the compile audit, not just the response.
         self.assertIn(avviso, self.audit_di(esito)["avvisi"])
 
     def test_una_configurazione_che_non_dichiara_la_run_ferma(self) -> None:
-        """Fallire chiuso: una config vecchia non dice a quale ricalcolo appartiene.
+        """Fail closed: a config that doesn't declare its run must stop the compile.
 
-        E' il caso di chi aggiorna il programma senza rifare il ricalcolo: la
-        domanda «e' del confronto di adesso?» resta senza risposta, e a una
-        domanda senza risposta non si scrive dentro il listino di un fornitore.
+        A config written before this field existed can't answer "does this
+        belong to the current comparison?", and an unanswered question means
+        no write to a supplier's price list.
         """
 
         self.scrivi_config(run_id=None)
@@ -5682,7 +5637,7 @@ class LaConfigurazioneDiUnAltraRun(ConsegnaBase):
         self.assertEqual(self.scrittore.destinazioni, [])
 
     def test_un_confronto_senza_run_ferma(self) -> None:
-        """L'altro lato della stessa domanda: nessun ricalcolo è mai arrivato in fondo."""
+        """The other side of the same question: no recompute has ever finished."""
 
         self.scrivi_confronto(None)
         self.scrivi_config(run_id="run-sintetica")
@@ -5694,7 +5649,7 @@ class LaConfigurazioneDiUnAltraRun(ConsegnaBase):
         self.assertEqual(self.scrittore.destinazioni, [])
 
     def test_due_run_vuote_non_si_annullano(self) -> None:
-        """Due stringhe vuote sono uguali, e non vuol dire che vada bene."""
+        """Two empty strings are equal, which doesn't mean the check should pass."""
 
         self.scrivi_confronto("")
         self.scrivi_config(run_id="")
@@ -5706,7 +5661,7 @@ class LaConfigurazioneDiUnAltraRun(ConsegnaBase):
         self.assertEqual(self.scrittore.destinazioni, [])
 
     def test_con_la_stessa_run_la_compilazione_va_avanti(self) -> None:
-        """La guardia non deve fermare la settimana buona."""
+        """A matching run must not be blocked by the guard."""
 
         self.scrivi_config(run_id="run-sintetica")
 
@@ -5717,21 +5672,19 @@ class LaConfigurazioneDiUnAltraRun(ConsegnaBase):
         self.assertEqual(self.scrittore.destinazioni, [self.cartella_di(esito)])
 
     def test_il_ricalcolo_che_finisce_durante_la_compilazione_non_apre_la_finestra(self) -> None:
-        """Il BLOCCANTE della revisione avversariale del 13 agosto 2026.
+        """A recompute finishing mid-compile must not reopen the stale-run window.
 
-        La compilazione costruisce il piano dalla run A; un ricalcolo che
-        finisce un attimo dopo porta configurazione E confronto alla run B.
-        La prima versione della guardia rilegge il confronto dal disco e trova
-        `B == B`: diceva di si' a un piano che parlava di A — il bloccante del
-        12 agosto, identico, con `writerIssues` vuoto.  La guardia deve
-        confrontare la configurazione con il PIANO, che nessuno puo' cambiare
-        sotto i piedi.  Il cambio di run e' iniettato nella creazione della
-        cartella datata: il piano e' gia' costruito e parla della run A, la
-        guardia non ha ancora letto niente, ed e' un punto che la compilazione
-        attraversa davvero (i due lucchetti non si escludono: il server e' un
-        `ThreadingHTTPServer`).  Prima l'iniezione stava in
-        `record_order_history`, che dal 13 agosto 2026 viene DOPO la scrittura:
-        li' non avrebbe piu' provato niente.
+        The plan is built against run A; a recompute that finishes a moment
+        later moves both the config and the comparison to run B. A guard
+        that re-reads the comparison from disk at check time would then see
+        `B == B` and pass, even though the plan it's about to write still
+        describes run A — the exact bug this guard exists to prevent, with
+        `writerIssues` empty. The guard must compare the config against the
+        PLAN, which nothing can change underneath it. The run switch is
+        injected at the point where the dated folder is created: the plan is
+        already built (against run A) and the guard hasn't read anything yet,
+        a window the compile genuinely passes through because the two locks
+        don't exclude each other (the server is a `ThreadingHTTPServer`).
         """
 
         vero = SERVER.consegna.crea_cartella
@@ -5750,14 +5703,14 @@ class LaConfigurazioneDiUnAltraRun(ConsegnaBase):
         self.assertFalse(list(self.cartella_di(esito).glob("*.xlsx")))
 
     def test_la_riconfigurazione_che_non_scrive_lo_dice(self) -> None:
-        """`prepare_writer_config` torna senza scrivere quando manca un requisito.
+        """`prepare_writer_config` returns without writing when a requirement is missing.
 
-        Senza il controllo sull'esito, il ramo piu' probabile — Node sparito,
-        script mancante — falliva IN SILENZIO: nessuna eccezione, nessun
-        avviso `COMPILAZIONE_DA_RICONFIGURARE`, e la configurazione restava
-        quella della settimana scorsa (revisione avversariale del 13 agosto
-        2026, rilievo 7).  La guardia del run_id terrebbe comunque chiusa la
-        compilazione, ma la promessa e' che lo si dica subito.
+        Without checking that outcome, the most likely case — Node missing,
+        script missing — would fail silently: no exception, no
+        `COMPILAZIONE_DA_RICONFIGURARE` warning, and the stale configuration
+        left in place. The `run_id` guard would still keep the compile
+        closed, but the operator should be told immediately, not left to hit
+        that guard later.
         """
 
         import launcher as modulo_launcher
@@ -5778,7 +5731,7 @@ class LaConfigurazioneDiUnAltraRun(ConsegnaBase):
 
 
 class NegozioSintetico(unittest.TestCase):
-    """Fondamenta comuni alle prove qui sotto: un confronto scritto su misura."""
+    """Shared fixture for the tests below: a purpose-built synthetic comparison."""
 
     def setUp(self) -> None:
         temporanea = tempfile.TemporaryDirectory()
@@ -5860,12 +5813,12 @@ class NegozioSintetico(unittest.TestCase):
 
 
 class ScontoDelFornitoreTests(NegozioSintetico):
-    """«BETULLA potrebbe scontare tutto del 6%»: uno sconto su tutto il listino.
+    """A flat percentage discount applied across a supplier's whole price list.
 
-    Deciso il 15 agosto 2026: lo sconto si mette dopo aver caricato i listini e
-    prima di cominciare a scegliere, riassegna al piu' conveniente **in
-    silenzio** («so benissimo cosa sto facendo»), e **scade al ricalcolo** senza
-    dire niente a nessuno.
+    The discount is applied after the price lists load and before the
+    operator starts choosing suppliers. It silently reassigns each product to
+    the cheapest supplier (the operator is assumed to know what they're
+    doing) and silently expires on the next recompute.
     """
 
     def setUp(self) -> None:
@@ -5898,18 +5851,18 @@ class ScontoDelFornitoreTests(NegozioSintetico):
 
         primo = self.prezzi("product:1")
         self.assertAlmostEqual(primo["betulla"], 11.844, places=4)
-        # Gli altri fornitori non si toccano.
+        # Other suppliers are untouched.
         self.assertAlmostEqual(primo["larice"], 12.0, places=4)
         self.assertAlmostEqual(self.prezzi("product:2")["betulla"], 28.2, places=4)
 
     def test_riassegna_anche_i_prodotti_senza_decisione_salvata(self) -> None:
-        """Il `continue` si appoggiava a un'invariante che nessuno impone.
+        """Must reassign every product, even one with no saved decision yet.
 
-        Oggi il campo dello sconto non e' raggiungibile senza passare da un
-        salvataggio che scrive una decisione per ogni prodotto del confronto,
-        quindi la mappa non e' quasi mai vuota. Ma basta che un salvataggio
-        fallisca — ed e' successo, il 15 agosto 2026 — perche' lo sconto
-        riassegni meta' dei prodotti e taccia sull'altra meta'.
+        Reaching the discount field normally requires a save that writes a
+        decision for every product, so the decision map is rarely empty. But
+        a failed save can leave it partially empty, and the discount must
+        still reassign every affected product rather than silently skipping
+        the ones without a saved decision.
         """
 
         self.store.state_path.write_text(json.dumps({
@@ -5924,10 +5877,12 @@ class ScontoDelFornitoreTests(NegozioSintetico):
         self.assertEqual(scelti["product:2"], "larice")
 
     def test_la_decisione_creata_dice_da_dove_viene_la_quantita(self) -> None:
-        """⚠ Senza `quantitySource`, il ricalcolo successivo smette di
-        rileggere i colli dal gestionale e la quantita' resta congelata
-        (`pipeline_jobs._ripulisci_stato`): sarebbe una riga scritta apposta
-        per rompere la settimana dopo."""
+        """A decision created by the discount must set `quantitySource`.
+
+        Without it, the next recompute stops re-reading the carton count
+        from the management-software export and the quantity stays frozen
+        (`pipeline_jobs._ripulisci_stato`).
+        """
 
         self.store.state_path.write_text(json.dumps({
             "runId": "run-sintetica", "stateVersion": 3, "products": [],
@@ -5944,7 +5899,7 @@ class ScontoDelFornitoreTests(NegozioSintetico):
             self.assertIs(voce["excluded"], False)
 
     def test_riassegna_al_piu_conveniente_e_non_lo_annuncia(self) -> None:
-        """Col 6% BETULLA passa davanti su product:1, ma non su product:2."""
+        """At 6% off, BETULLA becomes cheapest on product:1, but not on product:2."""
 
         esito = self.store.set_supplier_discount({"supplierId": "betulla", "percent": 6})
 
@@ -5953,19 +5908,19 @@ class ScontoDelFornitoreTests(NegozioSintetico):
         scelti = {p["id"]: p["selectedSupplierId"] for p in confronto["products"]}
         self.assertEqual(scelti["product:1"], "betulla")
         self.assertEqual(scelti["product:2"], "larice")
-        # Nessun avviso: chi lo mette sa quello che sta facendo.
+        # No warning: applying the discount is a deliberate operator action.
         codici = {voce.get("code") for voce in confronto.get("warnings") or []}
         self.assertNotIn("SCONTO_FORNITORE", codici)
 
     def test_i_totali_del_servizio_usano_il_prezzo_scontato(self) -> None:
-        """Il riepilogo e la pagina devono dire lo stesso numero."""
+        """The summary and the page must report the same number."""
 
         self.store.set_supplier_discount({"supplierId": "betulla", "percent": 6})
 
         riepilogo = self.store.review()["orderSummary"]
         betulla = next(voce for voce in riepilogo["suppliers"] if voce["supplierId"] == "betulla")
-        # 2 colli di product:1 a 11,844 = 23,688, che il riepilogo mostra al
-        # centesimo come fa la pagina: 23,69. Senza sconto sarebbero 25,20.
+        # 2 cartons of product:1 at 11.844 = 23.688, rounded to the cent as
+        # the page does: 23.69. Without the discount it would be 25.20.
         self.assertAlmostEqual(betulla["totalNet"], 23.69, places=2)
 
     def test_scade_con_la_run_e_non_lo_dice(self) -> None:
@@ -6000,7 +5955,7 @@ class ScontoDelFornitoreTests(NegozioSintetico):
             self.store.set_supplier_discount({"supplierId": "acero", "percent": 6})
 
     def test_il_salvataggio_delle_quantita_non_cancella_lo_sconto(self) -> None:
-        """`validate_snapshot` ricostruisce lo stato da zero: lo sconto va riportato."""
+        """`validate_snapshot` rebuilds state from scratch: the discount must be carried over."""
 
         self.store.set_supplier_discount({"supplierId": "betulla", "percent": 6})
         stato = json.loads(self.store.state_path.read_text(encoding="utf-8"))
@@ -6021,16 +5976,12 @@ class ScontoDelFornitoreTests(NegozioSintetico):
 
 
 class UnaConfermaCheMancaNonSpegneIlSalvataggioTests(NegozioSintetico):
-    """Il passo 2 si apriva con «Salvataggio non riuscito» e da lì non salvava più.
+    """A pending match confirmation must not block saving state.
 
-    Misurato il 15 agosto 2026 sul confronto vero: 8 prodotti avevano la
-    quantità del gestionale e una corrispondenza da confermare, e tanto bastava
-    perché ogni `PUT /api/state` tornasse 422. Quantità cambiate, fornitori
-    scelti, prodotti esclusi: niente arrivava sul disco finché non si rispondeva
-    a tutte e otto le proposte.
-
-    La regola giusta è quella che il preventivo di spostamento applicava già:
-    una conferma che manca impedisce di **compilare**, non di **salvare**.
+    An unconfirmed candidate match must not make `PUT /api/state` return 422:
+    quantity edits, supplier choices and exclusions on other products have to
+    reach disk while confirmations are pending. A missing confirmation blocks
+    compile, not save.
     """
 
     def setUp(self) -> None:
@@ -6060,7 +6011,7 @@ class UnaConfermaCheMancaNonSpegneIlSalvataggioTests(NegozioSintetico):
         self.assertFalse(voce["confirmed"])
 
     def test_la_quantita_cambiata_dopo_arriva_sul_disco(self) -> None:
-        """È il danno vero: non il primo salvataggio, ma tutti quelli dopo."""
+        """The failure mode is every save after the first, not just the first."""
 
         self.store.save_state(self.da_confermare(3))
         istantanea = self.da_confermare(7)
@@ -6079,7 +6030,7 @@ class UnaConfermaCheMancaNonSpegneIlSalvataggioTests(NegozioSintetico):
         self.assertIn("va confermata la corrispondenza", str(errore.exception))
 
     def test_gli_altri_rifiuti_continuano_a_fermare_il_salvataggio(self) -> None:
-        """Si è tolto un cancello solo, non il controllo."""
+        """Only the confirmation gate was removed; other save-time checks still apply."""
 
         prodotto = self.prodotto(
             "product:199", "OLIO EXTRAVERGINE 1L", "8009614791337",
@@ -6099,17 +6050,15 @@ class UnaConfermaCheMancaNonSpegneIlSalvataggioTests(NegozioSintetico):
 
 
 class ProdottiDaReperireTests(NegozioSintetico):
-    """La merce che il gestionale chiede e che nessun fornitore porta.
+    """Products the management-software export asks for that no supplier carries.
 
-    Decisione di Daniele del 16 agosto 2026, che **rovescia** quella del 12
-    agosto («si lascia com'è»): una quantità positiva senza nessun fornitore
-    disponibile non è più un errore da correggere, è uno stato valido.  Quel
-    prodotto non entra nel piano né nei listini dei fornitori — non c'è nessuna
-    riga su cui scrivere — ma non si perde: alla compilazione esce in un foglio
-    a parte.
+    A positive quantity with no supplier available is a valid state, not an
+    error to correct. That product stays out of the plan and out of every
+    supplier's price list — there's no row to write it into — but it isn't
+    lost: compile lists it on a separate sheet.
 
-    Il confine che questi test difendono è uno solo, ed è quello che si può
-    sbagliare: **nessuno disponibile** è un'altra cosa da **nessuno scelto**.
+    The distinction these tests protect: "no supplier available" is not the
+    same as "no supplier chosen yet".
     """
 
     def senza_nessuno(self, quantita: int = 3) -> tuple[Any, dict[str, Any]]:
@@ -6129,7 +6078,7 @@ class ProdottiDaReperireTests(NegozioSintetico):
         self.assertEqual(salvato["products"][0]["quantity"], 3)
 
     def test_un_fornitore_scelto_male_resta_un_errore(self) -> None:
-        """La regola non si allenta dove c'è ancora una decisione da prendere."""
+        """The relaxed rule doesn't apply where a real decision is still needed."""
 
         store, _ = self.senza_nessuno()
 
@@ -6139,16 +6088,14 @@ class ProdottiDaReperireTests(NegozioSintetico):
         self.assertEqual({voce["code"] for voce in errore.exception.errors}, {"OFFERTA_NON_VALIDA"})
 
     def test_con_qualcuno_disponibile_scegliere_resta_obbligatorio(self) -> None:
-        """L'altro lato del confine: qui un fornitore c'è, e va scelto.
+        """The other side of the boundary: a supplier is available here, and must be chosen.
 
-        ⚠ La prova si fa sulla **compilazione**. Dal 21 agosto 2026 questo caso
-        ha un codice suo, `FORNITORE_DA_SCEGLIERE`, e non ferma piu' il
-        salvataggio: e' una decisione ancora da prendere, e succede normalmente
-        dopo un «Non è lo stesso articolo» quando un altro fornitore l'articolo
-        ce l'ha. Fermando il salvataggio spegneva quello di TUTTI i prodotti —
-        il guasto del 15 agosto — e bloccava anche il pulsante per tornare
-        indietro, che salva prima di rispondere. Ferma la compilazione: la
-        regola del 12 agosto resta intera.
+        Checked at compile time, not save time: `FORNITORE_DA_SCEGLIERE` is a
+        pending decision, not a save-blocking error — it happens normally
+        after a "not the same item" rejection when another supplier does
+        carry it. Blocking the save on this would block every other
+        product's save too, and the back button (which saves before
+        responding).
         """
 
         store = self.negozio(self.confronto([
@@ -6164,7 +6111,7 @@ class ProdottiDaReperireTests(NegozioSintetico):
         self.assertEqual({voce["code"] for voce in errori}, {"FORNITORE_DA_SCEGLIERE"})
 
     def test_un_match_da_verificare_non_e_un_prodotto_introvabile(self) -> None:
-        """Un'offerta che chiede una conferma è un'offerta, non un'assenza."""
+        """An offer awaiting confirmation is still an offer, not an absence."""
 
         offerta = self.offerta("larice", 14.9)
         offerta["requiresConfirmation"] = True
@@ -6178,19 +6125,19 @@ class ProdottiDaReperireTests(NegozioSintetico):
         self.assertEqual({voce["code"] for voce in errori}, {"FORNITORE_DA_SCEGLIERE"})
 
     def test_nessuna_conferma_si_pretende_su_chi_non_ha_fornitore(self) -> None:
-        """Una casella che l'utente non può spuntare fermerebbe tutto per sempre.
+        """A confirmation checkbox the operator has no way to tick must never be required.
 
-        ⚠ La prova si fa sulla **compilazione**, non sul salvataggio: `save_state`
-        `CONFERMA_MANCANTE` lo scarta comunque (`app/server.py:1728`), quindi una
-        prova sul salvataggio resta verde anche a guardia spenta e non prova
-        niente.  L'ha trovata una mutazione rimasta verde il 17 agosto 2026.
+        Checked at compile time: `save_state` already drops
+        `CONFERMA_MANCANTE` for a product with no available supplier
+        (`app/server.py:1728`), so a save-time test would pass even with the
+        compile-time guard disabled and prove nothing.
         """
 
         prodotto = self.prodotto("product:198", "OLIO EXTRAVERGINE 1L", "8009580477747",
                                  [self.offerta("larice", 14.9, disponibile=False)])
         prodotto["requiresConfirmation"] = True
-        # Un secondo prodotto ordinabile: così la compilazione ha un ordine vero
-        # da produrre e il rifiuto, se arriva, arriva per il primo.
+        # A second, orderable product: gives the compile a real order to
+        # produce, so any rejection can only come from the first product.
         ordinabile = self.prodotto("product:199", "PASTA 500G", "8009614791337",
                                    [self.offerta("larice", 9.0)])
         store = self.negozio(self.confronto([prodotto, ordinabile]))
@@ -6212,11 +6159,10 @@ class ProdottiDaReperireTests(NegozioSintetico):
 
 
 class OffertaNonValidaDiceQualeProdottoTests(NegozioSintetico):
-    """La regola di rifiuto non cambia: cambia quello che il rifiuto dice.
+    """The rejection rule is unchanged: what the rejection message says is what matters.
 
-    Fino al 13 agosto 2026 la pagina mostrava «Controlli snapshot non
-    superati», e davanti a cinquecento righe non c'era modo di sapere quale
-    prodotto guardare.
+    A generic "snapshot checks failed" is useless against a comparison with
+    hundreds of rows; the message must name the product.
     """
 
     def setUp(self) -> None:
@@ -6237,7 +6183,7 @@ class OffertaNonValidaDiceQualeProdottoTests(NegozioSintetico):
         messaggio = str(errore.exception)
         self.assertIn("OLIO EXTRAVERGINE 1L", messaggio)
         self.assertIn("LARICE", messaggio)
-        # E dice che cosa fare, non solo che qualcosa non va.
+        # States the fix, not just that something's wrong.
         self.assertIn("quantità a zero", messaggio)
         voce = errore.exception.errors[0]
         self.assertEqual(voce["code"], "OFFERTA_NON_VALIDA")
@@ -6245,11 +6191,10 @@ class OffertaNonValidaDiceQualeProdottoTests(NegozioSintetico):
         self.assertEqual(voce["supplierName"], "LARICE")
 
     def test_senza_fornitore_scelto_lo_dice_diversamente(self) -> None:
-        # ⚠ Il prodotto di questa prova ha un fornitore che PUO' servirlo: dal
-        # 16 agosto 2026 una quantità senza fornitore è un errore solo quando
-        # c'è qualcuno da scegliere. Se non c'è nessuno è un prodotto da
-        # reperire, ed è uno stato valido — lo prova
-        # `ProdottiDaReperireTests`.
+        # This product's supplier CAN carry it: a quantity without a chosen
+        # supplier is only an error when there's someone to choose. With no
+        # supplier available at all, it's a "to be sourced" product instead,
+        # a valid state covered by `ProdottiDaReperireTests`.
         store = self.negozio(self.confronto([
             self.prodotto("product:198", "OLIO EXTRAVERGINE 1L", "8009580477747",
                           [self.offerta("larice", 14.9)]),
@@ -6263,7 +6208,7 @@ class OffertaNonValidaDiceQualeProdottoTests(NegozioSintetico):
         self.assertIn("nessun fornitore", messaggio)
 
     def test_la_regola_di_rifiuto_non_si_allenta(self) -> None:
-        """L'offerta non disponibile resta rifiutata: cambia solo la frase."""
+        """An unavailable offer is still rejected: only the message changed."""
 
         with self.assertRaises(SnapshotError):
             self.store.save_state(self.scelte({"product:198": ("larice", 3)}))
@@ -6313,15 +6258,15 @@ class OffertaNonValidaDiceQualeProdottoTests(NegozioSintetico):
         self.assertEqual(errore.exception.code, 422)
         corpo = json.loads(errore.exception.read().decode("utf-8"))
         self.assertFalse(corpo["ok"])
-        # `body.message` e' l'unico campo che la pagina mostra: la frase deve
-        # stare li' dentro, non solo nei codici.
+        # `body.message` is the only field the page shows: the text must be
+        # there, not just in the error codes.
         self.assertIn("OLIO EXTRAVERGINE 1L", corpo["message"])
         self.assertIn("LARICE", corpo["message"])
         self.assertEqual(corpo["errors"][0]["code"], "OFFERTA_NON_VALIDA")
 
 
 class OmaggiPersiNelloSpostamentoTests(NegozioSintetico):
-    """Spostare la merce fa saltare le soglie: il numero di omaggi si conta."""
+    """Moving quantity across a threshold can change the count of free-goods items."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -6343,7 +6288,7 @@ class OmaggiPersiNelloSpostamentoTests(NegozioSintetico):
         return self.store.move_preview(richiesta)
 
     def test_il_preventivo_dice_quanti_omaggi_si_perdono(self) -> None:
-        # 12 colli con una soglia ogni 2 colli: sei omaggi, tutti su LARICE.
+        # 12 cartons with a threshold every 2 cartons: six free items, all on LARICE.
         opzione = self.preventivo()["options"][0]
 
         self.assertEqual(opzione["giftsBefore"], 6)
@@ -6365,7 +6310,7 @@ class OmaggiPersiNelloSpostamentoTests(NegozioSintetico):
         self.assertEqual(opzione["giftsLost"], 0)
 
     def test_il_valore_dell_omaggio_non_si_calcola_mai(self) -> None:
-        """Decisione commerciale: l'omaggio informa, non entra nei conti."""
+        """A free-goods item is informational only, never priced into any total."""
 
         opzione = self.preventivo()["options"][0]
 
@@ -6375,12 +6320,13 @@ class OmaggiPersiNelloSpostamentoTests(NegozioSintetico):
 
 
 class ScartoFraTestataERigheTests(NegozioSintetico):
-    """I due totali non coincidono sempre, e la differenza va dichiarata."""
+    """The header total and the sum of the rounded line totals don't always match, and the gap must be reported."""
 
     def setUp(self) -> None:
         super().setUp()
-        # Prezzi con i decimali dei listini veri: la somma delle righe mostrate
-        # al centesimo non fa il totale calcolato sui prezzi interi.
+        # Prices with the decimal precision of real price lists: the sum of
+        # rows rounded to the cent doesn't equal the total computed on the
+        # unrounded prices.
         self.store = self.negozio(self.confronto([
             self.prodotto("product:1", "PRIMO", "8000000000001", [self.offerta("larice", 4.9975)]),
             self.prodotto("product:2", "SECONDO", "8000000000002", [self.offerta("larice", 7.3325)]),
@@ -6395,9 +6341,9 @@ class ScartoFraTestataERigheTests(NegozioSintetico):
         fornitore = riepilogo["suppliers"][0]
         self.assertEqual(fornitore["supplierId"], "larice")
         self.assertEqual(fornitore["lineCount"], 3)
-        # 14,9925 + 14,665 + 10,125 = 39,78 sul totale, 39,79 sommando le righe
-        # arrotondate una per una al centesimo: un centesimo di scarto, e va
-        # detto anche quando le righe stanno sopra la testata.
+        # 14.9925 + 14.665 + 10.125 = 39.78 on the unrounded total, 39.79 when
+        # summing the rows each already rounded to the cent: a one-cent gap
+        # that must be reported even when the rows sum above the header.
         self.assertEqual(fornitore["totalNet"], 39.78)
         self.assertEqual(fornitore["linesTotalNet"], 39.79)
         self.assertEqual(fornitore["roundingDifference"], -0.01)
@@ -6416,7 +6362,7 @@ class ScartoFraTestataERigheTests(NegozioSintetico):
         self.assertEqual(riepilogo["roundingDifference"], 0.0)
 
     def test_il_riepilogo_c_e_gia_alla_prima_apertura_della_pagina(self) -> None:
-        """Senza, la frase comparirebbe solo dopo il primo salvataggio."""
+        """The rounding note must appear on first load, not only after the first save."""
 
         self.store.save_state(self.scelte(self.acquisti))
 
@@ -6426,7 +6372,7 @@ class ScartoFraTestataERigheTests(NegozioSintetico):
         self.assertEqual(riepilogo["roundingDifference"], -0.01)
 
     def test_il_totale_del_riepilogo_e_quello_della_compilazione(self) -> None:
-        """Il Riepilogo e il piano ordini non possono dire due numeri diversi."""
+        """The summary and the order plan must never report different totals."""
 
         riepilogo = self.store.save_state(self.scelte(self.acquisti))["orderSummary"]
         with mock.patch.object(self.store, "writer_config", None):
@@ -6436,7 +6382,7 @@ class ScartoFraTestataERigheTests(NegozioSintetico):
 
 
 class ScartiDelParserInPaginaTests(NegozioSintetico):
-    """Le righe che non entrano nel confronto arrivano fino alla pagina."""
+    """Rows the parser discards must be reported all the way to the page."""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -6472,7 +6418,7 @@ class ScartiDelParserInPaginaTests(NegozioSintetico):
         corpo = self.app_js.split("function normalizeDiscardedRows(")[1].split("\n}\n")[0]
         self.assertIn("rows_not_orderable", corpo)
         self.assertIn("rows_excluded", corpo)
-        # I numeri arrivano dall'audit: la pagina non ne inventa nessuno.
+        # The numbers come straight from the audit: the page derives none.
         self.assertNotIn("rowsKept -", corpo)
 
     def test_la_frase_dice_quante_righe_e_perche(self) -> None:
@@ -6482,7 +6428,7 @@ class ScartiDelParserInPaginaTests(NegozioSintetico):
         self.assertIn("righe scartate", corpo)
 
     def test_i_codici_a_barre_ripetuti_si_dicono(self) -> None:
-        """`duplicate_ean_values` spiega perché due prodotti «uguali» sono righe diverse."""
+        """`duplicate_ean_values` explains why two seemingly identical products are separate rows."""
 
         corpo = self.app_js.split("function normalizeDiscardedRows(")[1].split("\n}\n")[0]
         self.assertIn("duplicate_ean_values", corpo)
@@ -6494,11 +6440,11 @@ class ScartiDelParserInPaginaTests(NegozioSintetico):
         self.assertIn("renderDiscardedRowsPanel()", passo)
 
     def test_i_dettagli_tecnici_restano_chiusi_finche_non_servono(self) -> None:
-        # ⚠ Dal 15 agosto 2026 l'apertura non e' piu' inchiodata nel markup: la
-        # decide `apribile()`, che scrive `open` solo se l'utente l'ha aperto.
-        # Il riquadro nasce chiuso perche' la memoria parte vuota, e resta
-        # aperto durante i ridisegni — che finche' il ricalcolo gira sono uno
-        # al secondo. Le prove eseguite stanno in
+        # The panel's open state isn't hardcoded in the markup: `apribile()`
+        # writes `open` only if the operator opened it before. It starts
+        # closed because that memory starts empty, and stays open across
+        # redraws (which run about once per second while the pipeline is
+        # active). Behavioral coverage lives in
         # `tests/test_interfaccia_pagina1.py::SezioniCheRestanoAperte`.
         riquadro = self.app_js.split("function renderDiscardedRowsPanel(")[1].split("\n}\n")[0]
         self.assertIn('<details class="panel import-panel audit-disclosure" ${apribile("righe-scartate")}>', riquadro)
@@ -6506,7 +6452,7 @@ class ScartiDelParserInPaginaTests(NegozioSintetico):
 
 
 class LaDomandaDelleConsegneInPaginaTests(unittest.TestCase):
-    """La pagina 2 dopo il difetto D4: tre risposte e una domanda che torna."""
+    """Step 2's pending-delivery question: three possible answers, and a question that can resurface."""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -6514,8 +6460,7 @@ class LaDomandaDelleConsegneInPaginaTests(unittest.TestCase):
 
     def test_la_terza_risposta_esiste_e_chiude_l_ordine(self) -> None:
         self.assertIn('data-action="history-never"', self.app_js)
-        # «NON ARRIVERÀ PIÙ» diceva l'effetto sulla merce, non sulla domanda:
-        # l'azione e' irreversibile e adesso lo dice.
+        # The label must state that the action is irreversible.
         self.assertIn("Annullato, non arriva", self.app_js)
         invio = self.app_js.split("async function answerPendingOrder(")[1].split("\n}\n")[0]
         self.assertIn("{ orderId, closed: true }", invio)
@@ -6523,22 +6468,19 @@ class LaDomandaDelleConsegneInPaginaTests(unittest.TestCase):
     def test_il_ritorno_della_domanda_lo_decide_il_servizio(self) -> None:
         corpo = self.app_js.split("function domandaRimandata(")[1].split("\n}\n")[0]
         self.assertIn("entry.askAgainAt", corpo)
-        # La vecchia regola del browser — «vale per la giornata» — non c'e' piu'.
+        # Must not fall back to a browser-local "valid for today" rule.
         self.assertNotIn("toDateString()", self.app_js)
         self.assertIn("askAgainAt", self.app_js.split("function normalizePendingOrder(")[1].split("\n}\n")[0])
 
     def test_lo_scarto_da_arrotondamenti_non_si_stampa_piu_sulla_pagina(self) -> None:
-        """Un centesimo di scarto non e' un'informazione per chi ordina.
+        """A one-cent rounding gap isn't information the operator needs to see.
 
-        Stava sotto il totale di ogni fornitore e sotto quello generale, cioe'
-        accanto al numero che invece conta. Il campo `roundingDifference`
-        resta nella risposta del servizio — e resta provato qui sopra — ma
-        nessuna riga della pagina lo mostra.
+        `roundingDifference` still comes back in the service response — and
+        is covered above — but no line on the page displays it.
         """
 
-        # ⚠ La frase si cerca per il nome delle funzioni che la
-        # scrivevano, non per il suo testo: il testo resta scritto nel
-        # commento che spiega perche' e' stata tolta, ed e' giusto che resti.
+        # Checked by the function and class names a rendering would use, not
+        # by its text, so the assertion doesn't depend on UI wording.
         self.assertNotIn("roundingNote", self.app_js)
         self.assertNotIn("renderRoundingNote", self.app_js)
         self.assertNotIn("rounding-note", self.app_js)
@@ -6553,13 +6495,11 @@ class LaDomandaDelleConsegneInPaginaTests(unittest.TestCase):
 
 
 class IlRegistroEUnaVeritaSolaTests(unittest.TestCase):
-    """Nomi e regole di scrittura vengono dal registro, non dal codice.
+    """Supplier display names and write rules come from the adapter registry, not hardcoded in the code.
 
-    Erano scritti in tre punti (servizio, writer Node, costruzione del
-    confronto) e ne conoscevano quattro: un fornitore imparato compariva come
-    «NUOVO_FORNITORE», underscore compreso, nei messaggi e nello storico, e non
-    ereditava nessuna regola di scrittura anche quando il registro gliela
-    dichiarava.
+    A learned supplier's display name and write rule must both come from a
+    single source: hardcoding either one elsewhere risks it diverging from
+    what the registry declares.
     """
 
     def setUp(self) -> None:
@@ -6587,13 +6527,13 @@ class IlRegistroEUnaVeritaSolaTests(unittest.TestCase):
         self.assertEqual(registro_adattatori.nome_del_fornitore("nuovo_fornitore", percorso), "Alimentari Rossi")
 
     def test_senza_dichiarazione_l_underscore_non_arriva_all_utente(self) -> None:
-        """«NUOVO_FORNITORE» in mezzo a una frase si legge come un guasto."""
+        """A raw identifier like "NUOVO_FORNITORE" in a sentence reads as a bug, not a name."""
 
         self.assertEqual(supplier_label("nuovo_fornitore"), "NUOVO FORNITORE")
         self.assertEqual(supplier_label(""), "FORNITORE")
 
     def test_fra_due_adattatori_dello_stesso_fornitore_vince_il_nome_del_fornitore(self) -> None:
-        """Il nome più lungo descrive il documento, non chi lo manda."""
+        """The shorter, plain supplier name wins over a longer name describing a specific document."""
 
         percorso = self.registro_finto([
             {"id": "tizio_csv_v1", "supplier_id": "tizio", "display_name": "TIZIO", "kind": "supplier"},
@@ -6614,7 +6554,7 @@ class IlRegistroEUnaVeritaSolaTests(unittest.TestCase):
         self.assertEqual(larice.get("data_start_row"), 2)
 
     def test_chi_scrive_dalla_mappatura_confermata_non_ha_una_regola_predefinita(self) -> None:
-        """Per CIPRESSO e Noce foglio e righe li dichiara l'utente, non il registro."""
+        """For CIPRESSO and Noce, sheet and rows come from the operator's mapping, not a default rule."""
 
         self.assertIsNone(ReviewStore.default_write_rule("cipresso"))
         self.assertIsNone(ReviewStore.default_write_rule("noce"))
@@ -6640,12 +6580,12 @@ class IlRegistroEUnaVeritaSolaTests(unittest.TestCase):
 
 
 class LaRegolaDiScritturaDiceDoveControllareTests(unittest.TestCase):
-    """Il writer deve poter controllare che la riga porti il prodotto giusto.
+    """The writer must be able to verify a row carries the right product.
 
-    È la difesa che il 12 agosto 2026 avrebbe fermato l'ordine finito sulla riga
-    2600, e finora esisteva solo per Noce. Dove stanno EAN e descrizione il
-    registro lo dichiara già — a lettere per Larice, per nome dell'intestazione
-    per BETULLA — e la regola di scrittura porta quella posizione al writer.
+    Without knowing where EAN and description sit, the writer could compile
+    against a mismatched row. The adapter registry already declares those
+    positions — by letter for Larice, by header name for BETULLA — and the
+    write rule carries that position through to the writer.
     """
 
     def setUp(self) -> None:
@@ -6681,7 +6621,7 @@ class LaRegolaDiScritturaDiceDoveControllareTests(unittest.TestCase):
         self.assertEqual(regola["verify"], {"ean_column": "A", "description_column": "D"})
 
     def test_su_larice_le_colonne_sono_le_lettere_dichiarate_dal_registro(self) -> None:
-        """Larice non ha nessuna riga di intestazione: il registro dice le lettere."""
+        """Larice has no header row: the registry declares column letters directly."""
 
         regola, avviso = self.launcher.source_rule("larice", self.listino_larice(), {}, registro_adattatori.adattatore("larice_v1"))
 
@@ -6689,7 +6629,7 @@ class LaRegolaDiScritturaDiceDoveControllareTests(unittest.TestCase):
         self.assertEqual(regola["verify"], {"ean_column": "R", "description_column": "G"})
 
     def test_la_regola_porta_anche_il_nome_leggibile_del_fornitore(self) -> None:
-        """Il writer Node non legge il registro: la configurazione è il suo unico ingresso."""
+        """The Node writer never reads the registry: the config is its only input."""
 
         regola, _avviso = self.launcher.source_rule("betulla", self.listino_betulla(), {}, registro_adattatori.adattatore("betulla_v1"))
 
@@ -6707,23 +6647,16 @@ class LaRegolaDiScritturaDiceDoveControllareTests(unittest.TestCase):
 
 
 class IlFornitoreScelloDalProgrammaSiRifaTests(unittest.TestCase):
-    """Un default vecchio non deve travestirsi da scelta dell'utente.
+    """A stale automatic choice must not survive a recompute that made a cheaper supplier available.
 
-    Il 26 agosto 2026: NOCE entra nel confronto con il prezzo più basso, la
-    pagina lo mostra, e l'ordine continua ad andare a BETULLA. Il totale NOCE
-    era 459 € contro i 2.209 € dell'ordine del 17 agosto. L'unico modo di
-    rimetterlo a posto era mettere uno sconto e riportarlo a zero, perché
-    `set_supplier_discount` era l'unico punto del programma che rifaceva la
-    scelta del fornitore.
+    `build_products` selects the cheapest supplier by default; without
+    tracking who made a saved choice, a recompute that adds a cheaper
+    supplier would keep the order on the old one, since the saved decision
+    looks the same whether the operator or the program made it.
 
-    In piedi dal primo commit: `build_products` sceglie il più conveniente,
-    `review()` ci passava sopra con la decisione salvata senza chiedersi chi
-    l'avesse presa. Diventato raggiungibile il 12 agosto, quando ricalcolare è
-    diventato un pulsante e si è potuto aggiungere un listino a metà lavoro.
-
-    La distinzione si deduce e non si chiede alla pagina: il più conveniente il
-    programma **l'ha già selezionato da sé**, quindi una decisione che coincide
-    col migliore non può essere che il default.
+    The distinction is inferred rather than asked of the page: if a saved
+    choice happens to match the cheapest supplier, the program already made
+    that choice on its own, so it can only be the automatic default.
     """
 
     def setUp(self) -> None:
@@ -6738,7 +6671,7 @@ class IlFornitoreScelloDalProgrammaSiRifaTests(unittest.TestCase):
             "products": [{
                 "id": "product:1", "name": "PRODOTTO", "quantity": 3,
                 "quantitySource": "gestionale", "excluded": False,
-                # Il confronto ricalcolato ha già scelto il più conveniente.
+                # The recomputed comparison already picked the cheapest supplier.
                 "selectedSupplierId": "noce", "confirmed": True,
                 "offers": [
                     {"supplierId": "betulla", "supplierName": "BETULLA", "available": True,
@@ -6773,7 +6706,7 @@ class IlFornitoreScelloDalProgrammaSiRifaTests(unittest.TestCase):
         self.assertIn("FORNITORE_PIU_CONVENIENTE_RIPRESO", self._avvisi(confronto))
 
     def test_una_decisione_senza_marchio_vale_automatica(self) -> None:
-        """Quelle salvate prima della correzione: il confronto di adesso vince."""
+        """A decision saved before this field existed is treated as automatic."""
 
         self._salva_decisione("betulla", None)
 
@@ -6787,11 +6720,11 @@ class IlFornitoreScelloDalProgrammaSiRifaTests(unittest.TestCase):
         confronto = self.store.review()
 
         self.assertEqual(confronto["products"][0]["selectedSupplierId"], "betulla")
-        # E non si dice niente: non è cambiato niente.
+        # No warning: nothing was changed.
         self.assertNotIn("FORNITORE_PIU_CONVENIENTE_RIPRESO", self._avvisi(confronto))
 
     def test_cambiando_fornitore_la_conferma_di_prima_non_vale_piu(self) -> None:
-        """La conferma copre l'articolo guardato, e l'articolo è cambiato."""
+        """A confirmation covers the previously offered item, which just changed."""
 
         self._salva_decisione("betulla", "automatico")
 
@@ -6801,14 +6734,13 @@ class IlFornitoreScelloDalProgrammaSiRifaTests(unittest.TestCase):
         self.assertFalse(prodotto["confirmed"])
 
     def test_col_fornitore_scelto_a_mano_la_quantita_resta_dell_utente(self) -> None:
-        """La combinazione che una prima versione della correzione rompeva.
+        """A manually chosen supplier must not reset the manually entered quantity's source.
 
-        Il ramo «l'ha scelto l'utente» usciva dal ciclo con un `continue`, e
-        saltava il ripristino di `quantitySource`: la quantità scritta a mano
-        tornava a dichiararsi «valore dal gestionale» dopo un ricaricamento, e il
-        comando che azzera le sole quantità predefinite se la portava via. Due
-        cose entrambe volute dall'utente, e la seconda spariva per via della
-        prima.
+        `quantitySource` must be preserved even on the "user chose this
+        supplier" branch; otherwise a manually entered quantity would
+        re-declare itself as coming from the management-software export on
+        the next load, and a command that clears only default quantities
+        would wipe it out.
         """
 
         self.state_path.write_text(json.dumps({
@@ -6827,7 +6759,7 @@ class IlFornitoreScelloDalProgrammaSiRifaTests(unittest.TestCase):
         self.assertEqual(prodotto["quantitySource"], "utente")
 
     def test_il_marchio_lo_mette_il_salvataggio_deducendolo(self) -> None:
-        """Chi sceglie il migliore prende il default; chi sceglie altro, no."""
+        """Choosing the cheapest supplier is tagged automatic; choosing another isn't."""
 
         istantanea = {
             "runId": "run-sintetica", "stateVersion": 0, "currentStep": 2,
@@ -6846,13 +6778,13 @@ class IlFornitoreScelloDalProgrammaSiRifaTests(unittest.TestCase):
 
 
 class DueSchedeNonSiCancellanoIlLavoroTests(unittest.TestCase):
-    """Con due schede aperte, la seconda non deve azzerare il lavoro della prima.
+    """With two tabs open on the same comparison, the second save must not silently erase the first's work.
 
-    `save_state` riscrive TUTTO lo stato e il controllo della run non separa due
-    schede sullo stesso confronto: la scheda rimasta aperta salvava — da sola,
-    per l'autosalvataggio a 450 ms — uno snapshot in cui le quantita' dell'altra
-    non c'erano mai state, e nessuno diceva niente. Misurato prima della
-    correzione: `[('p1',4),('p2',0)]` diventava `[('p1',0),('p2',7)]`.
+    `save_state` rewrites the whole state, and the run check alone doesn't
+    distinguish two tabs on the same comparison: without a version check, the
+    tab that autosaves last (every 450 ms) would overwrite the other tab's
+    quantities with a snapshot that never had them, and neither tab would be
+    told.
     """
 
     def setUp(self) -> None:
@@ -6875,7 +6807,7 @@ class DueSchedeNonSiCancellanoIlLavoroTests(unittest.TestCase):
         return sorted(item for item in self.orders_dir.iterdir() if item.is_dir())
 
     def scheda(self, *, versione: int | None, display: int, standard: int) -> dict[str, Any]:
-        """Lo snapshot che manda una scheda del browser: l'elenco sempre intero."""
+        """Build the snapshot a browser tab sends: always the full product list."""
 
         istantanea: dict[str, Any] = {
             "runId": "run-sintetica",
@@ -6906,15 +6838,14 @@ class DueSchedeNonSiCancellanoIlLavoroTests(unittest.TestCase):
         self.assertEqual(self.store.review()["state"]["stateVersion"], 2)
 
     def test_la_seconda_scheda_viene_fermata_invece_di_cancellare_la_prima(self) -> None:
-        # La scheda A e la scheda B hanno aperto la stessa pagina: partono
-        # entrambe dalla versione 0.
+        # Tabs A and B both opened the same page: both start from version 0.
         self.store.save_state(self.scheda(versione=0, display=4, standard=0))
 
         with self.assertRaises(SnapshotError) as fermata:
             self.store.save_state(self.scheda(versione=0, display=0, standard=7))
 
         self.assertEqual({str(item["code"]) for item in fermata.exception.errors}, {"STATO_SOVRASCRITTO"})
-        # E soprattutto: sul disco resta il lavoro della scheda A.
+        # Tab A's work must remain on disk.
         self.assertEqual(self.quantita_salvate(), {"display-solbao-96": 4, "product-standard": 0})
 
     def test_la_frase_dice_che_cosa_fare_senza_parlare_di_versioni(self) -> None:
@@ -6930,28 +6861,27 @@ class DueSchedeNonSiCancellanoIlLavoroTests(unittest.TestCase):
         self.assertNotIn("snapshot", messaggio.casefold())
 
     def test_chi_avanza_la_versione_la_restituisce_a_chi_lo_ha_chiesto(self) -> None:
-        """Il difetto del 26 agosto 2026: rifiutata una conferma ogni due o tre.
+        """An action that bumps the state version outside `save_state` must return it in its response.
 
-        Non c'era nessuna seconda scheda. Lo sconto di un fornitore — come
-        l'abbinamento a mano e il rifiuto — avanza la versione sul disco, e la
-        sua risposta non la portava indietro: la scheda restava indietro di uno
-        e il salvataggio SUCCESSIVO, fatto da lei stessa, si sentiva rispondere
-        «un'altra scheda ha salvato dopo di te», mandando l'utente a cercare un
-        collega che non esiste. Ricaricare rimetteva a posto, fino al gesto dopo.
+        A supplier discount (like a manual match or a rejection) advances the
+        version on disk; if its own response doesn't carry the new version,
+        the tab that triggered it falls one version behind, and its very next
+        save gets rejected with "another tab saved after you" — even though
+        no other tab was involved.
         """
 
         primo = self.store.save_state(self.scheda(versione=0, display=4, standard=0))
 
         esito = self.store.set_supplier_discount({"supplierId": "larice", "percent": 6})
 
-        # 1. La risposta porta la versione nuova, altrimenti la scheda non ha
-        #    nessun modo di sapere di essere rimasta indietro.
+        # 1. The response carries the new version, or the tab has no way to
+        #    learn it's fallen behind.
         self.assertIn("stateVersion", esito)
         self.assertGreater(int(esito["stateVersion"]), int(primo["stateVersion"]))
         self.assertEqual(int(esito["stateVersion"]), int(self.store.review()["state"]["stateVersion"]))
 
-        # 2. E con quella versione la stessa scheda salva, senza essere scambiata
-        #    per un'altra.
+        # 2. With that version, the same tab can save without being mistaken
+        #    for another one.
         salvato = self.store.save_state(
             self.scheda(versione=int(esito["stateVersion"]), display=4, standard=7)
         )
@@ -6959,7 +6889,7 @@ class DueSchedeNonSiCancellanoIlLavoroTests(unittest.TestCase):
         self.assertEqual(self.quantita_salvate(), {"display-solbao-96": 4, "product-standard": 7})
 
     def test_la_scheda_che_si_aggiorna_torna_a_poter_salvare(self) -> None:
-        """Il rifiuto non è un vicolo cieco: ricaricata, la scheda riprende."""
+        """A rejected save isn't a dead end: reloading the tab lets it resume."""
 
         self.store.save_state(self.scheda(versione=0, display=4, standard=0))
         versione_vista_ricaricando = self.store.review()["state"]["stateVersion"]
@@ -6970,7 +6900,7 @@ class DueSchedeNonSiCancellanoIlLavoroTests(unittest.TestCase):
         self.assertEqual(self.quantita_salvate(), {"display-solbao-96": 4, "product-standard": 7})
 
     def test_una_pagina_che_non_dichiara_la_versione_salva_lo_stesso(self) -> None:
-        """Una pagina vecchia rimasta aperta non si lascia senza salvataggio."""
+        """A page from before this field existed must still be able to save."""
 
         self.store.save_state(self.scheda(versione=0, display=4, standard=0))
 
@@ -6979,7 +6909,7 @@ class DueSchedeNonSiCancellanoIlLavoroTests(unittest.TestCase):
         self.assertTrue(esito["ok"])
 
     def test_anche_la_compilazione_rifiuta_uno_stato_sorpassato(self) -> None:
-        """Compilare da una scheda vecchia manderebbe un ordine di quantità morte."""
+        """Compiling from a stale tab would order stale quantities."""
 
         self.store.save_state(self.scheda(versione=0, display=4, standard=0))
 
@@ -6998,7 +6928,7 @@ class DueSchedeNonSiCancellanoIlLavoroTests(unittest.TestCase):
         self.assertEqual(self.cartelle(), [], "una compilazione rifiutata non lascia cartelle")
 
     def test_la_compilazione_riuscita_dichiara_la_versione_nuova(self) -> None:
-        """Chi ha compilato deve poter salvare subito dopo: la pagina lo fa."""
+        """After a successful compile, the tab must be able to save right away."""
 
         esito = self.store.compile({
             "runId": "run-sintetica",
@@ -7015,11 +6945,11 @@ class DueSchedeNonSiCancellanoIlLavoroTests(unittest.TestCase):
         self.assertTrue(salvato["ok"])
 
     def test_una_risposta_a_un_candidato_non_fa_scadere_le_schede_aperte(self) -> None:
-        """Chi tocca solo una parte dello stato non muove la versione.
+        """An action that touches only part of the state must not bump the version.
 
-        `validate_snapshot` ricopia `matchOverrides` e `manualProducts` dal
-        disco: quelle scritture non si possono perdere, e farle scadere
-        significherebbe solo rifiutare salvataggi buoni.
+        `validate_snapshot` copies `matchOverrides` and `manualProducts`
+        forward from disk; those writes must not be lost, and expiring other
+        open tabs over them would only reject otherwise-valid saves.
         """
 
         self.store.save_state(self.scheda(versione=0, display=4, standard=0))
@@ -7034,23 +6964,21 @@ class DueSchedeNonSiCancellanoIlLavoroTests(unittest.TestCase):
 
 
 class UnAltroSitoNonComandaIlComparatoreTests(unittest.TestCase):
-    """Una pagina qualunque aperta in quel browser non deve poter comandare qui.
+    """A page from any other site, open in the same browser, must not be able to drive this service.
 
-    Prima della guardia poteva, e il metodo POST non lo impediva: una POST con
-    `Content-Type: text/plain` e' una «simple request» CORS, parte senza
-    preflight e l'effetto avviene anche se chi l'ha mandata non legge la
-    risposta.  Misurato il 19 agosto 2026 su un servizio vero: `/api/upload`
-    con `Origin: https://sito-cattivo.example` rispondeva «1 documento caricato
-    e letto» e il file finiva davvero sul disco; subito dopo `/api/spegni`
-    rispondeva `{"spento": true}` e il programma si fermava.
+    A `POST` with `Content-Type: text/plain` is a CORS "simple request": it
+    fires without a preflight, and its effect happens even if the site that
+    sent it never reads the response. Without an `Origin` check, a request
+    like this could trigger a real action on the file system or shut down
+    the service.
 
-    Le prove qui sotto guardano tutte e due i versi, perche' una guardia che
-    rifiuta anche la pagina vera e' peggio del buco che chiude: il lanciatore
-    chiama `/api/spegni` con urllib, che `Origin` non lo manda affatto.
+    These tests cover both directions: a guard that also rejects the real
+    launcher page is worse than the hole it closes, and the launcher calls
+    `/api/spegni` with urllib, which never sends an `Origin` header at all.
     """
 
     class StoreFinto:
-        """Registra le chiamate: così un 403 si distingue da «l'ha fatto lo stesso»."""
+        """Records calls so a 403 can be distinguished from "ran anyway"."""
 
         def __init__(self) -> None:
             self.avvii = 0
@@ -7104,11 +7032,11 @@ class UnAltroSitoNonComandaIlComparatoreTests(unittest.TestCase):
 
         self.assertEqual(stato, 403)
         self.assertIn("non arriva dalla pagina del comparatore", corpo["message"])
-        # E soprattutto: la catena non e' partita, cioe' non ha speso credito.
+        # And crucially: the pipeline never started, so no AI credit was spent.
         self.assertEqual(self.store.avvii, 0)
 
     def test_il_browser_che_dichiara_la_richiesta_estranea_viene_fermato(self) -> None:
-        """`Sec-Fetch-Site` da solo basta: è quello che arriva senza `Origin`."""
+        """`Sec-Fetch-Site` alone must be enough: it's present even without `Origin`."""
 
         stato, _corpo = self.chiedi(
             "POST", "/api/pipeline/avvia",
@@ -7129,7 +7057,7 @@ class UnAltroSitoNonComandaIlComparatoreTests(unittest.TestCase):
         self.assertEqual(self.store.avvii, 1)
 
     def test_la_stessa_pagina_aperta_su_localhost_passa(self) -> None:
-        """`localhost` e `127.0.0.1` sono due origini diverse per il browser."""
+        """`localhost` and `127.0.0.1` are different origins to the browser; both must be accepted."""
 
         stato, _corpo = self.chiedi(
             "POST", "/api/pipeline/avvia",
@@ -7140,11 +7068,11 @@ class UnAltroSitoNonComandaIlComparatoreTests(unittest.TestCase):
         self.assertEqual(self.store.avvii, 1)
 
     def test_il_lanciatore_che_non_manda_nessuna_delle_due_intestazioni_passa(self) -> None:
-        """Chi chiama con urllib non manda `Origin`: la guardia non lo puo' escludere.
+        """A urllib caller sends no `Origin`, so the guard can't reject on it alone.
 
-        E' il caso vero del lanciatore, che chiama `/api/spegni` a ogni avvio
-        quando i sorgenti sono cambiati.  Se questa prova diventasse rossa, il
-        programma del negozio non si riaprirebbe piu' aggiornato.
+        This is the launcher's real usage pattern: it calls `/api/spegni` on
+        every startup when the source files changed. If this test went red,
+        the store program would stop reopening with the latest code.
         """
 
         stato, _corpo = self.chiedi("POST", "/api/pipeline/avvia")
@@ -7163,27 +7091,25 @@ class UnAltroSitoNonComandaIlComparatoreTests(unittest.TestCase):
 
 
 class UnDominioRipuntatoDalDnsRebindingNonLeggeIlComparatoreTests(unittest.TestCase):
-    """Un dominio che il DNS ha appena ripuntato su 127.0.0.1 non deve poter
-    leggere qui, nemmeno con una semplice GET.
+    """A domain that DNS rebinding just repointed at 127.0.0.1 must not be able to read this service, even with a plain GET.
 
-    Nel DNS rebinding l'attaccante possiede un dominio vero, lo fa aprire
-    all'utente, poi fa scadere il proprio DNS e lo ripunta su 127.0.0.1: da
-    quel momento le richieste che la pagina manda a
-    `http://dominio-cattivo.example:<porta>/...` restano same-origin per il
-    browser (l'origine della pagina non e' cambiata), quindi la pagina cattiva
-    LEGGE la risposta. In una GET l'intestazione `Origin` spesso non c'e'
-    nemmeno, quindi la guardia anti-CSRF sull'origine (rilievo [35]) da sola
-    non basta: serve guardare `Host`, che arriva sempre com'era nella barra
-    dell'indirizzo del sito cattivo, mai come l'IP a cui il DNS ha ripuntato.
+    In DNS rebinding, an attacker's real domain gets opened by the operator,
+    then its DNS record is switched to point at 127.0.0.1: requests the page
+    sends to `http://attacker-domain.example:<port>/...` stay same-origin as
+    far as the browser is concerned, so the attacker's page can read the
+    response. A plain GET often carries no `Origin` header at all, so the
+    origin-based CSRF guard alone isn't enough; the service must also check
+    `Host`, which always carries the attacker's domain as shown in the
+    address bar, never the IP DNS rebound it to.
 
-    Le prove coprono tutti e due i versi, con lo stesso schema della classe
-    sopra: un `Host` estraneo deve fermare l'effetto, e le forme legittime —
-    con porta, senza porta, assente del tutto come in HTTP/1.0 — devono
-    continuare a passare, altrimenti la pagina vera non si apre piu'.
+    Covers both directions, with the same pattern as the class above: a
+    foreign `Host` must block the request, while the legitimate forms — with
+    port, without port, absent entirely as in HTTP/1.0 — must keep working,
+    or the real page stops loading.
     """
 
     class StoreFinto:
-        """Registra le chiamate: così un 403 si distingue da «l'ha fatto lo stesso»."""
+        """Records calls so a 403 can be distinguished from "ran anyway"."""
 
         def __init__(self) -> None:
             self.letture_review = 0
@@ -7235,7 +7161,7 @@ class UnDominioRipuntatoDalDnsRebindingNonLeggeIlComparatoreTests(unittest.TestC
             connessione.close()
 
     def chiedi_senza_intestazione_host(self, metodo: str, percorso: str) -> tuple[int, dict[str, Any]]:
-        """Simula un client che non manda affatto `Host`, come può fare HTTP/1.0."""
+        """Simulate a client that sends no `Host` header at all, as HTTP/1.0 may."""
 
         connessione = http.client.HTTPConnection("127.0.0.1", self.porta, timeout=15)
         try:
@@ -7257,11 +7183,11 @@ class UnDominioRipuntatoDalDnsRebindingNonLeggeIlComparatoreTests(unittest.TestC
 
         self.assertEqual(stato, 403)
         self.assertIn("comparatore", corpo["message"])
-        # E soprattutto: la lettura non e' avvenuta, cioe' il confronto non e' uscito.
+        # And crucially: the read never happened, so the comparison never left.
         self.assertEqual(self.store.letture_review, 0)
 
     def test_un_host_estraneo_ferma_la_catena_anche_con_l_origine_giusta(self) -> None:
-        """La guardia sull'Host viene prima di quella sull'origine: deve bastare da sola."""
+        """The `Host` check runs before the `Origin` check, and must block on its own."""
 
         stato, _corpo = self.chiedi(
             "POST", "/api/pipeline/avvia",
@@ -7301,7 +7227,7 @@ class UnDominioRipuntatoDalDnsRebindingNonLeggeIlComparatoreTests(unittest.TestC
         self.assertEqual(self.store.letture_review, 1)
 
     def test_l_host_senza_porta_passa(self) -> None:
-        """Alcuni client mandano `Host: 127.0.0.1` senza porta: deve passare comunque."""
+        """Some clients send `Host: 127.0.0.1` without a port; must still be accepted."""
 
         stato, _corpo = self.chiedi("GET", "/api/review", Host="127.0.0.1")
 
@@ -7309,7 +7235,7 @@ class UnDominioRipuntatoDalDnsRebindingNonLeggeIlComparatoreTests(unittest.TestC
         self.assertEqual(self.store.letture_review, 1)
 
     def test_l_host_assente_del_tutto_passa(self) -> None:
-        """HTTP/1.0 può non mandare `Host`: altrimenti la pagina vera non si aprirebbe più."""
+        """HTTP/1.0 may send no `Host` at all; must still be accepted, or the real page stops loading."""
 
         stato, _corpo = self.chiedi_senza_intestazione_host("GET", "/api/review")
 
@@ -7318,27 +7244,26 @@ class UnDominioRipuntatoDalDnsRebindingNonLeggeIlComparatoreTests(unittest.TestC
 
 
 class LoSpegnimentoDelServizioNonUccideUnaRunInCorsoTests(unittest.TestCase):
-    """`/api/spegni` e la sua guardia «c'e' un confronto in corso» — rilievo [51].
+    """`/api/spegni` and its "a comparison is running" guard.
 
-    `_spegni()` ha due regole scritte apposta e nessuna prova le guardava:
-    non si ferma se la catena sta lavorando (`RUN_IN_CORSO`), perche' una run
-    uccisa a meta' lascia una cartella datata orfana e il lavoro gia' pagato
-    all'AI da rifare; e prima di fermarsi restituisce il file delle conferme
-    con `store.chiudi()`, perche' su Windows un file SQLite aperto non si
-    rinomina. Chi la chiama davvero e' `app/launcher.py`, con `urllib`, a ogni
-    avvio del programma nel negozio: se la guardia sparisse in un riordino, il
-    lanciatore ucciderebbe una run a meta' e nessuna prova lo direbbe.
+    `_spegni()` must refuse to stop while the pipeline is working
+    (`RUN_IN_CORSO`): killing a run mid-flight leaves an orphaned dated
+    folder and discards AI work already paid for. Before it does stop, it
+    must release the confirmations file via `store.chiudi()`, since an open
+    SQLite file can't be renamed on Windows. `app/launcher.py` calls this
+    route with `urllib` on every store-program startup, so a regression here
+    would kill an in-progress run with no test catching it.
 
-    ⚠ Nessuna prova qui spegne un servizio vero. `_spegni()` avvia il vero
-    `shutdown()` su un thread proprio, e chiamarlo davvero fermerebbe questo
-    `ThreadingHTTPServer` e romperebbe le prove che vengono dopo nello stesso
-    file. Il metodo vero viene messo da parte in `setUp` e sostituito con uno
-    che registra soltanto la chiamata; a fine prova si richiama quello vero,
-    per fermare il thread sul serio.
+    None of these tests shut down a real service: `_spegni()` triggers the
+    real `shutdown()` on its own thread, and calling it for real would stop
+    this `ThreadingHTTPServer` and break the tests that run after it in the
+    same file. The real method is set aside in `setUp` and replaced with one
+    that only records the call; the real one is invoked again at teardown to
+    actually stop the thread.
     """
 
     class StoreFinto:
-        """Registra le chiamate, nell'ordine in cui arrivano."""
+        """Records calls in the order they arrive."""
 
         def __init__(self) -> None:
             self._stato = "IN_ATTESA"
@@ -7360,9 +7285,9 @@ class LoSpegnimentoDelServizioNonUccideUnaRunInCorsoTests(unittest.TestCase):
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), HandlerMuto)
         self.httpd.store = self.store
 
-        # Il vero shutdown() fermerebbe il server sotto le prove che seguono:
-        # lo mettiamo da parte e lo sostituiamo con uno che registra soltanto
-        # la chiamata, senza fermare niente.
+        # The real shutdown() would stop the server for the tests that
+        # follow: set it aside and replace it with one that only records the
+        # call, without stopping anything.
         self._spegnimento_vero = self.httpd.shutdown
         self.chiamate_a_shutdown = 0
 
@@ -7378,8 +7303,8 @@ class LoSpegnimentoDelServizioNonUccideUnaRunInCorsoTests(unittest.TestCase):
         self.porta = self.httpd.server_address[1]
 
     def ferma(self) -> None:
-        # Qui si richiama il metodo vero, messo da parte in setUp: e' l'unico
-        # modo di fermare per davvero il thread che serve le richieste.
+        # Invokes the real method set aside in setUp: the only way to
+        # actually stop the thread serving requests.
         self._spegnimento_vero()
         self.thread.join(timeout=10)
         self.httpd.server_close()
@@ -7399,7 +7324,7 @@ class LoSpegnimentoDelServizioNonUccideUnaRunInCorsoTests(unittest.TestCase):
             connessione.close()
 
     def aspetta_lo_shutdown_finto(self) -> None:
-        """`_spegni()` avvia `shutdown()` su un thread separato: aspetta che arrivi."""
+        """Wait for the call: `_spegni()` triggers `shutdown()` on a separate thread."""
 
         for _ in range(200):
             if self.chiamate_a_shutdown:
@@ -7418,7 +7343,7 @@ class LoSpegnimentoDelServizioNonUccideUnaRunInCorsoTests(unittest.TestCase):
         self.assertEqual(self.chiamate_a_shutdown, 0)
         self.assertNotIn("chiudi", self.store.chiamate)
 
-        # Il servizio deve rispondere ancora, subito dopo: non si e' fermato.
+        # The service must still respond right after: it didn't stop.
         stato_dopo, corpo_dopo = self.chiedi("POST", "/api/spegni")
         self.assertEqual(stato_dopo, 200)
         self.assertEqual(corpo_dopo["motivo"], "RUN_IN_CORSO")
@@ -7434,7 +7359,7 @@ class LoSpegnimentoDelServizioNonUccideUnaRunInCorsoTests(unittest.TestCase):
         self.assertEqual(self.chiamate_a_shutdown, 1)
 
     def test_prima_di_fermarsi_ha_chiuso_il_negozio(self) -> None:
-        """È la parte che conta su Windows: un file SQLite aperto non si rinomina."""
+        """The part that matters on Windows: an open SQLite file can't be renamed."""
 
         self.chiedi("POST", "/api/spegni")
 
@@ -7447,16 +7372,12 @@ class LoSpegnimentoDelServizioNonUccideUnaRunInCorsoTests(unittest.TestCase):
 
 
 class NonELoStessoArticoloTests(unittest.TestCase):
-    """La risposta che mancava, e le tre uscite che non erano uscite.
+    """A proposed match that's rejected as "not the same item" must have a working way out.
 
-    ⚠ Fino al 21 agosto 2026, davanti a un abbinamento proposto che NON e' lo
-    stesso articolo, chi ordina aveva tre strade e nessuna funzionava:
-    confermare ordina la merce sbagliata; non confermare lascia la compilazione
-    ferma su «Conferma richiesta · bloccante»; «Escludi dall'ordine» azzera la
-    quantita', e il ciclo di `compile` salta chi ha quantita' zero — quindi il
-    prodotto spariva anche dall'elenco «Prodotti da reperire». Misurato su
-    `conferme.db`: venti conferme, di cui zero negative, undici scritte in
-    trenta secondi.
+    Confirming would order the wrong item; leaving it unconfirmed blocks
+    compile on "confirmation required"; and excluding it zeroes the
+    quantity, which makes `compile`'s loop skip it entirely — including from
+    the "products to be sourced" list, where it should still appear.
     """
 
     def setUp(self) -> None:
@@ -7514,7 +7435,7 @@ class NonELoStessoArticoloTests(unittest.TestCase):
         self.assertTrue(offerta.get("rifiutata"))
 
     def test_la_quantita_resta_e_la_compilazione_non_si_ferma_piu(self) -> None:
-        """È la ragione per cui questa risposta esiste."""
+        """The reason this response exists: compile must not stop on it."""
 
         self.rifiuta()
 
@@ -7527,7 +7448,7 @@ class NonELoStessoArticoloTests(unittest.TestCase):
         self.assertEqual([voce["code"] for voce in errori], [])
 
     def test_l_elenco_da_reperire_dice_che_l_hai_scartato_tu(self) -> None:
-        """«Nessun fornitore lo ha disponibile» darebbe la colpa al fornitore."""
+        """"No supplier has it" would wrongly blame the supplier for a match the operator rejected."""
 
         import da_reperire  # noqa: PLC0415
 
@@ -7539,11 +7460,12 @@ class NonELoStessoArticoloTests(unittest.TestCase):
         )
 
     def test_l_avviso_che_passa_dice_il_gesto_non_la_regola(self) -> None:
-        """L'avviso della pagina sparisce in 3,6 secondi (`showToast`), e diceva
-        per intero la regola di quanto dura un no: la stessa frase che sta ferma
-        nel riquadro del fornitore rifiutato, e che stava anche sotto il
-        pulsante prima di premerlo. Tre copie, nessuna delle quali diceva quello
-        che serve subito."""
+        """The transient toast (`showToast`, gone in 3.6s) must confirm the action, not restate the rule.
+
+        The full rule about how long a rejection lasts already sits in the
+        rejected-supplier panel and under the button before it's pressed;
+        the toast needs to say only what just happened.
+        """
 
         esito = self.rifiuta()
 
@@ -7579,7 +7501,7 @@ class NonELoStessoArticoloTests(unittest.TestCase):
         self.assertIsNone(offerta.get("rifiutata"))
 
     def test_il_no_sopravvive_al_ricalcolo_perche_e_legato_all_articolo(self) -> None:
-        """`state.json` muore col ricalcolo; il magazzino delle conferme no."""
+        """`state.json` is wiped by a recompute; the confirmations store isn't."""
 
         self.rifiuta()
         (self.radice / "state.json").unlink(missing_ok=True)
@@ -7587,7 +7509,7 @@ class NonELoStessoArticoloTests(unittest.TestCase):
         self.assertFalse(self.offerta()["available"])
 
     def test_un_autosalvataggio_non_cancella_il_no(self) -> None:
-        """`dimentica` chiude la riga in vigore qualunque sia: qui non deve."""
+        """An autosave normally closes whatever row is in effect; it must not here."""
 
         self.rifiuta()
 
@@ -7609,17 +7531,14 @@ class NonELoStessoArticoloTests(unittest.TestCase):
         self.assertIn("nessuna riga", str(errore.exception))
 
 
-# --- «Inizia nuova comparazione», 22 agosto 2026 ----------------------------
-
-
 class CominciareUnaComparazioneNuova(unittest.TestCase):
-    """Il comando che svuota documenti e confronto per aprire la settimana.
+    """"Start a new comparison": clears documents and the comparison to open a fresh week.
 
-    ⚠ Metà di queste prove non guarda quello che il comando **fa**: guarda
-    quello che **non tocca**. È il punto della funzione. Le conferme e gli
-    schemi imparati nessun ricalcolo li sa rifare, e gli ordini in attesa,
-    cancellati, farebbero riordinare merce che sta arrivando: sono le tre cose
-    che trasformerebbero un comando di pulizia in un danno.
+    Half of these tests check not what the command does, but what it leaves
+    untouched, which is the point of the command. Confirmations and learned
+    adapters can't be rebuilt by any recompute, and deleting pending orders
+    would cause goods already on the way to be reordered — the three things
+    that would turn a cleanup command into data loss.
     """
 
     def setUp(self) -> None:
@@ -7636,9 +7555,9 @@ class CominciareUnaComparazioneNuova(unittest.TestCase):
         self.storico_dir = self.root / "history"
         self.storico_dir.mkdir(parents=True, exist_ok=True)
 
-        # Il nome del fornitore è quello che si legge sulla scheda del
-        # documento — «BETULLA», non l'identificativo: è quello che finisce nel
-        # messaggio, e la prova deve vedere la stessa cosa della pagina.
+        # The supplier name is the one shown on the document card — "BETULLA",
+        # not the id — which is what ends up in the message, matching what
+        # the page shows.
         self.documenti = {
             "gestionale.xlsx": ("master", ""),
             "listino_betulla.xlsx": ("supplier", "BETULLA"),
@@ -7666,7 +7585,7 @@ class CominciareUnaComparazioneNuova(unittest.TestCase):
         }), encoding="utf-8")
         self.state_path.write_text(json.dumps({"runId": "r1", "products": [{"id": "p1", "quantity": 4}]}), encoding="utf-8")
 
-        # Le memorie che devono sopravvivere, e una compilazione già fatta.
+        # The stores that must survive, plus one already-compiled order.
         self.conferme = self.storico_dir / "conferme.db"
         self.conferme.write_bytes(b"le conferme di chi ordina")
         self.ordini = self.storico_dir / "orders.json"
@@ -7695,17 +7614,16 @@ class CominciareUnaComparazioneNuova(unittest.TestCase):
             if voce.is_file() and voce.name != "upload_profiles.json"
         )
 
-    # -- il ripristino, cioe' il ramo che serve quando qualcosa va storto -----
+    # -- rollback: the branch that runs when something breaks mid-cleanup --
 
     def test_se_la_pulizia_si_rompe_a_meta_rimette_tutto_a_posto(self) -> None:
-        """⚠ E' l'unico pezzo della funzione che nessuna prova aveva mai eseguito.
+        """A failure mid-cleanup must restore everything, not leave a half-done state.
 
-        `nuova_comparazione` sposta prima tutto in quarantena, poi riscrive i
-        profili, e solo alla fine cancella davvero. Se qualcosa va storto in
-        mezzo rimette indietro — ed e' il ramo che serve **proprio** quando
-        qualcosa e' andato storto, cioe' quello che non si puo' permettere di
-        essere sbagliato. Segnalato da Daniele stesso in `Lavori aperti` §22,
-        punto 2.
+        `nuova_comparazione` first moves everything into quarantine, then
+        rewrites the profiles, and only then deletes for real. If something
+        fails in between, it must roll back — exactly the path that runs
+        when something has already gone wrong, which is the one that can't
+        afford to be broken itself.
         """
 
         prima_documenti = self.documenti_rimasti()
@@ -7727,18 +7645,18 @@ class CominciareUnaComparazioneNuova(unittest.TestCase):
         finally:
             SERVER.atomic_json = vero
 
-        # Tutto com'era: i documenti, il confronto, le scelte, i profili.
+        # Everything as it was: documents, comparison, choices, profiles.
         self.assertEqual(self.documenti_rimasti(), prima_documenti)
         self.assertEqual(self.review_path.read_bytes(), prima_confronto)
         self.assertEqual(self.state_path.read_bytes(), prima_scelte)
         self.assertEqual((self.upload_dir / "upload_profiles.json").read_bytes(), prima_profili)
-        # E nessun file di quarantena rimasto in giro.
+        # No leftover quarantine files either.
         quarantena = [voce.name for voce in self.upload_dir.iterdir()
                       if voce.name.startswith(".nuova-comparazione-")]
         self.assertEqual(quarantena, [])
 
     def test_dopo_un_ripristino_il_comando_si_puo_rifare(self) -> None:
-        """Il guasto era del disco, non del programma: quando passa, si riprova."""
+        """A disk failure, not a program bug: once it clears, retrying must succeed."""
 
         vero = SERVER.atomic_json
         SERVER.atomic_json = lambda percorso, valore: (_ for _ in ()).throw(OSError("disco pieno"))
@@ -7754,7 +7672,7 @@ class CominciareUnaComparazioneNuova(unittest.TestCase):
         self.assertEqual(self.documenti_rimasti(), [])
         self.assertFalse(self.review_path.exists())
 
-    # -- quello che il comando fa -------------------------------------------
+    # -- what the command does -----------------------------------------------
 
     def test_toglie_i_documenti_il_confronto_e_le_scelte(self) -> None:
         esito = self.store.nuova_comparazione({})
@@ -7767,8 +7685,7 @@ class CominciareUnaComparazioneNuova(unittest.TestCase):
         self.assertEqual(profili["profiles"], [])
 
     def test_dice_quanti_documenti_ha_tolto_e_di_chi(self) -> None:
-        """Il numero serve alla riga di conferma in pagina: «tolgo 3 documenti»
-        si può controllare a occhio contro le schede che si vedono."""
+        """The count feeds the page's confirmation line, checkable at a glance against the visible document cards."""
 
         esito = self.store.nuova_comparazione({})
 
@@ -7776,8 +7693,7 @@ class CominciareUnaComparazioneNuova(unittest.TestCase):
         self.assertEqual(esito["fornitori"], ["BETULLA", "LARICE"])
 
     def test_non_lascia_file_di_quarantena_in_giro(self) -> None:
-        """I file si spostano prima e si cancellano dopo: a fine giro la
-        cartella non deve portarsi dietro il ponteggio."""
+        """Files are moved into quarantine first and deleted after: nothing scaffolding-like should remain."""
 
         self.store.nuova_comparazione({})
 
@@ -7791,12 +7707,10 @@ class CominciareUnaComparazioneNuova(unittest.TestCase):
         self.assertEqual(review.get("products"), [])
         self.assertEqual(review.get("files"), [])
 
-    # -- quello che il comando NON tocca, ed è il punto ----------------------
+    # -- what the command deliberately leaves untouched -----------------------
 
     def test_le_conferme_restano(self) -> None:
-        """Nessun ricalcolo le sa rifare, e non hanno una copia fuori da questo
-        disco: un comando di pulizia che se le porta via
-        fa ricominciare da zero il lavoro di settimane."""
+        """Confirmations must survive: no recompute can rebuild them, and there's no copy off this disk."""
 
         self.store.nuova_comparazione({})
 
@@ -7804,9 +7718,7 @@ class CominciareUnaComparazioneNuova(unittest.TestCase):
         self.assertEqual(self.conferme.read_bytes(), b"le conferme di chi ordina")
 
     def test_gli_ordini_in_attesa_restano(self) -> None:
-        """È l'unico modo in cui questo comando produrrebbe un ordine
-        sbagliato: cancellare la memoria della merce già ordinata e non ancora
-        arrivata fa riordinare quella merce."""
+        """Pending orders must survive: deleting the memory of goods already ordered would cause a reorder."""
 
         self.store.nuova_comparazione({})
 
@@ -7817,8 +7729,7 @@ class CominciareUnaComparazioneNuova(unittest.TestCase):
         )
 
     def test_gli_schemi_imparati_restano(self) -> None:
-        """Cancellarli vorrebbe dire che lunedì prossimo il programma non
-        riconosce più nessun listino e richiede tutte le colonne di tutti."""
+        """Learned adapters must survive: losing them means every price list needs remapping again."""
 
         self.store.nuova_comparazione({})
 
@@ -7826,9 +7737,7 @@ class CominciareUnaComparazioneNuova(unittest.TestCase):
         self.assertIn("quercia_v1__locale", self.imparati.read_text(encoding="utf-8"))
 
     def test_le_compilazioni_gia_fatte_restano(self) -> None:
-        """Sono i documenti che si mandano al fornitore, e la loro
-        eliminazione spegne anche la domanda «è arrivata la merce?»: non è
-        pulizia, è un'altra decisione."""
+        """Already-compiled orders must survive: deleting them would also silence "did it arrive?" tracking."""
 
         self.store.nuova_comparazione({})
 
@@ -7836,8 +7745,7 @@ class CominciareUnaComparazioneNuova(unittest.TestCase):
         self.assertTrue((self.compilazione / "Ordine BETULLA compilato.xlsx").is_file())
 
     def test_il_documento_collegato_da_fuori_non_si_cancella(self) -> None:
-        """Regola 1: i documenti in ingresso sono di sola lettura. Quello che
-        sparisce sono le copie dell'applicazione, mai l'originale."""
+        """Input documents are read-only: only the application's own copies are removed, never the original."""
 
         esterno = self.root / "fuori" / "listino_di_daniele.xlsx"
         esterno.parent.mkdir(parents=True, exist_ok=True)
@@ -7851,17 +7759,15 @@ class CominciareUnaComparazioneNuova(unittest.TestCase):
         self.assertTrue(esterno.is_file())
         self.assertEqual(esterno.read_bytes(), b"il file vero di chi ordina")
 
-    # -- la domanda «è arrivata?» torna adesso, non fra sette giorni ---------
+    # -- "did it arrive?" reopens immediately, not after its usual delay -----
 
     def test_la_domanda_rimandata_torna_in_piedi(self) -> None:
-        """Chi risponde «no, non ancora» si sente rinviare la domanda di sette
-        giorni. Cominciare una comparazione nuova è un segnale più forte del
-        timer: è il momento in cui ci si chiede davvero se la merce della
-        settimana scorsa è arrivata (Daniele, 22 agosto 2026).
+        """Starting a new comparison must reopen a snoozed "did it arrive?" question immediately.
 
-        Misurato quel giorno sui dati veri: quattro ordini risposti «non
-        ancora» il 19 erano rimandati al 26, quindi il comando non avrebbe
-        chiesto niente.
+        A "not yet" answer normally snoozes the question for several days,
+        but starting a new comparison is a stronger signal than that timer:
+        it's the moment the operator genuinely needs to know whether last
+        week's goods arrived.
         """
 
         risposto = ORDER_HISTORY.to_iso(ORDER_HISTORY.utc_now() - timedelta(days=2))
@@ -7881,10 +7787,11 @@ class CominciareUnaComparazioneNuova(unittest.TestCase):
                          "la domanda è ancora rimandata dopo il comando")
 
     def test_riaprire_non_cancella_che_cosa_avevi_risposto(self) -> None:
-        """`answeredAt` è la memoria di che cosa è stato risposto e quando, ed
-        è quella che risponde a «che cosa avevo deciso prima». Il rinvio è una
-        conseguenza di quella data, non un dato suo: si annulla con un segno a
-        parte."""
+        """`answeredAt` records what was answered and when; reopening the question must not clear it.
+
+        The snooze is derived from that timestamp, not stored on it, so it's
+        cancelled through a separate flag instead.
+        """
 
         risposto = ORDER_HISTORY.to_iso(ORDER_HISTORY.utc_now() - timedelta(days=2))
         self.ordini.write_text(json.dumps({"schema_version": 1, "orders": [{
@@ -7898,8 +7805,7 @@ class CominciareUnaComparazioneNuova(unittest.TestCase):
         self.assertEqual(voce["answeredAt"], risposto)
 
     def test_una_risposta_data_dopo_rimette_il_rinvio(self) -> None:
-        """Altrimenti la domanda tornerebbe per sempre a ogni ricaricamento:
-        il segno si confronta con `answeredAt`, non con l'orologio."""
+        """The reopen flag is compared against `answeredAt`, not the clock, or the question would reopen on every reload forever."""
 
         vecchio = ORDER_HISTORY.to_iso(ORDER_HISTORY.utc_now() - timedelta(days=2))
         riaperta = ORDER_HISTORY.to_iso(ORDER_HISTORY.utc_now() - timedelta(days=1))
@@ -7917,11 +7823,13 @@ class CominciareUnaComparazioneNuova(unittest.TestCase):
 
         self.assertEqual(esito["domandeRiaperte"], 0)
 
-    # -- e quando non si può --------------------------------------------------
+    # -- and when it can't start -----------------------------------------------
 
     def test_non_si_comincia_mentre_il_confronto_gira(self) -> None:
-        """Svuotare i documenti sotto una catena che li sta leggendo è la
-        stessa ragione per cui durante il ricalcolo non si carica niente."""
+        """Clearing documents while a pipeline run is reading them would corrupt that run.
+
+        Same reason uploads are blocked while a recompute is in progress.
+        """
 
         with mock.patch.object(self.store.pipeline_jobs, "in_corso", return_value=True):
             with self.assertRaises(Exception) as errore:
@@ -7934,15 +7842,13 @@ class CominciareUnaComparazioneNuova(unittest.TestCase):
 
 
 class IlControlloDiceQuelloCheFermaIlLavoro(unittest.TestCase):
-    """`--check` diceva `[OK]` e usciva zero su una macchina dove non si lavora.
+    """`--check` must report every condition that would stop the program from working, not just print `[OK]`.
 
-    Non prova a prendere la porta, non guarda se la cartella delle copie e'
-    scrivibile, non dice se la chiave AI c'e', e tornava zero anche quando
-    `prepare_writer_config` dichiarava che nessun listino era compilabile. E'
-    il comando che si suggerisce a chi «non riesce ad avviare»: rispondere «va
-    tutto bene» e' peggio che non rispondere.
-
-    Prove eseguite.
+    It's the command suggested to an operator who can't get the program to
+    start, so it must actually probe the port, the copies folder's
+    writability, the AI key, and whether `prepare_writer_config` found any
+    price list compilable; a false "everything is fine" is worse than no
+    answer at all.
     """
 
     def setUp(self) -> None:
@@ -7960,7 +7866,7 @@ class IlControlloDiceQuelloCheFermaIlLavoro(unittest.TestCase):
     def test_una_cartella_delle_copie_non_scrivibile_si_dice(self) -> None:
         with tempfile.TemporaryDirectory() as temporaneo:
             occupata = Path(temporaneo) / "copie"
-            # Un file al posto della cartella: `mkdir` non ci riesce.
+            # A file where a folder is expected: `mkdir` can't succeed.
             occupata.write_text("non sono una cartella", encoding="utf-8")
             with mock.patch.object(self.launcher, "cartella_delle_copie", lambda: occupata):
                 avvisi = self.launcher.avvisi_del_controllo(self.writer(Path("config.json")))
@@ -7980,7 +7886,7 @@ class IlControlloDiceQuelloCheFermaIlLavoro(unittest.TestCase):
         self.assertIn("Impostazioni", chiave[0])
 
     def test_con_tutto_a_posto_non_dice_niente(self) -> None:
-        """La controprova: non e' un comando che si lamenta comunque."""
+        """Negative control: the command doesn't complain regardless of the actual state."""
 
         with tempfile.TemporaryDirectory() as temporaneo:
             copie = Path(temporaneo) / "copie"

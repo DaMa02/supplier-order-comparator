@@ -1,26 +1,26 @@
-"""La compilazione dell'ordine Noce dentro una copia del loro `.xls` (6e).
+"""Tests for compiling the Noce order into a copy of their `.xls` file.
 
-A Noce si rimanda il **loro** documento, con la sola colonna d'ordine
-riempita e tutto il resto identico: e' una decisione di Daniele del 12 agosto
-2026, non un'ottimizzazione.  Quattro cose valgono da sole l'intero file:
+Noce gets back their own document, with only the order column filled in and
+everything else identical — a deliberate design choice, not an optimization.
+This suite checks four properties:
 
-1. **Si scrive in posizione, e il resto del file non si sposta.**  Il collaudo
-   non guarda solo le celle rilette: conta i **byte diversi** fra originale e
-   copia, perche' una patch che ricostruisce il file darebbe le stesse celle e
-   consegnerebbe un documento diverso da quello che il fornitore aspetta.
-2. **La condizione da cui dipende tutto va ricontrollata a ogni file.**  Una
-   formula, una cella vuota o un numero lungo otto byte nella colonna d'ordine
-   rendono la patch inapplicabile: allora la compilazione Noce **fallisce e
-   lo dice**, e non lascia in giro una copia a meta'.
-3. **L'EAN della riga dev'essere quello del piano.**  E' l'unico controllo che
-   avrebbe intercettato il difetto del 12 agosto — la riga 2600 che era olio
-   Carapelli invece del prodotto atteso.
-4. ⚠ **Cambiare una cella non sporca le formule che la usano.**  Misurato:
-   dopo la patch le quantita' erano giuste e i totali fermi a zero. Per questo
-   si azzera `RECALCID`, cosi' Excel rifa' i conti aprendo il file.
+1. The patch writes in place; the rest of the file does not move. The tests
+   don't just re-read the cells, they count the changed bytes between
+   original and copy, because a patch that rebuilds the file could produce
+   the same cell values in a different document than the one Noce is meant
+   to get back.
+2. The precondition is re-checked on every file. A formula, an empty cell, or
+   an eight-byte number in the order column makes the patch inapplicable, so
+   compilation fails loudly instead of leaving a half-written copy.
+3. The EAN on each row must match the plan's EAN for that row — the only
+   check that would catch a shipment plan and worksheet drifting out of row
+   alignment.
+4. Changing a cell does not leave formulas that reference it stale. `RECALCID`
+   is zeroed so Excel recomputes on open; without it, quantities update but
+   dependent totals stay at their last computed value.
 
-I `.xls` di prova li costruisce `test_xls_reader`: contenitore OLE2 vero,
-record BIFF8 veri, sia nel mini-stream sia nei settori normali.
+The `.xls` fixtures are built by `test_xls_reader`: a real OLE2 container with
+real BIFF8 records, covering both the mini-stream and normal sectors.
 """
 
 from __future__ import annotations
@@ -51,16 +51,16 @@ def recalcid(build: int = 191541) -> bytes:
 
 
 def foglio_di_prova(*, righe: int = 6, con_mulrk: bool = False, guasto: bytes | None = None) -> bytes:
-    """Un listino verosimile: EAN in B, descrizione in D, prezzo in H, ordine in I.
+    """Build a plausible price list: EAN in B, description in D, price in H, order in I.
 
-    Le prime due righe fanno da intestazione, i dati cominciano alla riga 3
-    (numerata come la vede l'utente): la stessa forma del listino vero, dove
-    l'intestazione sta alla riga 5 e i dati alla 6.
+    The first two rows are a header; data starts at row 3 (1-based, as the
+    user sees it), matching the shape of a real price list where the header
+    is on row 5 and data starts at row 6.
     """
 
     celle = banco.label(0, COLONNA_EAN, "CodiceABarre") + banco.label(0, COLONNA_ORDINE, "Quantita")
     for indice in range(righe):
-        riga = indice + 2  # zero-based: la riga 3 dell'utente
+        riga = indice + 2  # 0-based BIFF row = user-facing row 3
         celle += banco.label(riga, COLONNA_EAN, f"800000000000{indice}")
         celle += banco.label(riga, 3, f"PRODOTTO {indice}")
         celle += banco.rk(riga, 7, banco.rk_intero(2 + indice))
@@ -132,7 +132,7 @@ class LaPatchInPosizione(BancoXlsWriter):
         self.assertEqual(griglia[3][COLONNA_ORDINE], 0)
 
     def test_il_resto_del_file_non_si_sposta_di_un_byte(self) -> None:
-        """La prova che questa è una patch e non una riscrittura."""
+        """Confirms this is an in-place patch, not a rewrite."""
 
         origine = self.listino()
         copia = self.cartella / "ordine.xls"
@@ -141,7 +141,7 @@ class LaPatchInPosizione(BancoXlsWriter):
         dopo = copia.read_bytes()
         self.assertEqual(len(prima), len(dopo))
         diversi = [indice for indice in range(len(prima)) if prima[indice] != dopo[indice]]
-        # Due celle da quattro byte piu' i quattro di RECALCID: mai piu' di dodici.
+        # Two 4-byte cells plus the 4-byte RECALCID: at most twelve bytes.
         self.assertLessEqual(len(diversi), 12)
         self.assertGreater(len(diversi), 0)
 
@@ -160,7 +160,7 @@ class LaPatchInPosizione(BancoXlsWriter):
         self.assertEqual(differenze, [(3, COLONNA_ORDINE)])
 
     def test_funziona_anche_quando_il_libro_sta_nei_settori_normali(self) -> None:
-        """Il mini-stream e i settori grandi sono due strade diverse, e vanno provate tutte e due."""
+        """The mini-stream and normal sectors are separate code paths; both need coverage."""
 
         origine = self.listino(riempimento=8000)
         self.assertGreater(origine.stat().st_size, 8000)
@@ -174,7 +174,7 @@ class LaPatchInPosizione(BancoXlsWriter):
         compila_ordine(origine, copia, {3: 9}, colonna_ordine="I", prima_riga=3)
         griglia = self.valori(copia)
         self.assertEqual(griglia[2][COLONNA_ORDINE], 9)
-        # La cella accanto, dentro lo stesso record, non dev'essere stata toccata.
+        # The adjacent cell, packed in the same MULRK record, must stay untouched.
         self.assertEqual(griglia[2][7], 2)
 
     def test_l_originale_non_viene_mai_toccato(self) -> None:
@@ -192,7 +192,7 @@ class LaPatchInPosizione(BancoXlsWriter):
 
 class IlRicalcoloForzato(BancoXlsWriter):
     def test_recalcid_viene_azzerato(self) -> None:
-        """Senza, le quantità sono giuste e i totali restano a zero. Misurato."""
+        """Without this, quantities update but dependent totals stay stale."""
 
         origine = self.listino()
         copia = self.cartella / "ordine.xls"
@@ -205,7 +205,7 @@ class IlRicalcoloForzato(BancoXlsWriter):
         self.assertEqual(build, 0)
 
     def test_senza_recalcid_lo_dice_e_non_fallisce(self) -> None:
-        """Un file senza quel record Excel lo ricalcola comunque all'apertura."""
+        """A file with no RECALCID record still gets recalculated by Excel on open."""
 
         origine = self.listino(con_recalcid=False)
         copia = self.cartella / "ordine.xls"
@@ -221,8 +221,8 @@ class LaColonnaDeveEssereTuttaRk(BancoXlsWriter):
         with self.assertRaises(CompilazioneXlsError) as errore:
             compila_ordine(origine, copia, {3: 7, 4: 2}, colonna_ordine="I", prima_riga=3)
         self.assertIn(atteso, str(errore.exception))
-        # ⚠ Niente copia a meta': un documento che somiglia a un ordine e non lo
-        # e' e' peggio di nessun documento.
+        # No partial copy: a document that looks like a completed order but
+        # isn't is worse than no document at all.
         self.assertFalse(copia.exists())
 
     def test_una_formula_nella_colonna_d_ordine_ferma_tutto(self) -> None:
@@ -241,17 +241,14 @@ class LaColonnaDeveEssereTuttaRk(BancoXlsWriter):
         self._guasto(banco.label(3, COLONNA_ORDINE, "0"), "del testo")
 
     def test_una_cella_vuota_dentro_un_mulblank_ferma_tutto(self) -> None:
-        """`MULBLANK` e' un record a se', e nel listino vero ce ne sono 4.578.
+        """A run of empty cells is packed by Excel into a single `MULBLANK` record.
 
-        Le celle vuote in fila Excel non le scrive una per una: le impacchetta
-        in un solo record che ne copre un tratto.  Il ramo che lo apre non era
-        mai stato attraversato da nessuna prova, e senza di quello una colonna
-        d'ordine vuota per tutta la sua larghezza sarebbe passata per compilabile
-        — cioe' la patch a lunghezza fissa avrebbe scritto quattro byte dentro
-        celle che quei quattro byte non ce li hanno.
+        Without decoding it, an order column made entirely of blank cells
+        packed this way would look compilable, and the fixed-length patch
+        would write four bytes into cells that don't have four bytes to give.
         """
 
-        # Un solo record che copre le colonne 7, 8 e 9: la colonna d'ordine e' l'8.
+        # One MULBLANK record covering columns 7, 8 and 9; the order column is 8.
         self._guasto(banco.mulblank(3, COLONNA_ORDINE - 1, [0, 0, 0]), "una cella vuota")
 
     def test_il_controllo_preventivo_vede_anche_il_mulblank(self) -> None:
@@ -274,15 +271,9 @@ class LaColonnaDeveEssereTuttaRk(BancoXlsWriter):
         self.assertEqual(rotto["celle_di_altro_tipo"], {4: "una cella vuota"})
 
     def test_una_colonna_d_ordine_con_zero_celle_non_e_compilabile(self) -> None:
-        """Zero celle scrivibili non e' «tutto a posto»: e' una colonna che non c'e'.
+        """Zero writable cells is not "all clear": it's a column that doesn't exist."""
 
-        `not altre` diceva «compilabile» anche li': il controllo preventivo non
-        trovava niente da segnalare, e la compilazione falliva piu' avanti con
-        «Il piano indica N righe che nel listino non hanno una cella d'ordine».
-        Il campo `celle_rk: 0` c'era gia', e nessuno lo guardava.
-        """
-
-        # Una colonna oltre quelle scritte: nel listino non c'e' nessuna cella.
+        # A column beyond the written ones: the price list has no cells there.
         esito = controlla_colonna_ordine(self.listino(), colonna_ordine="Z", prima_riga=3)
 
         self.assertEqual(esito["celle_rk"], 0)
@@ -300,7 +291,7 @@ class LaColonnaDeveEssereTuttaRk(BancoXlsWriter):
 
 class LaGuardiaSullEan(BancoXlsWriter):
     def test_l_ean_diverso_ferma_la_compilazione(self) -> None:
-        """La difesa che gli altri tre fornitori non hanno, e che qui costa zero."""
+        """A row-alignment safeguard available only for this supplier's file format."""
 
         origine = self.listino()
         copia = self.cartella / "ordine.xls"
@@ -324,14 +315,10 @@ class LaGuardiaSullEan(BancoXlsWriter):
         self.assertEqual(esito["ean_controllati"], 2)
 
     def test_un_piano_senza_ean_su_una_riga_che_ce_l_ha_ferma_tutto(self) -> None:
-        """Il ramo che prima saltava la guardia in silenzio.
+        """A plan row without an EAN is selecting that row by row number alone.
 
-        Il piano che non porta l'EAN di una riga la sta scegliendo per il solo
-        numero di riga.  Se nel listino quell'EAN c'e', la difesa che avrebbe
-        intercettato il difetto del 12 agosto — la riga 2600 che era olio
-        Carapelli — non si puo' fare: e allora non si compila.  Prima si
-        passava oltre senza dire niente, e `ean_controllati` diceva «zero»
-        esattamente come quando l'EAN non lo chiede nessuno.
+        If the price list does have an EAN there, the check can't run, so
+        compilation must refuse rather than silently skip the guard.
         """
 
         origine = self.listino()
@@ -348,22 +335,22 @@ class LaGuardiaSullEan(BancoXlsWriter):
         self.assertFalse(copia.exists())
 
     def test_un_piano_senza_ean_su_una_riga_senza_ean_passa(self) -> None:
-        """Se nemmeno il listino ha l'EAN lì non c'è niente da confrontare."""
+        """If the price list itself has no EAN there, there's nothing to compare."""
 
         origine = self.listino()
         copia = self.cartella / "ordine.xls"
         esito = compila_ordine(
             origine, copia, {3: 7, 4: 2},
             colonna_ordine="I", prima_riga=3,
-            # La colonna E in questo listino e' vuota su tutte le righe: e' il
-            # caso della riga di servizio che l'EAN non ce l'ha da nessuna parte.
+            # Column E is empty on every row of this fixture: the case of a
+            # line item that has no EAN anywhere.
             ean_attesi={3: "", 4: ""}, colonna_ean="E",
         )
         self.assertEqual(esito["ean_controllati"], 0)
         self.assertTrue(copia.is_file())
 
     def test_la_colonna_dell_ean_si_puo_indicare_per_numero(self) -> None:
-        """Nel registro sta per nome, e chi chiama la risolve dalle intestazioni."""
+        """The adapter registry stores the column by name; callers resolve it from headers."""
 
         origine = self.listino()
         copia = self.cartella / "ordine.xls"
@@ -404,15 +391,10 @@ class IFogliEIParametri(BancoXlsWriter):
 
 
 class LaCopiaSiPubblicaOMai(BancoXlsWriter):
-    """⚠ Era l'unico posto del programma che apriva e troncava il file finale.
+    """The compiled order publishes atomically via `scrittura_sicura`, not a direct write.
 
-    Le cinque memorie passano tutte da `scrittura_sicura` — temporaneo, `fsync`,
-    `os.replace` — e questo documento, che e' quello che va davvero a Noce,
-    lo scriveva con un `write_bytes` diretto. Disco pieno o processo ucciso a
-    meta' lasciavano al suo posto un `.xls` monco; se la destinazione esisteva
-    gia', al posto della copia buona di prima.
-
-    Prove eseguite.
+    A full disk or a killed process must not leave a truncated `.xls` in
+    place of the previous good copy.
     """
 
     def test_i_byte_arrivano_forzati_sul_disco(self) -> None:
@@ -455,24 +437,21 @@ class LaCopiaSiPubblicaOMai(BancoXlsWriter):
         finally:
             scrittura_sicura.os.replace = replace_vero
 
-        # Il documento di prima e' ancora quello, byte per byte…
+        # The previous document is untouched, byte for byte...
         self.assertEqual(copia.read_bytes(), prima)
-        # …e non e' rimasto niente in giro.
+        # ...and no temp file was left behind.
         rimasti = [voce.name for voce in self.cartella.iterdir() if voce.name.startswith(".")]
         self.assertEqual(rimasti, [])
 
 
 
 class LeQuantitaDiPrimaNonRestano(BancoXlsWriter):
-    """I due scrittori facevano due cose diverse, e questo era il piu' permissivo.
+    """Stale quantities from a previous compilation must not survive into a new one.
 
-    `write_supplier_orders.mjs` azzera le quantita' gia' scritte nella colonna
-    d'ordine — «senza, si spedirebbero righe fantasma» — e qui si scrivevano
-    solo le righe del piano. Il caso che morde e' quello che capita davvero:
-    come origine finisce la copia compilata della settimana prima, e Noce
-    riceve anche le sue righe mentre gli altri fornitori no.
-
-    Prove eseguite.
+    `write_supplier_orders.mjs` zeroes quantities already in the order column
+    before writing new ones, to avoid shipping phantom rows; `xls_writer` must
+    do the same. The case that matters: the source file for one week's
+    compilation is last week's compiled copy, not the original price list.
     """
 
     def test_una_quantita_fuori_dal_piano_torna_a_zero(self) -> None:
@@ -481,8 +460,8 @@ class LeQuantitaDiPrimaNonRestano(BancoXlsWriter):
         compila_ordine(origine, primo, {3: 7, 5: 12}, colonna_ordine="I", prima_riga=3)
         self.assertEqual(self.valori(primo)[4][COLONNA_ORDINE], 12)
 
-        # La settimana dopo si riparte per sbaglio dalla copia compilata, e il
-        # piano nuovo tocca una riga sola.
+        # Compiling again from that compiled copy, with a plan that only
+        # touches one row.
         secondo = self.cartella / "questa-settimana.xls"
         esito = compila_ordine(primo, secondo, {3: 4}, colonna_ordine="I", prima_riga=3)
 
@@ -492,7 +471,7 @@ class LeQuantitaDiPrimaNonRestano(BancoXlsWriter):
         self.assertEqual(esito["quantita_azzerate"], 1)
 
     def test_su_un_listino_pulito_non_azzera_niente(self) -> None:
-        """La controprova: il caso normale non deve toccare una cella in piu'."""
+        """The normal case must not touch a single extra cell."""
 
         origine = self.listino()
         copia = self.cartella / "ordine.xls"
@@ -500,7 +479,7 @@ class LeQuantitaDiPrimaNonRestano(BancoXlsWriter):
         self.assertEqual(esito["quantita_azzerate"], 0)
 
     def test_le_righe_sopra_i_dati_non_si_toccano(self) -> None:
-        """L'intestazione della colonna d'ordine non e' una quantita' da azzerare."""
+        """The order column's header is not a quantity to be zeroed."""
 
         origine = self.listino()
         copia = self.cartella / "ordine.xls"
@@ -512,36 +491,32 @@ class LeQuantitaDiPrimaNonRestano(BancoXlsWriter):
 
 
 class QuattroByteACavalloDiDueSettoriTests(unittest.TestCase):
-    """Una cella spezzata fra due settori non adiacenti del contenitore OLE.
+    """A cell that spans two non-adjacent sectors of the OLE container.
 
-    Un `.xls` e' un contenitore OLE: il flusso «Workbook» sta in settori che nel
-    file **non sono per forza uno dietro l'altro** — fra loro si infilano i
-    settori della tabella di allocazione. Nel listino Noce vero ci sono
-    10.652 segmenti e **84 discontinuita'**, e cinque celle ci cadono sopra.
-
-    Fino al 26 agosto 2026 si scriveva `dati[posizione:posizione + 4]`, cioe'
-    quattro byte di fila a partire da un offset tradotto per il primo soltanto:
-    per quelle celle uno o piu' byte finivano dentro il settore sbagliato — la
-    tabella di allocazione — e Excel si rifiutava di aprire il documento.
-
-    Non si vedeva prima perche' si scrivevano le sole righe del piano, un
-    centinaio su diciassettemila. Dal 23 agosto si azzerano tutte le celle della
-    colonna, e da allora quelle cinque vengono toccate a ogni compilazione.
+    A `.xls` is an OLE container: the "Workbook" stream's sectors are not
+    necessarily contiguous in the file — allocation-table sectors can sit
+    between them. In a real Noce price list, the stream spans over 10,000
+    sectors with dozens of such discontinuities, and a handful of cells land
+    on one. A 4-byte cell write that assumes contiguity, translating only its
+    start offset, can spill one or more bytes into the wrong sector (e.g. the
+    allocation table itself), producing a file Excel refuses to open. The
+    writer must translate the write per destination sector, not once per
+    cell.
     """
 
-    # Il flusso e' contiguo (0..7); nel file i due settori distano 100 byte.
+    # The stream is contiguous (bytes 0..7); in the file the two sectors are 100 bytes apart.
     MAPPA = [(0, 100, 4), (4, 204, 4)]
 
     def test_i_byte_vanno_dove_stanno_davvero_nel_file(self) -> None:
         dati = bytearray(300)
         xls_writer._scrivi_nel_flusso(dati, self.MAPPA, 2, b"\x01\x02\x03\x04")
 
-        # I primi due byte chiudono il settore che comincia a 100...
+        # The first two bytes close out the sector starting at 100...
         self.assertEqual(bytes(dati[102:104]), b"\x01\x02")
-        # ...e gli altri due aprono quello che comincia a 204.
+        # ...and the other two open the sector starting at 204.
         self.assertEqual(bytes(dati[204:206]), b"\x03\x04")
-        # E soprattutto: NIENTE e' finito di fila dopo il primo settore, che e'
-        # dove stava la tabella di allocazione del contenitore.
+        # Nothing spills past the first sector into what would be the
+        # container's allocation table.
         self.assertEqual(bytes(dati[104:106]), b"\x00\x00")
 
     def test_si_rilegge_quello_che_si_e_scritto(self) -> None:

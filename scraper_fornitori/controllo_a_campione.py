@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
-"""Ricontrolla sul sito un pugno di articoli sparsi nel catalogo scaricato.
+"""Re-check a handful of items spread across the downloaded catalog, against the live site.
 
-`valida_catalogo.py` guarda il file: dice se e' coerente con se' stesso e con
-quello che il sito dichiarava. Questo modulo guarda **il sito**: ripesca
-qualche articolo e verifica che sia ancora identico a com'e' stato scritto nel
-CSV. E' il controllo che si accorge di una sessione scaduta a meta', di una
-pagina slittata o di un listino cambiato sotto i piedi.
+`valida_catalogo.py` looks at the file: it says whether it's consistent with
+itself and with what the site declared. This module looks at the site:
+it re-fetches a few items and checks each is still identical to what was
+written in the CSV. This is the check that catches a session that expired
+halfway through, a page that shifted, or a price list that changed underneath
+the download.
 
-Il campione e' riproducibile — stesso seme, stesse pagine — e distribuito: una
-pagina per ogni fetta di catalogo di uguale ampiezza, e un prodotto a caso da
-quella pagina. Si pretende che **tutti** gli articoli del campione tornino: un
-solo scarto e' un motivo per guardare, non un margine di tolleranza.
+The sample is reproducible — same seed, same pages — and spread out: one page
+per equal-sized slice of the catalog, and a random product from that page.
+Every sampled item is expected to match: a single mismatch is a reason to
+look, not a tolerance margin.
 
-Come `scraper_fornitore.py`, non sa nulla di nessun sito: gli si passa
-l'oggetto `SitoFornitore` dello scraper che ha prodotto il CSV.
+Like `scraper_fornitore.py`, it knows nothing about any particular site: it's
+given the `SitoFornitore` object of the scraper that produced the CSV.
 """
 
 from __future__ import annotations
@@ -41,7 +42,7 @@ def _confronto(riga: dict[str, Any], campi: Sequence[str]) -> tuple[str, ...]:
 
 
 def scegli_pagine(pagine_totali: int, quanti: int, sorte: random.Random) -> list[int]:
-    """Una pagina a caso per ogni fetta di catalogo di uguale ampiezza."""
+    """One random page per equal-sized slice of the catalog."""
 
     if pagine_totali < 1 or quanti < 1:
         return []
@@ -60,7 +61,7 @@ def controlla_gruppo(
     bersagli: list[dict[str, str]],
     colonna_pagina: str,
 ) -> list[dict[str, str]]:
-    """Riapre una sessione e ricontrolla i bersagli assegnati a questo gruppo."""
+    """Reopen a session and re-check the targets assigned to this group."""
 
     cliente = sito.crea_cliente(30, 3)
     sito.accedi(cliente, credenziali)
@@ -94,7 +95,7 @@ def controllo_a_campione(
     seme: int = SEME,
     colonna_pagina: str = "pagina_catalogo",
 ) -> dict[str, Any]:
-    """Esegue il controllo e scrive esiti e riepilogo. Le credenziali restano in memoria."""
+    """Run the check and write the outcomes and summary. Credentials stay in memory only."""
 
     with catalogo_csv.open("r", newline="", encoding="utf-8-sig") as flusso:
         righe = list(csv.DictReader(flusso))
@@ -114,8 +115,9 @@ def controllo_a_campione(
     pagine = scegli_pagine(max(per_pagina), quanti, sorte)
     bersagli = [sorte.choice(per_pagina[pagina]) for pagina in pagine]
     if not bersagli:
-        # Un campione vuoto passerebbe da solo: «zero controlli, zero falliti»
-        # non e' un catalogo verificato, e va detto invece di essere contato.
+        # An empty sample would pass on its own: "zero checks, zero failures"
+        # is not a verified catalog, and must be reported as an error rather
+        # than counted as a pass.
         raise ValueError(f"campione vuoto: --quanti vale {quanti}, e non c'e' niente da controllare")
     lavoratori = min(LAVORATORI_MASSIMI, len(bersagli))
     gruppi = [bersagli[indice::lavoratori] for indice in range(lavoratori)]
@@ -158,7 +160,7 @@ def controllo_a_campione(
 
 
 def avvia(sito: SitoFornitore, argv: Sequence[str] | None = None) -> int:
-    """Il `main` del controllo per uno scraper concreto."""
+    """The `main` of the check, for a concrete scraper."""
 
     analizzatore = argparse.ArgumentParser(description=__doc__)
     analizzatore.add_argument("catalogo_csv", type=Path)

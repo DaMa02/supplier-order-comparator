@@ -42,39 +42,37 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 import ai_client  # noqa: E402
-# La sostituzione della chiave dentro un testo sta in un posto solo: il suo
-# modulo. Ricopiarla qui vorrebbe dire due espressioni regolari da tenere
-# allineate, e quella che si dimentica e' sempre quella che perde la chiave.
+# The key-redaction regex lives in one place, its own module. Copying it here
+# would mean two patterns to keep in sync, and the one that gets forgotten is
+# always the one that leaks the key.
 from ai_client import oscura as senza_la_chiave  # noqa: E402
 from catalog_search import SupplierCatalog  # noqa: E402
-# La colonna in cui si scrivono le quantita' ordinate si puo' spostare dalla
-# pagina: le regole di che cosa diventa la dichiarazione stanno nel suo modulo,
-# e la prova che quella colonna sia scrivibile resta `launcher.source_rule`.
+# The order-quantity column can be moved from the page; the rules for what
+# that declaration becomes live in this module, and `launcher.source_rule`
+# is the single source of truth for whether the column is writable.
 import colonna_ordine  # noqa: E402
-# Le conferme dell'utente vivono in un file SQLite che sopravvive al ricalcolo
-# settimanale: l'identita' e' l'articolo (codice a barre + nome normalizzato),
-# mai la riga e mai il prezzo. Qui dentro non si riscrive nessuna delle sue
-# regole — chi decide che cosa e' lo stesso articolo e' quel modulo, e lo
-# decide in un posto solo.
+# User confirmations live in a SQLite store that survives the weekly
+# recompute: identity is the item (barcode + normalized name), never the row
+# and never the price. None of that module's rules are duplicated here —
+# what counts as "the same item" is decided in one place, that module.
 from conferme import (  # noqa: E402
     MagazzinoConferme,
     MagazzinoNonUtilizzabile,
     codice_confrontabile,
     impronta_prodotto,
 )
-# La cartella datata, l'audit, l'elenco delle compilazioni e le difese sul
-# percorso stanno tutte in `consegna`: qui dentro non si ricostruisce nessuna
-# di quelle regole a mano, perche' due copie della stessa difesa divergono.
+# The dated output folder, the audit trail, the list of compiled orders and
+# the path safeguards all live in `consegna`; none of those rules are
+# reimplemented here, since two copies of the same safeguard tend to diverge.
 import consegna  # noqa: E402
-# L'elenco dei prodotti che nessun fornitore porta: il foglio, il nome e il
-# motivo stanno nel loro modulo. Qui resta il solo filtro di chi ci entra,
-# perche' e' `find_offer`/`offer_is_available` a saperlo dire.
+# The list of products no supplier carries: sheet, name and reason live in
+# their own module. Only the entry filter stays here, since `find_offer`/
+# `offer_is_available` are the ones that know how to answer it.
 import da_reperire as da_reperire_modulo  # noqa: E402
 from build_review_data import impronta_articolo  # noqa: E402
-# Che cosa e' un'offerta — di chi e', si puo' ordinare, quanto costa al pezzo —
-# lo dice il suo modulo, e lo dice per tutti: fino al 20 agosto 2026 «si puo'
-# ordinare» aveva un'autorita' qui e due copie scritte a mano, una delle quali
-# dentro la funzione che azzera le quantita' dopo un ricalcolo.
+# What counts as an offer — whose it is, whether it can be ordered, its unit
+# cost — is decided by its own module, for every caller: `offer_is_available`
+# is the single authority for orderability.
 from offerta import (  # noqa: E402
     STATO_RIFIUTATO_UTENTE,
     find_offer,
@@ -86,8 +84,8 @@ from offerta import (  # noqa: E402
 from inspect_sources import profile_file  # noqa: E402
 import order_history  # noqa: E402
 import registro  # noqa: E402
-# Scrivere un file senza poterlo trovare a meta', nemmeno dopo un black-out:
-# lo schema stava in quattro copie e nessuna forzava i byte sul disco.
+# Writes a file so it's never found half-written, even after a power loss —
+# the shared implementation for atomic-and-durable writes across the app.
 import scrittura_sicura  # noqa: E402
 import versione_del_codice  # noqa: E402
 from pipeline_jobs import (  # noqa: E402
@@ -101,10 +99,9 @@ from promotion_bridge import PromotionService  # noqa: E402
 
 MAX_JSON_BYTES = 150 * 1024 * 1024
 MAX_UPLOAD_BYTES = 60 * 1024 * 1024
-# Il .xls c'e' perche' Noce manda un Excel 97-2003 e non ha il .xlsx: era
-# l'unico formato che l'utente non riusciva a caricare.  L'estensione resta
-# solo un primo filtro sul nome; che cosa sia davvero il documento lo dicono i
-# suoi primi byte, in profile_file.
+# `.xls` is accepted because supplier Noce ships Excel 97-2003 files with no
+# `.xlsx` equivalent. The extension is only a first filter on the name; what
+# the file actually is comes from its first bytes, in `profile_file`.
 ALLOWED_UPLOAD_SUFFIXES = {".xlsx", ".xls", ".csv"}
 FORMATO_DELL_ESTENSIONE = {".xlsx": "xlsx", ".xls": "xls", ".csv": "csv"}
 NOME_DEL_FORMATO = {"xlsx": "Excel (.xlsx)", "xls": "Excel 97-2003 (.xls)", "csv": "CSV"}
@@ -118,28 +115,26 @@ def load_json(path: Path, default: Any) -> Any:
 
 
 def atomic_json(path: Path, value: Any) -> None:
-    """Scrittura atomica **e** arrivata sul disco: la fa `scrittura_sicura`.
+    """Write JSON atomically and durably, via `scrittura_sicura`.
 
-    Era una delle quattro copie dello stesso schema, e nessuna delle quattro
-    forzava i byte sul disco prima di sostituire: `os.replace` e' atomico
-    rispetto ai metadati, non ai dati, e una mancanza di corrente nell'istante
-    sbagliato lasciava uno `state.json` presente ma vuoto.
+    `os.replace` is atomic for metadata, not for data: without an fsync
+    before the replace, a power loss at the wrong instant can leave
+    `state.json` present but empty.
     """
 
     scrittura_sicura.scrivi_json(path, value)
 
 
 def _centesimi_come_in_pagina(value: float) -> float:
-    """L'arrotondamento con cui la pagina MOSTRA un importo, replicato qui.
+    """Round the way the page displays an amount, replicated here.
 
-    `round()` di Python arrotonda il double binario e a metà va al pari;
-    `Intl.NumberFormat` del browser arrotonda la rappresentazione decimale
-    più corta e a metà va per eccesso: su 14,665 il primo dà 14,66 e lo
-    schermo mostra 14,67.  Ogni numero che la pagina disegna e che il
-    servizio dichiara (i totali del Riepilogo, la somma delle righe) deve
-    passare di qui, o la frase «le righe sommano X» nomina un numero che
-    sullo schermo non esiste (revisione avversariale R4).  `Decimal(str(x))`
-    usa la stessa rappresentazione decimale più corta del browser.
+    Python's `round()` rounds the binary double and ties to even;
+    `Intl.NumberFormat` in the browser rounds the shortest decimal
+    representation and ties away from zero — on 14.665 the former gives
+    14.66 while the screen shows 14.67. Every amount the server states that
+    the page also draws (the summary totals, the row sums) must go through
+    this, or the two disagree. `Decimal(str(x))` uses the same shortest
+    decimal representation as the browser.
     """
 
     return float(Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
@@ -148,20 +143,20 @@ def _centesimi_come_in_pagina(value: float) -> float:
 def safe_upload_name(value: str) -> str:
     name = Path(str(value or "")).name.strip()
     name = SAFE_FILE_RE.sub("_", name).strip(" .")
-    # Il taglio a 180 caratteri viene PRIMA del controllo sull'estensione, non
-    # dopo: tagliare un nome già approvato (come si faceva prima) può staccare
-    # il punto e l'estensione da un nome lunghissimo, e il file arriva sul
-    # disco senza estensione pur avendo superato il controllo. Non è un errore
-    # visibile: il caricamento riesce lo stesso — il lettore sceglie dai primi
-    # byte, non dal nome — e il listino sparisce in silenzio dal confronto,
-    # perché `candidate_files` di `scripts/inspect_sources.py` filtra per
-    # suffisso e un file senza estensione non entra.
+    # The 180-char truncation happens before the extension check, not after:
+    # truncating an already-approved name can cut the dot and extension off a
+    # very long name, and the file then lands on disk with no extension even
+    # though it passed the check. The failure is silent — the upload still
+    # succeeds, since the reader picks the format from the first bytes, not
+    # the name — and the price list quietly drops out of the comparison,
+    # because `candidate_files` in `scripts/inspect_sources.py` filters by
+    # suffix and an extensionless file doesn't match.
     suffix = Path(name).suffix.casefold()
     if len(name) > 180:
         name = name[:180 - len(suffix)] + suffix
-    # Il controllo resta DOPO il taglio: un'aritmetica sbagliata (un suffisso
-    # più lungo di 180 caratteri) potrebbe produrre un nome vuoto, e deve
-    # cadere qui come qualunque altro nome non valido.
+    # The check stays after the truncation: a suffix longer than 180 chars
+    # could otherwise produce an empty name, which must fall into this same
+    # validation path as any other invalid name.
     if not name or name in {".", ".."}:
         raise ValueError("Nome del documento non valido")
     suffix = Path(name).suffix.casefold()
@@ -174,7 +169,7 @@ def safe_upload_name(value: str) -> str:
 
 
 def upload_role(value: Any) -> str:
-    """Ruolo scelto nel box di importazione, nel vocabolario della pipeline."""
+    """Role chosen in the import box, in the pipeline's own vocabulary."""
 
     role = str(value or "").strip().casefold()
     if role in {"management", "master"}:
@@ -216,23 +211,22 @@ def unique_destination(directory: Path, name: str) -> Path:
 
 
 def supplier_label(supplier_id: str) -> str:
-    """Come si chiama questo fornitore per chi legge.
+    """Return this supplier's display name.
 
-    Il nome viene dal registro degli adattatori — la stessa fonte da cui il
-    fornitore nasce — e non da un elenco scritto qui. Con quattro nomi cablati,
-    un fornitore imparato compariva come «NUOVO_FORNITORE», underscore
-    compreso, nei messaggi e nello storico, mentre il registro ne portava gia'
-    il `display_name` (revisione del 14 agosto 2026).
+    The name comes from the adapter registry — the same source the supplier
+    is created from — not from a list hardcoded here: a hardcoded list would
+    show a learned supplier as its raw id, underscores included, in messages
+    and history, while the registry already carries its `display_name`.
     """
 
     return registro.nome_del_fornitore(supplier_id)
 
 
 def frase(value: Any) -> str:
-    """Chiude una frase con il punto.
+    """Close a sentence with a period.
 
-    I motivi tecnici arrivano dalle librerie senza punteggiatura, e concatenarli
-    con la frase successiva produce testi che non si chiudono mai.
+    Technical reasons come back from libraries without punctuation, and
+    concatenating them with the next sentence produces run-on text.
     """
 
     testo = str(value or "").strip()
@@ -254,25 +248,25 @@ def sha256_file(path: Path) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Regole condivise su offerte, prezzi e soglie.
+# Shared rules on offers, prices and thresholds.
 #
-# Stanno qui, fuori dalle singole funzioni, perche' la convalida dello stato,
-# la compilazione e il preventivo di spostamento devono leggere i prezzi nello
-# stesso identico modo. Due copie della stessa regola prima o poi divergono e
-# l'utente si ritrova un preventivo che non corrisponde all'ordine compilato.
+# They live here, outside individual endpoints, because state validation,
+# order compilation and the move-quantity preview must all read prices the
+# same way. Two copies of the same rule tend to diverge, leaving the user
+# with a preview that doesn't match the compiled order.
 # ---------------------------------------------------------------------------
 
 
 def nessuna_offerta_utilizzabile(product: Any) -> bool:
-    """Vero quando nessun fornitore puo' servire questo prodotto.
+    """True when no supplier can fulfil this product.
 
-    Non e' «l'utente non ha ancora scelto»: e' «non c'e' niente da scegliere».
-    Un match ancora da verificare NON entra qui — un'offerta che chiede una
-    conferma resta un'offerta utilizzabile, e il prodotto resta un caso da
-    verificare, non un prodotto introvabile (decisione di Daniele del 16 agosto
-    2026).  E' la condizione che distingue una quantita' senza fornitore — uno
-    stato valido, che finisce nell'elenco dei prodotti da reperire — da una
-    quantita' su un'offerta che non si puo' ordinare, che resta un errore.
+    Not "the user hasn't chosen yet" but "there's nothing to choose from". A
+    match still pending confirmation does NOT count here — an offer awaiting
+    confirmation is still a usable offer, and the product stays a case to
+    verify, not an unavailable one. This is the condition that separates a
+    quantity with no supplier — a valid state that lands in the to-be-sourced
+    list — from a quantity on an offer that can't be ordered, which stays an
+    error.
     """
 
     if not isinstance(product, dict):
@@ -281,13 +275,13 @@ def nessuna_offerta_utilizzabile(product: Any) -> bool:
 
 
 def offer_needs_confirmation(product: Any, offer: Any) -> bool:
-    """Vero quando l'utente deve confermare a mano prima di poter ordinare.
+    """True when the user must confirm by hand before this can be ordered.
 
-    Somma le due provenienze: il prodotto (abbinamento incerto rilevato dalla
-    pipeline) e la singola offerta (match non esatto, espositore non ad alta
-    confidenza). E' la stessa condizione che fa scattare CONFERMA_MANCANTE nel
-    salvataggio dello stato, quindi il preventivo di spostamento puo' avvisare
-    in anticipo invece di far fallire il salvataggio successivo.
+    Combines both sources: the product (an uncertain match flagged by the
+    pipeline) and the individual offer (an inexact match, a low-confidence
+    display). This is the same condition that triggers CONFERMA_MANCANTE
+    when saving state, so the move-quantity preview can warn ahead of time
+    instead of letting the following save fail.
     """
 
     requires = bool(isinstance(product, dict) and (product.get("requiresConfirmation") or product.get("requires_confirmation")))
@@ -303,36 +297,34 @@ def supplier_threshold(definition: Any) -> float:
 
 
 def meets_threshold(total: float, threshold: float) -> bool:
-    """Regola della compilazione: chi non ordina nulla non ha soglia da raggiungere."""
+    """Compilation rule: a supplier with nothing ordered has no threshold to meet."""
 
     return not (0 < total < threshold)
 
 
-# Le due strade per compilare un ordine. La copia `.xlsx` la scrive il writer
-# Node; il documento che va cambiato **in posizione** — quattro byte per cella,
-# tutto il resto identico — lo scrive `app/xls_writer.py`, qui in Python.
+# The two ways to compile an order. The `.xlsx` copy is written by the Node
+# writer; the document that must be patched in place — a handful of bytes
+# per cell, everything else identical — is written by `app/xls_writer.py`,
+# in Python.
 PATCH_IN_POSIZIONE = "patch_xls_in_posizione"
 
 
 def procedura_di_scrittura(regola: Any) -> str:
-    """Come si compila il listino di questo fornitore: **lo dice la regola**.
+    """How this supplier's price list gets compiled: the registry rule decides.
 
-    ⚠ Fino al 17 agosto 2026 la scelta fra le due strade era `supplier ==
-    "noce"`, scritta in due punti di questo file. Il registro invece la
-    dichiara da sempre (`order_write.mode`), e `launcher.source_rule` la porta
-    dentro la regola di scrittura come `compilazione`: due verita' sullo stesso
-    dato, e quella cablata vinceva.
+    The choice between the two write paths comes only from the adapter
+    registry (`order_write.mode`, carried into the write rule by
+    `launcher.source_rule` as `compilazione`), never from a hardcoded
+    supplier name. A hardcoded check would break in both directions: a new
+    supplier shipping `.xls` — the exact case the adapter-learning flow is
+    meant to support — would fall into the Node-writer branch and be
+    rejected as "not available in XLSX format", blaming the supplier's file
+    instead of the configuration, which is the only thing that can actually
+    be fixed. And a known in-place-patch supplier switching to `.xlsx` would
+    still get routed to the in-place patch by the stale hardcoded name.
 
-    Costava in tutte e due le direzioni. Un fornitore **nuovo** che manda un
-    `.xls` — il caso che il programma promette di saper imparare dalla pagina —
-    finiva nel ramo del writer Node e veniva fermato con «il listino non e'
-    disponibile in formato XLSX», cioe' accusando il documento del fornitore
-    invece della configurazione, che e' l'unica cosa che si puo' correggere. E
-    il giorno in cui Noce mandasse un `.xlsx` come tutti, il nome cablato
-    lo avrebbe mandato lo stesso alla patch in posizione.
-
-    Chi non dichiara niente passa dal writer Node: e' la strada normale, e
-    resta quella di tutti i listini `.xlsx`.
+    A supplier that declares nothing goes through the Node writer: that's
+    the default path, and the one every `.xlsx` price list takes.
     """
 
     if not isinstance(regola, dict):
@@ -340,19 +332,16 @@ def procedura_di_scrittura(regola: Any) -> str:
     return str(regola.get("compilazione") or "").strip()
 
 
-# Le chiavi che `state.json` riceve da una rotta parziale — una risposta a un
-# candidato, una riga abbinata a mano, uno sconto di testata, un prodotto
-# aggiunto — e che percio' `validate_snapshot` deve **ricopiare dal disco**
-# invece di ricostruire dallo snapshot della scheda: la scheda non le manda, e
-# ricostruire lo stato senza di loro le cancella.
+# Keys that `state.json` receives from a partial-update route — a candidate
+# response, a manually matched row, a header discount, an added product —
+# and that `validate_snapshot` must therefore copy forward from disk instead
+# of rebuilding from the page's snapshot: the page never sends them, and
+# rebuilding state without them would erase them.
 #
-# Il 19 agosto 2026 qui mancava `manualMatches`, e il primo autosalvataggio
-# dopo un abbinamento a mano lo cancellava in silenzio. Il valore e' quello che
-# la chiave deve avere quando sul disco non c'e' niente.
-#
-# ⚠ Se aggiungi una rotta che scrive una chiave sua dentro `state`, aggiungila
-# qui: `tests/test_abbinamento_a_mano.py` legge le rotte e confronta i due
-# elenchi, e se ne dimentichi una la prova diventa rossa.
+# The value given here is what the key defaults to when nothing is on disk
+# yet. Adding a route that writes its own key into `state` means adding it
+# here too: `tests/test_abbinamento_a_mano.py` reads the routes and compares
+# the two lists, and a key missing from either one fails that test.
 CHIAVI_DI_STATO_RICOPIATE: dict[str, Any] = {
     "manualProducts": [],
     "matchOverrides": [],
@@ -367,23 +356,24 @@ class ReviewStore:
         self.state_path = state_path.resolve()
         self.upload_dir = upload_dir.resolve()
         self.output_dir = output_dir.resolve()
-        # La radice delle compilazioni sta accanto a `outputs`, non dentro.
-        # Dallo smontaggio del carrello Noce il programma in `outputs` non
-        # scrive piu' niente: cartella e rotta `/outputs/` restano solo per gli
-        # artefatti delle run passate, e toglierle e' una decisione a se'.
+        # Compiled orders live next to `outputs`, not inside it. Nothing
+        # writes into `outputs` at runtime; the folder and the `/outputs/`
+        # route only serve artifacts from past runs, and removing them is a
+        # separate decision.
         self.orders_dir = orders_dir.resolve() if orders_dir else self.output_dir.parent / "ordini"
         self.writer_config = writer_config.resolve() if writer_config else None
-        # Lo storico vive fuori dalla cartella della run in corso: deve sopravvivere
-        # al ricalcolo settimanale del confronto.
+        # History lives outside the current run's folder: it must survive
+        # the weekly recompute of the comparison.
         self.history_path = history_path.resolve() if history_path else self.state_path.parent.parent / "history" / "orders.json"
-        # Le conferme stanno accanto allo storico, e per la stessa ragione: una
-        # risposta data vale per l'articolo, non per la settimana in cui e'
-        # stata data. Dentro la cartella della run sparirebbe al primo ricalcolo,
-        # che e' esattamente il difetto che questo magazzino chiude.
+        # Confirmations sit next to history, for the same reason: a given
+        # answer applies to the item, not to the week it was given. Inside
+        # the run folder it would vanish on the next recompute, which is
+        # exactly the failure this store exists to prevent.
         self.conferme_path = conferme_path.resolve() if conferme_path else self.history_path.parent / "conferme.db"
-        # Aperto alla prima domanda e non qui: un file che non si apre non deve
-        # impedire al programma di partire. Il guasto si dice una volta, in
-        # pagina, e il resto continua a funzionare senza memoria delle conferme.
+        # Opened lazily, on first use, not here: a file that fails to open
+        # must not stop the server from starting. The failure is reported
+        # once, on the page, and everything else keeps working without
+        # confirmation memory.
         self._conferme: MagazzinoConferme | None = None
         self._conferme_guasto = ""
         self.lock = threading.RLock()
@@ -393,8 +383,8 @@ class ReviewStore:
         self.upload_dir.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.orders_dir.mkdir(parents=True, exist_ok=True)
-        # Un lavoro per volta, chiunque sia: il lucchetto e' uno solo e lo
-        # prende chi sostituisce `review_data.json`.
+        # One job at a time, whatever it is: there is a single lock, held by
+        # whoever is about to replace `review_data.json`.
         self.lucchetto_lavori = threading.Lock()
         self.pipeline_jobs = PipelineJobManager(
             ConfigurazionePipeline(
@@ -410,26 +400,26 @@ class ReviewStore:
             rifiuti_dichiarati=self.rifiuti_in_vigore,
         )
 
-    # ------------------------------------------------------- le conferme date
+    # ------------------------------------------------------- given confirmations
     #
-    # ⚠ Perche' esiste un magazzino a parte, e non basta `state.json`. Un
-    # prodotto in pagina si chiama `product:539`, cioe' e' il suo **numero di
-    # riga** nell'export del gestionale: misurato il 15 agosto 2026 sui due
-    # export veri, dei 457 identificativi presenti in tutti e due **449 portano
-    # un articolo diverso**. Una conferma legata a quell'identificativo o si
-    # perde al ricalcolo, o — peggio — si riapplica a merce che l'utente non ha
-    # mai visto. Qui la conferma e' legata all'articolo, e sopravvive al listino
-    # della settimana dopo.
+    # Why a separate store, and why `state.json` alone isn't enough. A
+    # product on the page is keyed `product:N`, its row number in the
+    # management-software export: across two real exports, of 457
+    # identifiers present in both, 449 pointed to a different item. A
+    # confirmation tied to that identifier would either get lost on
+    # recompute or — worse — get silently reapplied to merchandise the user
+    # never looked at. Here the confirmation is tied to the item itself, and
+    # survives into next week's price list.
 
     def magazzino_conferme(self) -> MagazzinoConferme | None:
-        """Il magazzino, aperto alla prima domanda. `None` se non si apre.
+        """Open the confirmation store lazily; `None` if it fails to open.
 
-        L'eccezione del modulo si intercetta **qui e in un posto solo**, come
-        chiede il suo docstring: rispondere «nessuna conferma» a un file
-        illeggibile farebbe tornare tutte le domande senza dire perche', e
-        l'utente riconfermerebbe a mano credendo che il programma non avesse
-        mai saputo niente. Il motivo resta in `_conferme_guasto` e finisce fra
-        gli avvisi del confronto.
+        The module's exception is caught here and only here, as its
+        docstring requires: reporting "no confirmations" for a file that
+        fails to open would silently re-ask every question, and the user
+        would reconfirm by hand believing the program never knew the answer.
+        The reason is kept in `_conferme_guasto` and surfaced among the
+        comparison's warnings.
         """
 
         if self._conferme is not None or self._conferme_guasto:
@@ -442,16 +432,16 @@ class ReviewStore:
         return self._conferme
 
     def _magazzino_solo_se_c_e(self) -> MagazzinoConferme | None:
-        """Il magazzino, ma **senza crearlo** se non esiste ancora.
+        """Open the confirmation store, but never create it if it doesn't exist.
 
-        ⚠ Serve a tenere la regola che il magazzino ha gia' pagato una volta:
-        *un programma senza conferme non crea nessun `conferme.db`*. SQLite
-        tiene il file aperto finche' la connessione vive, su Windows un file
-        aperto blocca la cartella che lo contiene, e la volta scorsa ventinove
-        prove morirono alla pulizia della cartella temporanea — con i test
-        mirati tutti verdi. Le uguaglianze si leggono a **ogni** lettura del
-        confronto: aprirle sempre riporterebbe quel guasto identico. Se nessuno
-        ha mai dichiarato niente, non c'e' niente da leggere.
+        Keeps the invariant that a program with no confirmations creates no
+        `conferme.db`. SQLite keeps the file open for the life of the
+        connection, and on Windows an open file locks the folder that
+        contains it — a real risk for tests that clean up a temp folder
+        while a connection is still open. Equalities are read on every
+        comparison read: always opening the store would reintroduce that
+        same failure mode. If nothing has ever been declared, there is
+        nothing to read.
         """
 
         if self._conferme is None and not self.conferme_path.exists():
@@ -459,26 +449,24 @@ class ReviewStore:
         return self.magazzino_conferme()
 
     def esporta_le_conferme(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        """Tutto quello che l'utente ha confermato, storico compreso.
+        """Everything the user has confirmed, history included.
 
-        Due elenchi perche' il magazzino ha due tabelle e tutt'e due sono
-        memoria «per sempre»: le conferme («si', e' lo stesso articolo») e le
-        uguaglianze fra codici a barre. Portarne via una sola vorrebbe dire
-        chiamare «copia» meta' del file.
+        Two lists because the store has two tables and both are permanent
+        memory: confirmations ("yes, same item") and declared barcode
+        equalities. Exporting only one would make "copy" mean half the file.
 
-        ⚠ `conferme.db` e' la memoria «per sempre» del programma — un
-        abbinamento confermato vale anche per il listino della settimana
-        prossima — e da quando `app/data/` e' ignorato per intero da git non ha
-        piu' nessuna copia di sicurezza. `MagazzinoConferme.esporta` esisteva
-        dal primo giorno, col suo perche' scritto nel docstring («un `.db` non
-        si legge a occhio»), e non la chiamava nessuno fuori dai collaudi:
-        questa e' la via d'uscita che rende quel perche' vero, e insieme il solo
-        modo di farsi una copia senza copiare a mano un file SQLite aperto.
+        `conferme.db` is the program's permanent memory — a confirmed match
+        stays valid for next week's price list too — and since `app/data/`
+        is entirely git-ignored it has no backup copy of its own.
+        `MagazzinoConferme.esporta` is the documented, supported way to get a
+        readable copy of an otherwise-opaque `.db` file without copying an
+        open SQLite file by hand.
 
-        Il magazzino **non si crea** se non c'e': un programma senza conferme
-        non deve trovarsi un `conferme.db` vuoto per aver aperto Impostazioni.
-        E se non si apre si risponde con l'elenco vuoto, come per le
-        uguaglianze: il motivo sta gia' fra gli avvisi del confronto.
+        The store is never created if it doesn't already exist: a program
+        with no confirmations must not end up with an empty `conferme.db`
+        just from opening Settings. If it fails to open, this returns the
+        empty lists, same as equalities do; the reason is already among the
+        comparison's warnings.
         """
 
         magazzino = self._magazzino_solo_se_c_e()
@@ -491,12 +479,12 @@ class ReviewStore:
             return [], []
 
     def uguaglianze_dichiarate(self) -> list[dict[str, Any]]:
-        """Le dichiarazioni in vigore, una per coppia, per la pagina.
+        """Declared equalities in force, one per pair, for the page.
 
-        Le **coppie** e non i gruppi: si toglie quello che qualcuno ha detto.
-        Se il magazzino non si apre si risponde con l'elenco vuoto — il motivo è
-        già fra gli avvisi del confronto, e una pagina che non si disegna per
-        una memoria in meno sarebbe sproporzionata.
+        Pairs, not groups: this removes exactly what was declared, no more.
+        If the store fails to open, this returns the empty list — the reason
+        is already among the comparison's warnings, and failing to render
+        the page over one missing memory would be disproportionate.
         """
 
         magazzino = self._magazzino_solo_se_c_e()
@@ -509,26 +497,23 @@ class ReviewStore:
             return []
 
     def elenco_delle_uguaglianze(self, query: str = "") -> dict[str, Any]:
-        """Le dichiarazioni «questi due codici sono lo stesso articolo», leggibili.
+        """Declared "these two codes are the same item" statements, made readable.
 
-        ⚠ **Perche' non basta la coppia di codici.** Fino al 18 agosto 2026
-        l'elenco diceva `4009428623194 = 8729721830575` e basta: due numeri di
-        tredici cifre, cioe' esattamente l'informazione che non permette di
-        giudicare se la dichiarazione e' giusta. Daniele: «vorrei vedere anche
-        il nome del prodotto da gestionale e quello da listino, altrimenti non
-        posso valutare la correttezza».
+        A bare pair of thirteen-digit codes gives the reader nothing to
+        judge the declaration against — it needs both product names to be
+        checkable at a glance.
 
-        I nomi ci sono gia' e non serve nessuna colonna nuova: il magazzino
-        salva l'**impronta** dei due articoli (`impronta_prodotto` per il
-        gestionale, `impronta_articolo` per la riga di listino), e dentro
-        l'impronta il nome normalizzato c'e'. Qui si aprono quelle due impronte
-        nei pezzi che le compongono. Sono nomi **normalizzati** — maiuscoli e
-        senza punteggiatura — e va detto: sono quelli con cui il programma
-        confronta, non quelli che il fornitore stampa.
+        Both names are already available with no new column needed: the
+        store saves a fingerprint for each item (`impronta_prodotto` for the
+        management-software side, `impronta_articolo` for the price-list
+        row), and the normalized name is embedded in that fingerprint. This
+        unpacks the two fingerprints into their component fields. The names
+        are normalized — uppercase, punctuation stripped — the same form the
+        program matches on, not what the supplier prints.
 
-        La ricerca guarda tutto quello che si vede: codici, nomi, fornitore e
-        motivo. Un elenco che cresce di una riga a settimana dopo un anno ne ha
-        cinquanta, e cercarle a occhio e' il modo di non rileggerle mai.
+        Search looks at everything shown: codes, names, supplier and reason.
+        A list that grows by one row a week accumulates dozens of entries
+        within a year, and free-text search is what keeps them usable.
         """
 
         cercato = " ".join(str(query or "").split()).casefold()
@@ -536,8 +521,8 @@ class ReviewStore:
         voci = []
         for riga in dichiarate:
             voce = self._uguaglianza_leggibile(riga)
-            # `cercabile` e' il testo su cui si cerca, non un campo della
-            # dichiarazione: esce di qui e non arriva alla pagina.
+            # `cercabile` is the search text, not a field of the
+            # declaration: it's popped here and never reaches the page.
             testo = voce.pop("cercabile")
             if cercato and cercato not in testo:
                 continue
@@ -552,13 +537,14 @@ class ReviewStore:
 
     @staticmethod
     def _uguaglianza_leggibile(riga: Any) -> dict[str, Any]:
-        """Una dichiarazione con dentro i nomi, non solo i due numeri.
+        """Unpack a declaration into names, not just the two codes.
 
-        Le due impronte hanno forma diversa perche' rispondono a due domande
-        diverse: quella del gestionale e' `codice|nome`, quella della riga di
-        listino e' `fornitore|codice|codice fornitore|nome`. Si aprono per
-        posizione, e quello che manca resta vuoto: un'impronta di una versione
-        piu' vecchia non deve far sparire la riga dall'elenco.
+        The two fingerprints have different shapes because they answer
+        different questions: the management-software one is
+        `code|name`, the price-list row one is
+        `supplier|code|supplier_code|name`. Fields are unpacked by position,
+        and a missing field stays empty — a fingerprint from an older format
+        must not make the row disappear from the list.
         """
 
         riga = riga if isinstance(riga, dict) else {}
@@ -593,13 +579,14 @@ class ReviewStore:
         }
 
     def uguaglianze_in_vigore(self) -> list[list[str]]:
-        """I gruppi di codici a barre dichiarati uguali, per la catena.
+        """Groups of barcodes declared equal, for the matching chain.
 
-        La chiama `pipeline_jobs` all'inizio della lettura dei listini e ne
-        scrive il risultato nella cartella della run. Se il magazzino non si
-        apre si risponde «nessuna»: il motivo e' gia' in `_conferme_guasto` e
-        finisce fra gli avvisi del confronto, e fermare un ricalcolo per una
-        memoria che e' un di piu' sarebbe sproporzionato.
+        Called by `pipeline_jobs` at the start of reading price lists, and
+        its result is written into the run folder. If the store fails to
+        open, this returns no groups: the reason is already in
+        `_conferme_guasto` and surfaces among the comparison's warnings, and
+        blocking a recompute over this supplementary memory would be
+        disproportionate.
         """
 
         magazzino = self._magazzino_solo_se_c_e()
@@ -612,23 +599,21 @@ class ReviewStore:
             return []
 
     def rifiuti_in_vigore(self) -> dict[tuple[str, str], dict[str, Any]]:
-        """I «no» dati, indicizzati per (fornitore, articolo del gestionale).
+        """Declared rejections, indexed by (supplier, management-software item).
 
-        Una query sola e non una per prodotto: questa funzione gira a ogni
-        lettura del confronto, e la pagina si autosalva 450 ms dopo ogni
-        modifica.
+        A single query, not one per product: this runs on every comparison
+        read, and the page autosaves 450ms after each edit.
 
-        ⚠ Passa da `_magazzino_solo_se_c_e` e non da `magazzino_conferme`, per
-        la stessa ragione delle uguaglianze: un programma senza conferme non
-        deve trovarsi un `conferme.db` vuoto per aver aperto una pagina, e su
-        Windows un file SQLite aperto tiene in ostaggio la cartella che lo
-        contiene.
+        Goes through `_magazzino_solo_se_c_e`, not `magazzino_conferme`, for
+        the same reason as equalities: a program with no confirmations must
+        not end up with an empty `conferme.db` just from opening a page, and
+        on Windows an open SQLite file locks the folder that contains it.
 
-        Se il magazzino non si apre si risponde «nessuno»: il motivo e' gia' in
-        `_conferme_guasto` e finisce fra gli avvisi del confronto. ⚠ La
-        direzione della degradazione e' quella prudente per costruzione — senza
-        memoria dei rifiuti l'offerta torna visibile e la domanda torna a essere
-        posta, cioe' si torna a chiedere invece di ordinare per conto proprio.
+        If the store fails to open, this returns no rejections; the reason
+        is already in `_conferme_guasto` and surfaces among the comparison's
+        warnings. The failure direction is deliberately the safe one: with
+        no rejection memory, the offer becomes visible again and the
+        question is asked again, rather than silently staying hidden.
         """
 
         magazzino = self._magazzino_solo_se_c_e()
@@ -645,34 +630,34 @@ class ReviewStore:
         }
 
     def spegni_le_offerte_rifiutate(self, review: dict[str, Any]) -> None:
-        """«Non e' lo stesso articolo»: l'offerta esce dal confronto.
+        """Apply "not the same item": the offer drops out of the comparison.
 
-        E' il gemello negativo di `dichiara_la_conferma`, e produce l'unico
-        effetto che serve: l'offerta smette di essere utilizzabile. Da li' in poi
-        non si tocca nient'altro, perche' `offerta.offer_is_available` e' l'unica
-        risposta a «si puo' ordinare» e la chiamano gia' tutti —
-        `nessuna_offerta_utilizzabile`, `validate_snapshot`, il ciclo
-        `da_reperire` di `compile`, `pipeline_jobs._ripulisci_stato`.
+        The negative counterpart of `dichiara_la_conferma`, producing the
+        one effect that matters: the offer stops being usable. Nothing else
+        is touched, because `offerta.offer_is_available` is the single
+        source of truth for "can this be ordered", already used by
+        `nessuna_offerta_utilizzabile`, `validate_snapshot`, the
+        `da_reperire` loop in `compile`, and `pipeline_jobs._ripulisci_stato`.
 
-        ⚠ **Solo se l'impronta della riga di oggi combacia con quella su cui il
-        no e' stato detto.** Stessa disciplina di `conferma_in_vigore`: il
-        listino della settimana prossima puo' abbinare quel prodotto a un'altra
-        riga, e su quella nessuno ha ancora detto niente — sarebbe una risposta
-        applicata a merce mai vista, che e' il difetto che questo magazzino
-        esiste per chiudere.
+        Only applied when today's row fingerprint matches the one the
+        rejection was recorded against — same discipline as
+        `conferma_in_vigore`: next week's price list may match that product
+        to a different row that nobody has judged yet, and applying the old
+        rejection to it would be a decision on merchandise never seen.
 
-        ⚠ **Qui e non in `review()`.** `dichiara_la_conferma` sta in `review()`
-        apposta, perche' un si' rimesso dal magazzino durante il salvataggio
-        cancellerebbe la revoca. Il no non ha quel problema: non esiste nessuna
-        casella nello snapshot che lo dica, si da' e si toglie solo dalla sua
-        rotta, quindi il magazzino e' l'unica autorita' in lettura come in
-        scrittura. E deve stare sulla porta comune, altrimenti
-        `validate_snapshot` vedrebbe l'offerta ancora viva e rifiuterebbe con
-        `OFFERTA_NON_VALIDA` la sola risposta rimasta all'utente.
+        Called here, not in `review()`. `dichiara_la_conferma` lives in
+        `review()` on purpose, because a confirmation re-applied from the
+        store during a save would silently undo a revocation. A rejection
+        doesn't have that problem: there's no snapshot field for it, it is
+        only ever set or cleared through its own route, so the store is the
+        sole authority for both reading and writing it. It must run on the
+        shared read path, or `validate_snapshot` would still see the offer
+        as live and reject the user's only remaining answer with
+        `OFFERTA_NON_VALIDA`.
 
-        Non e' distruttiva: `base_review()` rilegge `review_data.json` dal disco
-        a ogni chiamata, quindi togliere il no fa tornare l'offerta esattamente
-        com'era — stato, prezzi, richiesta di conferma.
+        Not destructive: `base_review()` re-reads `review_data.json` from
+        disk on every call, so clearing the rejection restores the offer
+        exactly as it was — status, prices, confirmation requirement.
         """
 
         rifiuti = self.rifiuti_in_vigore()
@@ -682,7 +667,7 @@ class ReviewStore:
             if not isinstance(product, dict):
                 continue
             articolo = impronta_prodotto(product)
-            # Un articolo che non si identifica non ha nessun no da ritrovare.
+            # An item that can't be fingerprinted has no rejection to look up.
             if not articolo:
                 continue
             spente: list[dict[str, Any]] = []
@@ -696,16 +681,16 @@ class ReviewStore:
                 offer["available"] = False
                 offer["status"] = STATO_RIFIUTATO_UTENTE
                 offer["matchStatus"] = STATO_RIFIUTATO_UTENTE
-                # La domanda non e' piu' aperta: chiederla ancora su un'offerta
-                # che non si puo' scegliere terrebbe in piedi il bloccante
-                # «Conferma richiesta» su un prodotto senza niente da
-                # confermare, che e' esattamente il vicolo cieco di partenza.
+                # The question is no longer open: still asking it on an
+                # offer that can't be chosen would keep the blocking
+                # "confirmation required" state on a product with nothing
+                # left to confirm.
                 offer["requiresConfirmation"] = False
                 offer["confirmed"] = False
-                # Quello che la pagina deve poter dire: che cosa e' stato
-                # rifiutato e quando. Senza, la griglia delle offerte
-                # dichiarerebbe di quel fornitore «non ce l'hanno nel listino di
-                # adesso» — falso: la riga ce l'hanno.
+                # What the page needs to be able to say: what was rejected
+                # and when. Without it, the offer grid would claim this
+                # supplier doesn't carry the item — false, the row is there,
+                # it's just rejected.
                 offer["rifiutata"] = {
                     "since": str(voce.get("valida_dal") or ""),
                     "description": str(offer.get("description") or ""),
@@ -713,26 +698,28 @@ class ReviewStore:
             self._riscegli_dopo_il_no(product, spente)
 
     def _riscegli_dopo_il_no(self, product: dict[str, Any], spente: list[dict[str, Any]]) -> None:
-        """Dopo un no: le righe con lo stesso codice chiedono conferma, e se il
-        no ha spento l'offerta **scelta** la scelta si rifà.
+        """After a rejection: same-code rows need confirmation, and if the
+        rejection turned off the selected offer, reselect a new one.
 
-        Il sospetto sta sulle **offerte**, non sul prodotto. Se la riga
-        rifiutata non e' l'articolo, una riga con lo stesso codice a barre
-        presso un altro fornitore e' sospetta — e deve chiederlo qualunque sia
-        la strada per cui finisce scelta: il ripiego qui, uno sconto di testata
-        che `review()` applica dopo, uno spostamento a mano, il preventivo di
-        spostamento. Tutti passano da `offer_needs_confirmation`, che somma
-        prodotto e offerta. Messo sul prodotto — la prima versione, 21 settembre
-        2026 — la domanda restava sul ripiego calcolato qui senza sconti, e la
-        riga NOCE col codice appena rifiutato passava in ordine senza
-        conferma (verifica avversariale dello stesso giorno).
+        Suspicion lives on individual offers, not on the product. If the
+        rejected row isn't the item, another row with the same barcode at a
+        different supplier is suspect too — and must ask for confirmation no
+        matter which path picks it: the fallback selection done here, a
+        header discount applied later by `review()`, a manual move, or the
+        move-quantity preview. All of them go through
+        `offer_needs_confirmation`, which combines product- and offer-level
+        flags; marking the flag only on the product would leave the
+        fallback selection computed here unflagged, letting a same-barcode
+        row slip into the order with no confirmation.
 
-        La scelta si rifà perche' il confronto l'ha scritta la catena, che i no
-        non li conosce: la settimana dopo un «non è lo stesso articolo» il
-        prodotto nasceva ancora sulla riga spenta, `dichiara_la_conferma`
-        cercava il si' sul fornitore sbagliato, e un si' dato sul nuovo non si
-        riapplicava mai. La domanda di prodotto, che era della riga spenta, si
-        toglie: da li' in poi decidono le offerte.
+        The selection is redone here because the comparison result comes
+        from the matching chain, which has no notion of rejections: without
+        this, a product would keep pointing at the disabled row after a
+        rejection, `dichiara_la_conferma` would look up the confirmation
+        under the wrong supplier, and a confirmation given on the new
+        selection would never get reapplied. The product-level question,
+        which belonged to the disabled row, is cleared here — from this
+        point on, offers decide.
         """
 
         codici = {
@@ -762,18 +749,17 @@ class ReviewStore:
         product["confirmationMessage"] = ""
 
     def chiudi(self) -> None:
-        """Restituisce il file delle conferme.
+        """Release the confirmations file.
 
-        ⚠ Serve perche' SQLite tiene il file **aperto** finche' la connessione
-        vive, e su Windows un file aperto non si cancella e non si rinomina —
-        compresa la cartella che lo contiene. Un negozio che nessuno usa piu' e
-        non l'ha restituito lascia il suo `conferme.db` in ostaggio: l'ha
-        scoperto la suite intera, dove ventisei negozi nascono in cartelle
-        temporanee e alla pulizia ventinove prove morivano con «Il file è
-        utilizzato da un altro processo». I test mirati non lo vedevano.
+        Needed because SQLite keeps the file open for the life of the
+        connection, and on Windows an open file can't be deleted or
+        renamed — nor can the folder that contains it. A store that's no
+        longer used and never released leaves its `conferme.db` locked,
+        which matters most for the full test suite, where many stores are
+        created in temp folders that must be cleaned up afterward.
 
-        Chiamarlo due volte non fa danno, e dopo il negozio riapre da capo alla
-        prima domanda.
+        Safe to call more than once; the store simply reopens on the next
+        confirmation lookup.
         """
 
         if self._conferme is not None:
@@ -781,18 +767,18 @@ class ReviewStore:
             self._conferme = None
 
     def conferma_in_vigore(self, product: Any, offer: Any) -> dict[str, Any] | None:
-        """La conferma che copre **questa** offerta di **questo** articolo.
+        """Return the confirmation covering this offer of this item, if any.
 
-        Il magazzino risponde anche quando l'articolo del fornitore di oggi non
-        e' piu' quello confermato — e' una sua scelta dichiarata, che serve a
-        distinguere «hanno cambiato il formato del listino» da «gli hanno
-        cambiato l'articolo sotto il naso». Il confronto lo fa quindi chi
-        chiama, cioe' qui: si applica solo la conferma la cui impronta combacia
-        con la riga di listino di adesso.
+        The store returns a match even when today's supplier row is no
+        longer the one that was confirmed — that's a deliberate choice, so
+        callers can tell "the price-list format changed" apart from "the
+        item was swapped under the same row". The freshness check therefore
+        happens here: only a confirmation whose fingerprint matches the
+        current price-list row is applied.
 
-        Una conferma **negata** (`accettata` falsa) non e' una conferma: si
-        risponde `None`, perche' il posto in cui un «no» conta e' un'altra
-        domanda e non questa.
+        A rejected confirmation (`accettata` false) is not a confirmation:
+        this returns `None`, since rejections are handled by a separate
+        lookup, not this one.
         """
 
         if not isinstance(offer, dict):
@@ -800,10 +786,10 @@ class ReviewStore:
         fornitore = offer_supplier_id(offer)
         articolo = impronta_prodotto(product)
         impronta = impronta_articolo(offer)
-        # ⚠ Le impronte **prima** di aprire il file: un articolo che non si
-        # identifica non ha niente da chiedere, e aprire il magazzino per
-        # scoprirlo creerebbe un `conferme.db` a un programma che di conferme
-        # non ne ha nessuna.
+        # Fingerprints are checked before opening the store: an item that
+        # can't be fingerprinted has nothing to look up, and opening the
+        # store just to find that out would create a `conferme.db` for a
+        # program that has never recorded any confirmation.
         if not fornitore or not articolo or not impronta:
             return None
         magazzino = self.magazzino_conferme()
@@ -819,26 +805,26 @@ class ReviewStore:
         return voce
 
     def dichiara_la_conferma(self, product: Any) -> None:
-        """Sul prodotto: se una conferma c'e' gia', **quale** e da quando.
+        """Set, on the product, whether a confirmation already exists and since when.
 
-        Sono i due dati che la pagina dovra' saper dire — che una risposta e'
-        gia' stata data e quando — e nascono qui perche' il posto in cui vive
-        una conferma e' il magazzino, non lo stato della settimana.
+        These are the two facts the page needs to show — that an answer was
+        already given, and when — and they're computed here because a
+        confirmation lives in the store, not in this week's saved state.
 
-        Il campo `confirmation` e' informativo e puo' mancare; `confirmed`
-        invece diventa vero anche senza una decisione salvata, ed e' il punto
-        di tutto il magazzino: la settimana dopo l'export del gestionale e'
-        un altro file, il prodotto ha un altro numero di riga e la sua
-        decisione non c'e' piu' — ma l'articolo e' lo stesso, e la risposta
-        gia' data resta valida.
+        `confirmation` is informational and can be absent; `confirmed`
+        becomes true even with no matching entry in this week's state,
+        which is the whole point of the store: next week's
+        management-software export is a different file, the product has a
+        different row number and its saved decision is gone — but the item
+        is the same, and the earlier answer still applies.
         """
 
         if not isinstance(product, dict):
             return
         offerta = find_offer(product, str(product.get("selectedSupplierId") or ""))
-        # Solo dove una conferma serviva davvero: un abbinamento certo non e'
-        # mai stato una domanda, e dirgli «confermato il 12 agosto» sarebbe una
-        # notizia inventata su cinquecento righe.
+        # Only where a confirmation was actually needed: a certain match was
+        # never a question, so reporting it as confirmed would be a fact
+        # this store never recorded.
         if offerta is None or not offer_needs_confirmation(product, offerta):
             return
         voce = self.conferma_in_vigore(product, offerta)
@@ -848,31 +834,30 @@ class ReviewStore:
         product["confirmation"] = {
             "supplierId": offer_supplier_id(offerta),
             "since": voce.get("valida_dal") or "",
-            # L'identita' su cui la conferma vale, in chiaro: e' quella che
-            # spiega perche' sopravvive a un listino nuovo, e senza dirla la
-            # pagina non potrebbe spiegarlo a nessuno.
+            # The identity the confirmation applies to, spelled out: this is
+            # what explains why it survives a new price list, and without it
+            # the page couldn't show that to the user.
             "article": voce.get("articolo") or "",
         }
 
     def ricorda_le_conferme(
         self, clean: dict[str, Any], review: dict[str, Any], precedente: dict[str, Any]
     ) -> None:
-        """Scrive nel magazzino quello che l'utente ha appena risposto.
+        """Persist to the store what the user just answered.
 
-        ⚠ **La revoca si riconosce dal confronto con lo stato di prima, non da
-        `confirmed: false`.** La pagina manda `false` in due situazioni che non
-        c'entrano niente fra loro: l'utente ha tolto la spunta, oppure il
-        ricalcolo ha fatto scadere la conferma perche' la riga di listino porta
-        un altro articolo. Trattarle allo stesso modo svuoterebbe il magazzino
-        proprio nella settimana in cui deve servire. Quindi si dimentica solo
-        quando **prima** c'era una conferma sullo **stesso** articolo del
-        fornitore: quello e' l'utente che ha cambiato idea, e non c'e' altro
-        modo di leggerlo.
+        A revocation is recognized by comparing against the previous state,
+        never from a bare `confirmed: false`. The page sends `false` in two
+        unrelated situations: the user unchecked the confirmation, or the
+        recompute expired it because the price-list row now points to a
+        different item. Treating both the same way would clear the store
+        exactly in the week it's supposed to help. So a confirmation is only
+        forgotten when the previous state held a confirmation on the same
+        item from the same supplier — that's the only case that reads
+        unambiguously as the user changing their mind.
 
-        Un guasto del magazzino **non ferma il salvataggio**: si annota e si
-        dice in pagina. Un `PUT /api/state` che fallisce non perde una
-        risposta, le perde tutte quelle che vengono dopo — e' successo il
-        15 agosto 2026 e non si rifa'.
+        A store failure does not stop the save: it's recorded and surfaced
+        on the page instead. A failing `PUT /api/state` must not lose every
+        answer that comes after it, only the one it couldn't persist.
         """
 
         prodotti = {str(item.get("id")): item for item in review.get("products") or []}
@@ -885,10 +870,10 @@ class ReviewStore:
         if not quando:
             return
 
-        # Prima si guarda **se** c'e' qualcosa da ricordare, e solo dopo si apre
-        # il magazzino: aprirlo comunque creerebbe un `conferme.db` a un
-        # programma che di conferme non ne ha mai avuta nessuna, e su Windows un
-        # file aperto tiene in ostaggio la cartella che lo contiene.
+        # First check whether there's anything to remember, and only then
+        # open the store: opening it unconditionally would create a
+        # `conferme.db` for a program that has never recorded a
+        # confirmation, and on Windows an open file locks its folder.
         da_scrivere: list[tuple[bool, str, str, str, str]] = []
         for decisione in clean.get("products") or []:
             identificativo = str(decisione.get("id") or "")
@@ -897,13 +882,12 @@ class ReviewStore:
             if prodotto is None or not fornitore:
                 continue
             offerta = find_offer(prodotto, fornitore)
-            # ⚠ Si ricorda solo dove una conferma era **richiesta**. Il
-            # confronto marca `confirmed` anche sugli abbinamenti certi
-            # (`server.py`, riassegnazione dello sconto: `confirmed = not
-            # requiresConfirmation`), quindi senza questo filtro il magazzino si
-            # riempirebbe di quattrocento risposte che nessuno ha mai dato — e
-            # le poche vere non si troverebbero piu' in mezzo. Una memoria che
-            # l'utente non puo' rileggere non e' una memoria.
+            # Only remembered where a confirmation was actually required.
+            # The comparison also sets `confirmed` on certain matches
+            # (`confirmed = not requiresConfirmation`), so without this
+            # filter the store would fill up with answers the user never
+            # actually gave, burying the few real ones. A memory the user
+            # can't tell apart from noise isn't a memory.
             if offerta is None or not offer_needs_confirmation(prodotto, offerta):
                 continue
             articolo = impronta_prodotto(prodotto)
@@ -934,15 +918,16 @@ class ReviewStore:
                         quando=quando,
                     )
                 else:
-                    # ⚠ Solo se quello in vigore e' un si'. `dimentica` chiude la
-                    # riga in vigore qualunque essa sia, e da quando esiste il
-                    # «non è lo stesso articolo» quella riga puo' essere un NO:
-                    # un autosalvataggio che passasse di qui lo cancellerebbe, e
-                    # la domanda tornerebbe la settimana dopo su un abbinamento
-                    # che l'utente aveva gia' scartato. Cintura sopra le bretelle
-                    # — la rotta del rifiuto svuota anche il fornitore scelto, e
-                    # senza fornitore questo ciclo salta il prodotto — ma e' la
-                    # difesa che costa meno di tutte.
+                    # Only clear the entry if it's currently a yes.
+                    # `dimentica` closes whatever row is currently in force,
+                    # and that row could be a rejection instead of a
+                    # confirmation: an autosave that reached this branch
+                    # unconditionally would erase the rejection, bringing
+                    # the question back on a match the user had already
+                    # dismissed. This is a belt-and-suspenders check — the
+                    # rejection route also clears the selected supplier, so
+                    # this loop would skip the product anyway — but it's the
+                    # cheapest safeguard available.
                     voce_in_vigore = magazzino.cerca(fornitore, articolo)
                     if voce_in_vigore is None or voce_in_vigore.get("accettata"):
                         magazzino.dimentica(fornitore, articolo, quando=quando)
@@ -950,27 +935,28 @@ class ReviewStore:
             self._conferme_guasto = frase(exc) or "Le conferme non sono state salvate."
 
     def riconfigura_compilazione(self, review: dict[str, Any]) -> None:
-        """Dopo un ricalcolo i listini sono altri file: la scrittura si rifa'.
+        """After a recompute, price lists are different files: rebuild the write config.
 
-        Senza questo passaggio la compilazione userebbe la configurazione della
-        settimana scorsa — cioe' **il listino della settimana scorsa** — con i
-        numeri di riga del confronto di adesso.  Il writer se ne accorgerebbe
-        solo quando il file punta ancora allo stesso percorso, perche' li'
-        confronta l'impronta; con un listino caricato con un nome nuovo no.
+        Without this, order compilation would use last week's writer
+        configuration — pointing at last week's price list — with this
+        week's row numbers. The writer would only catch the mismatch when
+        the file path is unchanged, since that's the only case where it
+        checks the fingerprint; a price list uploaded under a new name
+        would not be caught.
         """
 
         if self.writer_config is None:
             return
-        from launcher import prepare_writer_config  # import tardivo: il server parte anche senza
+        from launcher import prepare_writer_config  # lazy import: the server must start even without it
 
         setup = prepare_writer_config(review, write=True, destinazione=self.writer_config)
         if setup.config_path is None:
-            # ⚠ `prepare_writer_config` torna senza scrivere e SENZA sollevare
-            # quando manca un requisito (Node sparito, script mancante): senza
-            # questa riga il ramo piu' probabile falliva in silenzio e l'avviso
-            # COMPILAZIONE_DA_RICONFIGURARE non nasceva (revisione del 13
-            # agosto 2026).  La guardia del run_id terrebbe comunque chiusa la
-            # compilazione, ma la promessa e' che lo si dica subito.
+            # `prepare_writer_config` can return without writing and without
+            # raising when a requirement is missing (Node absent, script
+            # missing). Without this explicit raise, that path fails
+            # silently and the COMPILAZIONE_DA_RICONFIGURARE warning never
+            # surfaces. The run-id guard would still block compilation, but
+            # the goal is to report the failure immediately.
             raise RuntimeError(setup.message)
 
     def avvia_pipeline(self) -> dict[str, Any]:
@@ -991,7 +977,7 @@ class ReviewStore:
     def conferma_schemi(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self.pipeline_jobs.conferma_schemi(payload)
 
-    # Il selettore delle colonne aperto a mano su un listino gia' caricato.
+    # The column picker opened by hand on an already-uploaded price list.
     def colonne_del_documento(self, nome: Any) -> dict[str, Any]:
         return self.pipeline_jobs.colonne_del_documento(nome)
 
@@ -1002,12 +988,13 @@ class ReviewStore:
         return self.pipeline_jobs.salva_colonne_del_documento(payload)
 
     def colonne_d_ordine(self, supplier_id: str) -> dict[str, Any]:
-        """Fra quali colonne si puo' scegliere quella dell'ordine, per un fornitore.
+        """List the columns available for the order-quantity column, per supplier.
 
-        Si mostrano **tutte** le colonne del foglio, anche quelle che il
-        programma legge: nasconderle farebbe sembrare che il documento ne abbia
-        meno di quante ne ha, e chi cerca «quella dopo il prezzo» conta quelle
-        che vede. Quelle occupate arrivano marcate, non tolte.
+        Every column in the sheet is shown, including the ones the pipeline
+        already reads: hiding them would make the document look like it has
+        fewer columns than it does, and a user looking for "the one after
+        the price column" counts what's visible. Columns already in use are
+        flagged, not removed from the list.
         """
 
         documento = self.pipeline_jobs.documento_del_fornitore(supplier_id)
@@ -1026,28 +1013,29 @@ class ReviewStore:
         }
 
     def cambia_colonna_d_ordine(self, payload: Any) -> dict[str, Any]:
-        """Sposta la colonna in cui si scrivono le quantita' ordinate.
+        """Move the column the order quantities get written into.
 
-        ⚠ **La prova che decide non e' scritta qui**: e' `launcher.source_rule`,
-        cioe' la stessa funzione che attiva la compilazione. Si costruisce la
-        dichiarazione che si vorrebbe scrivere, la si prova sul documento vero,
-        e si tocca il registro **solo se passa**. Se qui nascesse una seconda
-        regola, la settimana prossima direbbe una cosa diversa da quella che
-        compila — ed e' esattamente l'errore che il 14 agosto 2026 ha bloccato
-        LARICE dal vivo.
+        The check that decides whether the new column is valid is not
+        reimplemented here: it's `launcher.source_rule`, the same function
+        that drives order compilation. The declaration to write is built,
+        tried against the real document, and the registry is only touched
+        if it passes. A second, independent rule here could disagree with
+        the one that actually compiles the order, silently breaking
+        compilation for that supplier.
 
-        Si scrive in quattro posti, e sono quattro perche' quattro sono le
-        autorita' che devono dire la stessa cosa:
+        Written in four places, because four different readers need to
+        agree on the same fact:
 
-        1. il **registro**, che vale per tutte le settimane a venire;
-        2. la **mappatura confermata** del registro, per i fornitori che
-           dichiarano `from_field_mapping`: `source_rule` si rifiuta se le due
-           divergono, e cambiarne una sola lascerebbe il fornitore muto;
-        3. la **scheda del confronto in uso**, altrimenti la colonna nuova
-           varrebbe solo dal prossimo ricalcolo — cioe' non adesso;
-        4. la **decisione scritta a mano**, quando ce n'e' una per quel
-           documento: e' sovrana sul registro, e lasciarla indietro farebbe
-           tornare la colonna vecchia al primo ricalcolo, in silenzio.
+        1. the adapter registry, which governs every future week;
+        2. the registry's confirmed field mapping, for suppliers that
+           declare `from_field_mapping` — `source_rule` refuses to run if
+           the two disagree, so updating only one would leave the supplier
+           unreadable;
+        3. the comparison currently loaded, otherwise the new column
+           would only take effect on the next recompute, not now;
+        4. the manual override for that document, when one exists: it
+           takes precedence over the registry, and leaving it stale would
+           silently revert to the old column on the next recompute.
         """
 
         from launcher import resolve_source_path, source_rule  # noqa: PLC0415
@@ -1107,26 +1095,27 @@ class ReviewStore:
                     "la colonna si sceglie quando ti chiedo le colonne del documento."
                 )
             intestazione = voce.get("intestazione")
-            # ⚠ Un listino puo' non avere **nessuna** riga di intestazione —
-            # LARICE e' cosi' — e allora sopra la colonna non c'e' nessuna cella
-            # da confermare vuota. Misurato prima di scriverlo: dichiararla lo
-            # bloccherebbe con una frase che accusa il registro.
+            # Some price lists have no header row at all, so there is no
+            # cell above the column to confirm as empty in that case.
+            # Requiring one would block this with an error that blames the
+            # registry for something it never claimed.
             c_e_intestazione = bool(effettiva.get("headerRow"))
             candidato = dict(adattatore)
-            # ⚠ Con l'id cosi' com'e' questa mossa scriveva una **fotocopia
-            # completa** della voce spedita nel registro imparato, e da quel
-            # momento nessun aggiornamento di quell'adattatore arrivava piu':
-            # e' la stessa malattia di `offerte_v1`, dove l'impronta stretta
-            # appena scritta e' rimasta spenta sotto una copia imparata. Adesso
-            # la voce nuova prende un id suo — `betulla_v1__locale` — con la
-            # stessa regola della mappatura guidata, che sta in un posto solo.
+            # Keeping the adapter's original id here would write a full
+            # copy of the row that was just sent to the learned registry,
+            # and from that point no further update to that adapter would
+            # ever arrive — the same failure mode as a stale fingerprint
+            # left shadowed under a learned copy. The new entry instead gets
+            # its own id, following the same suffix convention the guided
+            # mapping flow uses, kept in one place.
             candidato["id"] = registro.identificativo_da_scrivere(
                 adattatore.get("id"), self.pipeline_jobs.configurazione.adapters_path
             )
             if candidato["id"] != adattatore.get("id"):
-                # Scritto nella voce e non solo nel nome, come fa
-                # `impara_adattatore`: chi la rilegge fra un mese deve poter
-                # dire da dove viene senza conoscere la convenzione del suffisso.
+                # Recorded in the entry itself, not only in the id's suffix,
+                # the same way `impara_adattatore` does it: a reader coming
+                # back later can tell where it came from without knowing the
+                # suffix convention.
                 candidato["derivato_da"] = adattatore.get("id")
             candidato["order_write"] = colonna_ordine.dichiarazione_aggiornata(
                 scrittura, lettera, intestazione, c_e_intestazione=c_e_intestazione
@@ -1160,9 +1149,9 @@ class ReviewStore:
                 )
             regola, motivo = source_rule(supplier_id, sorgente, prova, candidato)
             if regola is None:
-                # La frase e' quella della verifica vera, non una riscritta qui:
-                # e' la stessa che comparirebbe al prossimo avvio, e chi la legge
-                # deve poterla ritrovare identica.
+                # The message is the real check's own message, not a copy
+                # written here: it's the same one that would show up on the
+                # next startup, and it must read identically in both places.
                 raise ValueError(motivo or f"{nome}: la colonna {lettera} non è scrivibile.")
 
             registro.scrivi_adattatore(candidato, self.pipeline_jobs.configurazione.adapters_path)
@@ -1176,18 +1165,17 @@ class ReviewStore:
                 intestazione,
                 c_e_intestazione=c_e_intestazione,
             )
-            # ⚠ Da qui in poi la colonna **e' gia' cambiata**: la dichiarazione
-            # e' scritta e ha passato la verifica sul documento. Se la
-            # configurazione di scrittura non si rifa' — Node sparito, cartella
-            # non scrivibile — lasciare uscire l'eccezione direbbe all'utente che
-            # non e' successo niente, mentre e' successo quasi tutto. E' la
-            # stessa mezza verita' che il 17 agosto mostrava il riquadro verde
-            # per una compilazione senza nessuna copia: si dice che cosa e'
-            # cambiato, che cosa no, e come si rimedia.
+            # From this point the column has already been changed: the
+            # declaration is written and passed verification against the
+            # document. If rebuilding the write configuration fails — Node
+            # missing, folder not writable — letting the exception propagate
+            # would tell the user nothing happened, when almost everything
+            # did. The response instead states what changed, what didn't,
+            # and how to recover.
             avviso = ""
             try:
                 self.riconfigura_compilazione(review)
-            except Exception as exc:  # noqa: BLE001 - qualunque motivo, va detto
+            except Exception as exc:  # noqa: BLE001 - report whatever the cause is
                 avviso = (
                     f"La colonna è cambiata, ma la configurazione di scrittura non si è "
                     f"rifatta: {frase(exc)} Si rifà da sola al prossimo confronto, oppure "
@@ -1213,7 +1201,7 @@ class ReviewStore:
 
     @staticmethod
     def _scheda_del_fornitore(review: Any, supplier_id: str) -> dict[str, Any] | None:
-        """La scheda-documento del listino di questo fornitore nel confronto."""
+        """The document entry for this supplier's price list in the comparison."""
 
         cercato = str(supplier_id or "").strip().casefold()
         for voce in (review or {}).get("files") or []:
@@ -1233,13 +1221,11 @@ class ReviewStore:
         *,
         c_e_intestazione: bool = True,
     ) -> None:
-        """Se per quel documento c'e' una decisione scritta a mano, la si allinea.
+        """Keep any manual override for this document in sync with the new column.
 
-        Una decisione manuale e' **sovrana** sul registro
-        (`pipeline_jobs`: «una decisione manuale e' sovrana e copre anche un
-        documento che il registro declasserebbe»). Lasciarla indietro vorrebbe
-        dire vedere la colonna nuova oggi e ritrovarsi quella vecchia al primo
-        ricalcolo, senza una parola.
+        A manual override takes precedence over the adapter registry (see
+        `pipeline_jobs`). Leaving it stale would mean seeing the new column
+        today and silently reverting to the old one on the next recompute.
         """
 
         percorso = self.pipeline_jobs.configurazione.decisioni_manuali_path
@@ -1268,15 +1254,16 @@ class ReviewStore:
             atomic_json(percorso, {"decisions": decisioni})
 
     def review_with_manual_products(self, state: dict[str, Any] | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Il confronto decorato. Con `state` si decora su uno stato in mano.
+        """Return the comparison decorated with manual state. `state` lets a
+        caller decorate against state it already holds in memory.
 
-        ⚠ Lo stato lo rilegge dal disco, e va bene per tutti tranne uno: chi
-        deve vedere il confronto come sara' DOPO una decisione che non ha
-        ancora scritto. `set_supplier_discount` e' quel caso — riassegna il
-        fornitore sui prezzi dello sconto appena messo — e prima di passare di
-        qui si ricostruiva il confronto per conto suo, saltando gli
-        abbinamenti a mano e le risposte alle proposte (revisione del 6
-        settembre 2026).
+        Reading state from disk is right for every caller except one: a
+        caller that needs to see the comparison as it will be AFTER a
+        decision it hasn't written yet. `set_supplier_discount` is that
+        case — it reassigns supplier selection based on a discount it just
+        set — and it must pass its in-memory state through explicitly
+        rather than rebuilding the comparison on its own, which would skip
+        manual matches and answered proposals.
         """
 
         review = self.base_review()
@@ -1294,44 +1281,47 @@ class ReviewStore:
             product["quantityLabel"] = "espositori" if is_display else "colli"
             product["orderUnitLabel"] = "espositori" if is_display else "colli"
         self.apply_match_overrides(review, state)
-        # Le righe scelte a mano nel visualizzatore dei listini: subito dopo le
-        # risposte all'analisi automatica, perche' sono la stessa famiglia di
-        # decisione — «questa riga e' il mio prodotto» — e prima degli sconti,
-        # che devono valere anche su un'offerta appena entrata.
+        # Manually chosen rows from the price-list viewer: right after the
+        # answers to the automatic matching, since they're the same kind of
+        # decision — "this row is my product" — and before discounts, which
+        # must also apply to an offer that was just matched in.
         self._applica_abbinamenti_manuali(review, state)
-        # I «no» dati: dopo le due risposte positive — la proposta accettata e la
-        # riga scelta a mano — perche' e' l'ultima parola su quell'offerta. Non
-        # c'e' conflitto con l'abbinamento manuale: quello riscrive EAN e
-        # descrizione della riga, quindi l'impronta cambia e un vecchio no non la
-        # copre piu'. Se invece l'utente sceglie a mano PROPRIO la riga che aveva
-        # rifiutato, il no viene chiuso da `abbina_riga_di_listino`: due risposte
-        # umane sullo stesso prodotto, vince la piu' recente.
+        # Declared rejections: after both positive answers — the accepted
+        # proposal and the manually chosen row — since a rejection is the
+        # last word on that offer. There's no conflict with a manual match:
+        # that rewrites the row's barcode and description, so its
+        # fingerprint changes and an old rejection no longer covers it. If
+        # the user manually picks the very row they had previously
+        # rejected, the rejection is cleared by `abbina_riga_di_listino`
+        # instead: two human answers on the same product, the more recent
+        # one wins.
         self.spegni_le_offerte_rifiutate(review)
-        # ⚠ Qui, e solo qui.  Questa e' la porta da cui passa **tutto** quello
-        # che tocca un prezzo: la pagina, i totali del riepilogo, l'anteprima
-        # dello spostamento, il piano d'ordine.  Scontare piu' avanti — per
-        # esempio dentro `offer_pricing` — vorrebbe dire prezzi scontati nei
-        # conti del servizio e prezzi pieni sullo schermo, cioe' due verita'
-        # sulla stessa riga.  Scontare piu' indietro non funziona: dentro
-        # `base_review` il catalogo riscrive le offerte con i prezzi freschi
-        # (`catalog_search.enrich_review`) e cancellerebbe lo sconto sui soli
-        # prodotti che il catalogo conosce — a macchia, e in silenzio.
+        # Here, and only here. This is the single point every price-touching
+        # read goes through: the page, the summary totals, the
+        # move-quantity preview, the order plan. Applying the discount later
+        # — inside `offer_pricing`, say — would mean discounted prices in
+        # the service's own totals and full prices on screen, two different
+        # numbers for the same row. Applying it earlier doesn't work either:
+        # inside `base_review` the catalog rewrites offers with fresh prices
+        # (`catalog_search.enrich_review`), which would silently drop the
+        # discount on just the products the catalog happens to know.
         self.applica_sconti_fornitore(review, self.sconti_del_confronto(state, review))
         return review, state
 
-    # Lo sconto di testata che il fornitore fa su tutto il listino: «BETULLA
-    # potrebbe scontare tutto del 6%».  Non sta nel registro degli adattatori —
-    # quello dice come si LEGGE un documento — ma nello stato, accanto alle
-    # altre decisioni di questa settimana.
+    # The header discount a supplier applies across their whole price list
+    # (e.g. "this supplier discounts everything by 6%"). It doesn't live in
+    # the adapter registry — that describes how a document is READ — but in
+    # this week's state, alongside the other decisions made this week.
     @staticmethod
     def sconti_del_confronto(state: Any, review: Any) -> dict[str, float]:
-        """Gli sconti che valgono per QUESTO confronto, gia' controllati.
+        """Discounts valid for THIS comparison, already validated.
 
-        ⚠ Scadono da soli al ricalcolo, senza dire niente a nessuno (decisione
-        di Daniele del 15 agosto 2026: lo sconto lo mette lui subito dopo aver
-        caricato i listini, e non vuole avvisi).  La scadenza e' qui e non in
-        una pulizia periodica: uno sconto legato a un'altra run semplicemente
-        non si applica, e non c'e' finestra in cui possa applicarsi per sbaglio.
+        They expire on their own at the next recompute, with no explicit
+        notice: a discount is set right after uploading price lists and is
+        meant to apply silently from then on. The expiry check happens here
+        rather than in a periodic cleanup: a discount tied to a different
+        run simply never applies, so there's no window where it could apply
+        by mistake.
         """
 
         run = str(((review or {}).get("run") or {}).get("id") or "")
@@ -1350,7 +1340,7 @@ class ReviewStore:
 
     @staticmethod
     def applica_sconti_fornitore(review: dict[str, Any], sconti: dict[str, float]) -> None:
-        """Toglie la percentuale a ogni prezzo delle offerte di quel fornitore."""
+        """Apply the discount rate to every price of that supplier's offers."""
 
         if not sconti:
             return
@@ -1367,10 +1357,11 @@ class ReviewStore:
                     valore = number(offer.get(campo))
                     if valore is not None:
                         offer[campo] = round(valore * (1 - rate), 4)
-                # ⚠ «▼ 0,12 € rispetto all'ultimo pagato» era calcolato a monte
-                # sul prezzo pieno: lasciarlo sarebbe una freccia che indica un
-                # numero che sullo schermo non c'e' piu'.  Tolto, la pagina lo
-                # ricalcola da sola dal prezzo che ha in mano.
+                # The "vs. last paid" price-difference fields are computed
+                # upstream from the full, undiscounted price: keeping them
+                # here would point at a number the screen no longer shows.
+                # Dropped here, the page recomputes them from the price it
+                # actually has.
                 offer.pop("lastPriceDifference", None)
                 offer.pop("lastPriceDifferencePct", None)
                 offer["supplierDiscountRate"] = rate
@@ -1384,12 +1375,12 @@ class ReviewStore:
         )
 
     def apply_match_overrides(self, review: dict[str, Any], state: dict[str, Any]) -> None:
-        """Applica le correzioni umane ai rifiuti sospetti della run corrente.
+        """Apply human corrections to the current run's flagged rejections.
 
-        La decisione vale soltanto se coincidono run, prodotto, fornitore e
-        impronta della riga proposta. Il listino della settimana dopo può
-        riusare la stessa riga numerica per un altro articolo: in quel caso
-        l'impronta cambia e la vecchia risposta resta inerte.
+        A decision only applies when the run, product, supplier and the
+        proposed row's fingerprint all match. Next week's price list can
+        reuse the same row number for a different item; in that case the
+        fingerprint changes and the old decision stays inert.
         """
 
         review_run = str((review.get("run") or {}).get("id") or "")
@@ -1432,8 +1423,9 @@ class ReviewStore:
                     )
                 ]
 
-        # Il conteggio generale scritto dal builder non può conoscere le
-        # risposte arrivate dopo. Si ricostruisce sui soli casi ancora aperti.
+        # The overall count written by the pipeline builder can't know
+        # about answers that arrived afterward, so it's rebuilt here from
+        # the cases that are still open.
         review["warnings"] = [
             warning for warning in review.get("warnings") or []
             if not (isinstance(warning, dict) and warning.get("code") == "RIFIUTI_CON_CANDIDATO_FORTE")
@@ -1463,16 +1455,16 @@ class ReviewStore:
             })
 
     def _profilo_ha_ancora_la_sua_copia(self, profile: Any) -> bool:
-        """Il profilo descrive un documento che negli upload c'e' ancora davvero.
+        """Check whether the profile describes a document still actually present in uploads.
 
-        ⚠ Un profilo non e' il documento: e' la sua scheda.  Se la copia viene
-        cancellata dalla cartella — con Esplora risorse, non dall'app — la
-        scheda resta, e resta a dire il falso.  Questa e' l'unica domanda che
-        distingue una scheda vera da un fantasma, e si fa in un posto solo
-        perche' la sbagliano tutti allo stesso modo (difetto del 15 agosto
-        2026: `upload` rifiutava come «gia' presente» un listino che sul disco
-        non c'era piu', e la pagina — che gia' filtrava i fantasmi — non
-        mostrava niente da eliminare per uscirne).
+        A profile is not the document, it's a record about it. If the file
+        is deleted from the folder directly — outside the app — the record
+        stays behind and keeps claiming the file exists. This is the single
+        check that tells a real record apart from a stale one, kept in one
+        place because every caller needs the same answer: without it,
+        `upload` could reject a re-upload as "already present" for a file
+        that's no longer on disk, with the page's own ghost-filtering
+        leaving nothing visible to delete to break out of that state.
         """
 
         if not isinstance(profile, dict):
@@ -1489,7 +1481,7 @@ class ReviewStore:
     def _profili_veri_e_fantasmi(
         self, profiles_doc: dict[str, Any]
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        """I profili con una copia sul disco, e quelli che la copia non ce l'hanno."""
+        """Split profiles into those with a matching file on disk and those without."""
 
         veri: list[dict[str, Any]] = []
         fantasmi: list[dict[str, Any]] = []
@@ -1500,20 +1492,20 @@ class ReviewStore:
         return veri, fantasmi
 
     def _safe_upload_profiles(self, profiles_doc: dict[str, Any]) -> dict[str, dict[str, Any]]:
-        """Profili il cui percorso coincide davvero con una copia negli upload."""
+        """Profiles whose path really matches a copy in the uploads folder."""
 
         veri, _ = self._profili_veri_e_fantasmi(profiles_doc)
         return {str(profile.get("file_name") or ""): profile for profile in veri}
 
     @staticmethod
     def _fornitore_della_voce(voce: dict[str, Any]) -> tuple[str, str]:
-        """Chiave e nome del fornitore di una scheda-documento, o vuoto.
+        """Return the supplier key and name for a document entry, or empty strings.
 
-        Le schede non hanno tutte la stessa forma: quelle nate da un ricalcolo
-        portano `supplierId`, quelle di un confronto piu' vecchio che punta
-        ancora all'originale fuori dai caricamenti portano solo `supplier`, il
-        nome per esteso.  Leggerne una sola delle due vuol dire non accorgersi
-        della meta' dei casi, quindi la regola sta qui, scritta una volta.
+        Document entries don't all have the same shape: ones produced by a
+        recompute carry `supplierId`, while entries from an older
+        comparison still pointing at a source file outside uploads carry
+        only `supplier`, the full name. Reading just one of the two misses
+        half the cases, so this fallback lives here, written once.
         """
 
         if str(voce.get("role") or "").strip().casefold() == "master":
@@ -1532,26 +1524,25 @@ class ReviewStore:
     def _spegni_i_fornitori_senza_documento(
         review: dict[str, Any], rimossi: dict[str, str]
     ) -> None:
-        """Un fornitore il cui listino e' stato tolto smette di essere ordinabile.
+        """A supplier whose price list was removed stops being orderable.
 
-        ⚠ Il difetto che ha aperto la revisione del 14 agosto 2026, con le
-        parole di chi lo ha subito: «eliminando un listino questo continuava a
-        comparire nel confronto».  Era cosi' per costruzione: `delete_upload`
-        toglieva la scheda del file, `base_review` filtrava `review["files"]`, e
-        nessuna delle due nominava `suppliers` o `products`.  Il fornitore
-        restava fra le offerte di ogni prodotto, restava quello scelto, e
-        restava nel totale in euro del riepilogo.
+        `delete_upload` removes the file's document entry and `base_review`
+        filters `review["files"]`, but neither one touches `suppliers` or
+        `products`: without this step, a supplier would stay among every
+        product's offers, stay selected, and stay counted in the summary
+        total after their price list was deleted.
 
-        Non si cancella niente: si spegne `available`, che e' gia' la leva con
-        cui il resto del programma dice «da qui non si ordina».  La pagina
-        riassegna da sola al piu' conveniente fra i disponibili e lo dichiara,
-        la convalida rifiuta chi prova a ordinare lo stesso, e se il listino
-        torna al suo posto il confronto ricompare intatto: e' una derivazione,
-        non una potatura.
+        Nothing is deleted here: `available` is turned off, which is
+        already the flag the rest of the program uses to mean "cannot be
+        ordered from here". The page reassigns the best offer among what's
+        still available and reports the change, validation rejects an
+        attempt to order from the removed supplier anyway, and if the price
+        list comes back the comparison is restored intact — this is a
+        derived, reversible state, not a deletion.
 
-        `rimossi` contiene **solo** i fornitori che un documento ce l'avevano e
-        non ce l'hanno piu'.  Chi nell'elenco non e' mai comparso resta
-        ordinabile: di lui non si sa niente, e spegnerlo sarebbe indovinare.
+        `rimossi` contains only suppliers that had a document and lost it.
+        A supplier never seen in this comparison stays orderable: nothing
+        is known about it, and disabling it would be a guess.
         """
 
         if not rimossi:
@@ -1631,18 +1622,18 @@ class ReviewStore:
                 except OSError:
                     inside_uploads = False
             if inside_uploads:
-                # Il confronto vivo resta valido, ma la pagina Importa descrive
-                # le copie che sono ancora disponibili per il prossimo
-                # ricalcolo. Una copia eliminata non deve ricomparire dal JSON
-                # della run precedente.
+                # The live comparison stays valid, but the Import page
+                # describes the copies still available for the next
+                # recompute. A deleted copy must not reappear just because
+                # the previous run's JSON still mentions it.
                 path = consegna.file_sicuro(self.upload_dir, name)
                 if path is None:
-                    # ⚠ Qui si sa una cosa che nessuno usava: questo fornitore
-                    # AVEVA un documento e adesso non ce l'ha piu'.  E' la
-                    # differenza fra «non lo so» e «e' stato tolto», e solo la
-                    # seconda autorizza a togliergli le offerte.  Un fornitore
-                    # che nell'elenco non c'e' mai stato non finisce qui, e
-                    # resta ordinabile: di lui non sappiamo niente.
+                    # This branch knows something worth acting on: this
+                    # supplier had a document and it is gone. That's the
+                    # difference between "unknown" and "removed", and only
+                    # the latter justifies disabling its offers. A supplier
+                    # that was never in this list at all doesn't reach this
+                    # branch, and stays orderable — nothing is known about it.
                     chiave, etichetta = self._fornitore_della_voce(file_entry)
                     if chiave:
                         fornitori_senza_documento[chiave] = etichetta
@@ -1650,10 +1641,10 @@ class ReviewStore:
                 if profile is not None:
                     file_entry["deletable"] = True
                     file_entry["uploadName"] = name
-            # I confronti creati prima dell'importazione guidata possono
-            # puntare ancora all'originale scelto dall'utente, fuori dalla
-            # cartella degli upload. La pagina deve poterlo rimuovere dalla
-            # propria lista senza cancellare quel file dal disco.
+            # A comparison created before the guided import flow existed
+            # may still point at the original file the user picked, outside
+            # the uploads folder. The page must be able to remove it from
+            # its own list without deleting that file from disk.
             if str(file_entry.get("role") or "").casefold() in {"supplier", "master"}:
                 file_entry["deletable"] = True
                 file_entry["uploadName"] = str(file_entry.get("name") or "")
@@ -1680,12 +1671,10 @@ class ReviewStore:
                 "status": "review",
                 "schemaState": hint.get("state") or "AMBIGUO",
                 "rows": rows or 0,
-                # ⚠ Qui c'era scritto «serve la verifica preliminare di Codex».
-                # Oltre a nominare uno strumento che chi usa il programma non
-                # conosce, dal cantiere R6 e' anche **falsa**: le colonne le
-                # riconosce il ricalcolo, e quando non ci riesce le chiede in
-                # pagina.  Diceva all'utente di aspettare un permesso che
-                # nessuno deve piu' dare.
+                # This message must not name an internal tool the user has
+                # no reason to know about, and must state what actually
+                # happens: columns are recognized automatically by the
+                # recompute, and the page asks for them only when that fails.
                 "message": "Letto. Le colonne verranno riconosciute al prossimo confronto; se non le riconosce, te le chiede.",
                 "sourcePath": str((self.upload_dir / name).resolve()),
                 "deletable": True,
@@ -1705,9 +1694,10 @@ class ReviewStore:
                     f"nell'elenco del gestionale. Il motivo, per chi ripara: {exc}"
                 ),
             })
-        # Un fornitore che non si e' lasciato leggere non ferma piu' gli altri:
-        # proprio per questo va detto, altrimenti sparisce dalla ricerca
-        # prodotti senza che niente lo segnali.
+        # A supplier that fails to read doesn't block the rest of the
+        # comparison, which is exactly why it must be reported here —
+        # otherwise it silently drops out of product search with no
+        # indication anywhere.
         for failure in self.catalog.load_errors:
             review.setdefault("warnings", []).append({
                 "code": "CATALOGO_FORNITORE_NON_LETTO",
@@ -1734,68 +1724,74 @@ class ReviewStore:
                     product["excluded"] = False
                 else:
                     product["quantity"] = decision.get("quantity", product.get("quantity", 0))
-                    # ⚠ Il fornitore lo rimette la decisione salvata **solo se
-                    # l'ha scelto l'utente**. Se invece era il default — il più
-                    # conveniente del confronto di allora — vince quello che il
-                    # confronto ha appena calcolato, cioè il più conveniente di
-                    # ADESSO.
+                    # The saved supplier is restored only when the user
+                    # explicitly chose it. If it was a default — the
+                    # cheapest offer at the time — the comparison's current
+                    # cheapest offer wins instead, i.e. the cheapest offer
+                    # NOW.
                     #
-                    # Senza questa distinzione un default vecchio si travestiva
-                    # da scelta dell'utente e sopravviveva a un ricalcolo che lo
-                    # rendeva sbagliato: si aggiungeva un listino a metà lavoro,
-                    # il fornitore nuovo costava meno, la pagina lo mostrava, e
-                    # l'ordine continuava ad andare all'altro senza che niente
-                    # lo dicesse. Il solo modo di rimetterlo a posto era mettere
-                    # uno sconto e toglierlo, perché `set_supplier_discount` era
-                    # l'unico punto che rifaceva la scelta.
+                    # Without this distinction, a stale default would look
+                    # like a user choice and survive a recompute that made
+                    # it wrong: a new, cheaper price list gets added, the
+                    # page shows the cheaper supplier, but the order still
+                    # goes to the old one with nothing pointing that out.
                     #
-                    # ⚠ Le decisioni salvate prima del 26 agosto 2026 non
-                    # portano il marchio: valgono automatiche, e quelle che
-                    # cambiano si contano qui sotto perché la pagina possa dirlo.
+                    # Decisions saved before this distinction existed carry
+                    # no explicit marker and are treated as automatic; any
+                    # that change supplier as a result are collected below
+                    # so the page can report it.
                     salvato = str(decision.get("selectedSupplierId") or "")
-                    # ⚠ Un solo `if/else`, e nessuna uscita anticipata: la
-                    # prima versione usciva di qui con un `continue` e saltava
-                    # il ripristino di `quantitySource` qui sotto. Un prodotto
-                    # con fornitore scelto a mano **e** quantità scritta a mano
-                    # tornava a dichiarare «valore dal gestionale», e il comando
-                    # che azzera le sole quantità predefinite se la portava via.
+                    # A single if/else with no early exit: an early
+                    # `continue` here would skip the `quantitySource`
+                    # restore below, and a product with both a manually
+                    # chosen supplier and a manually entered quantity would
+                    # revert to reporting "value from the management
+                    # software" — and then get zeroed out by the command
+                    # that resets only default quantities.
                     if str(decision.get("selectedSupplierSource") or "") == "utente":
                         product["selectedSupplierId"] = decision.get("selectedSupplierId", product.get("selectedSupplierId"))
                         product["confirmed"] = bool(decision.get("confirmed"))
                     else:
-                        # ⚠ Si RICALCOLA qui, e non si prende `selectedSupplierId`
-                        # dal confronto: quello lo ha scritto la catena, che gli
-                        # sconti di testata non li conosce. `review_with_manual_products`
-                        # li ha appena applicati ai prezzi, quindi il più conveniente
-                        # è quello che si vede in pagina — ed è l'unico numero su cui
-                        # ha senso rifare la scelta. Prendendo il valore della catena
-                        # si buttava via la riassegnazione dello sconto.
+                        # Recomputed here rather than taken from
+                        # `selectedSupplierId` in the comparison: that value
+                        # comes from the matching chain, which knows nothing
+                        # about header discounts. `review_with_manual_products`
+                        # has just applied them to prices, so the cheapest
+                        # offer here is the one the page actually shows —
+                        # the only number worth reselecting on. Using the
+                        # chain's own value would discard the discount-aware
+                        # reselection.
                         migliore = self._offerta_piu_conveniente(product)
                         product["selectedSupplierId"] = str(migliore.get("supplierId") or "") if migliore else ""
                         if str(product.get("selectedSupplierId") or "") == salvato:
                             product["confirmed"] = bool(decision.get("confirmed"))
                         else:
-                            # Cambiando fornitore cambia l'articolo: la conferma
-                            # di prima non copre questo, come dopo uno spostamento.
+                            # A supplier change means a different item: the
+                            # earlier confirmation doesn't cover it, same as
+                            # after a manual move.
                             product["confirmed"] = False
                             riallineati.append(str(product.get("name") or product.get("id") or ""))
                     product["excluded"] = bool(decision.get("excluded"))
-                    # Senza questo ripristino un prodotto già modificato dall'utente tornerebbe
-                    # "valore dal gestionale" dopo un ricaricamento, e verrebbe azzerato per errore
-                    # dal comando che riporta a zero le sole quantità predefinite.
+                    # Without this restore, a product the user already
+                    # edited would revert to "value from the management
+                    # software" after a reload, and get zeroed out by
+                    # mistake by the command that resets only default
+                    # quantities.
                     if decision.get("quantitySource") in {"gestionale", "utente"}:
                         product["quantitySource"] = decision["quantitySource"]
                 self.dichiara_la_conferma(product)
-            # ⚠ Quando il posto cambia sotto gli occhi, la frase che lo spiega
-            # deve arrivare col cambiamento. Qui l'ordine di alcuni prodotti si
-            # sposta da solo su un altro fornitore, ed e' giusto — costa meno —
-            # ma va detto: se fra quelli c'e' un fornitore che l'utente teneva
-            # per una ragione sua, questo e' l'unico momento in cui puo'
-            # accorgersene e rimetterlo.
-            # ⚠ Solo se le decisioni parlano di QUESTO confronto. Con una run
-            # nuova sono di un'altra settimana: lì il fornitore non "è passato"
-            # a nessuno — il confronto è un altro — e l'avviso sarebbe rumore
-            # su una cosa che il programma ha fatto giusta.
+            # When a product's supplier changes without the user asking for
+            # it, the explanation must land at the same time as the change.
+            # Some products move to another supplier on their own here,
+            # correctly — it's cheaper — but it still needs to be reported:
+            # if the user was keeping one of those suppliers for their own
+            # reason, this is the only point where they can notice and
+            # restore it.
+            # Only reported when the saved decisions belong to THIS
+            # comparison. On a new run they're from a different week, the
+            # supplier hasn't "moved" from anyone's point of view — it's a
+            # different comparison — and the warning would just be noise
+            # over something the program did correctly.
             stessa_run = str(state.get("runId") or "") == str((review.get("run") or {}).get("id") or "")
             if riallineati and stessa_run:
                 quanti = len(riallineati)
@@ -1821,10 +1817,9 @@ class ReviewStore:
             try:
                 review = self.promotion_service.decorate(review, decisions)
             except Exception as exc:
-                # Le promozioni sono un di piu': se il loro motore si rompe,
-                # l'utente deve poter vedere lo stesso prezzi, quantita' e
-                # fornitori. Prima bastava un listino Larice su un percorso
-                # non raggiungibile perche' la pagina non si aprisse.
+                # Promotions are supplementary: if the promotion engine
+                # fails, the user must still see prices, quantities and
+                # suppliers. A failure here must never block the page.
                 print(f"[AVVISO] promozioni non calcolate — {type(exc).__name__}: {exc}")
                 review.setdefault("warnings", []).append({
                     "code": "PROMOZIONI_NON_CALCOLATE",
@@ -1837,10 +1832,10 @@ class ReviewStore:
                         f"{frase(exc) or 'Il guasto non si è descritto.'}"
                     ),
                 })
-            # Un fornitore gia' segnalato dal catalogo non prende un secondo
-            # avviso: e' lo stesso file e lo stesso guasto. Ma il primo avviso
-            # deve dire anche questa perdita, altrimenti le soglie con omaggio
-            # spariscono senza che una sola parola lo dica.
+            # A supplier already flagged by the catalog doesn't get a second
+            # warning — same file, same failure. But the first warning must
+            # also mention this loss, or free-goods thresholds silently
+            # disappear with nothing pointing it out.
             per_fornitore = {
                 str(item.get("supplier") or ""): item
                 for item in review.get("warnings") or []
@@ -1862,10 +1857,11 @@ class ReviewStore:
                         "Prezzi e confronto restano validi; mancano le soglie con omaggio di questo fornitore."
                     ),
                 })
-            # ⚠ Il magazzino delle conferme che non si apre non si tace: senza
-            # una parola le domande gia' risposte tornerebbero tutte, e l'utente
-            # le rifarebbe a mano credendo che il programma non avesse mai
-            # saputo niente. Il resto del confronto resta valido.
+            # A confirmation store that fails to open is never silent:
+            # without this warning every already-answered question would
+            # come back, and the user would reanswer by hand believing the
+            # program never knew anything. The rest of the comparison stays
+            # valid.
             if self._conferme_guasto:
                 review.setdefault("warnings", []).append({
                     "code": "CONFERME_NON_DISPONIBILI",
@@ -1879,39 +1875,34 @@ class ReviewStore:
                     ),
                 })
             self.decorate_pending_orders(review)
-            # Il Riepilogo ha i suoi totali gia' alla prima apertura, senza
-            # aspettare un salvataggio: il browser non li ricalcola per conto
-            # suo e lo scarto di arrotondamento e' dichiarato subito.
+            # The summary shows its totals right on first load, without
+            # waiting for a save: the browser doesn't recompute them on its
+            # own, and any rounding discrepancy is stated up front.
             review["orderSummary"] = self.order_summary_from_state(review, state)
             review["state"] = {
                 "currentStep": max(1, min(3, int(number(state.get("currentStep")) or 1))),
                 "acceptBelowThreshold": bool(state.get("acceptBelowThreshold")),
                 "summaryGrouping": state.get("summaryGrouping") if state.get("summaryGrouping") in {"supplier", "product"} else "supplier",
-                # La versione da cui questa scheda parte: la rimanda a ogni
-                # salvataggio, ed e' cosi' che il servizio si accorge che nel
-                # frattempo ha salvato un'altra scheda.
+                # The version this snapshot was built from; echoed back on
+                # every save, which is how the service detects that another
+                # snapshot was saved in the meantime.
                 "stateVersion": int(number(state.get("stateVersion")) or 0),
-                # Gli sconti di testata, in percentuale, solo per mostrarli nel
-                # campo: i prezzi che la pagina ha in mano sono gia' scontati e
-                # non deve rifare il conto.
+                # Header discounts, as percentages, only for display in the
+                # form field: the prices the page already has are already
+                # discounted, so it must not recompute them.
                 "supplierDiscounts": {
                     chiave: round(valore * 100, 4)
                     for chiave, valore in self.sconti_del_confronto(state, review).items()
                 },
             }
-            # ⚠ Le uguaglianze fra codici **non** viaggiano piu' col confronto.
-            # Ci stavano perche' dovevano essere visibili senza cercarle, ma il
-            # posto era la finestra «Sfoglia i listini», cioe' dentro un
-            # prodotto: per rileggerle bisognava aprire un prodotto qualunque,
-            # e l'elenco diceva due numeri di tredici cifre senza i nomi —
-            # l'informazione che serve a giudicare se la dichiarazione e'
-            # giusta non c'era. Adesso stanno in Impostazioni, con i nomi e una
-            # ricerca, e hanno la loro rotta (`GET /api/matches/uguaglianze`):
-            # quella pagina si apre anche quando un confronto non c'e'.
+            # Declared code equalities are not part of this payload: they
+            # live in Settings, with names and search, under their own
+            # route (`GET /api/matches/uguaglianze`), which is reachable
+            # even with no comparison loaded.
             return review
 
     def read_order_history(self) -> dict[str, Any]:
-        """Legge lo storico applicando la scadenza e risalvandolo se è cambiato."""
+        """Read order history, applying expiry and resaving it if it changed."""
 
         with self.lock:
             history, changed = order_history.read_history(self.history_path)
@@ -1919,27 +1910,28 @@ class ReviewStore:
                 try:
                     order_history.save_history(self.history_path, history)
                 except OSError as exc:
-                    # La scadenza è solo pulizia: se non si riesce a salvare,
-                    # l'elenco resta corretto per questa lettura.
+                    # Expiry is just cleanup: if the save fails, the
+                    # in-memory list is still correct for this read.
                     print(f"[AVVISO] Storico ordini non aggiornato su disco: {exc}")
             return history
 
     @staticmethod
     def avviso_ordini_scaduti(scaduti: list[dict[str, Any]]) -> dict[str, Any]:
-        """La frase che dice quali ordini sono scaduti, senza mentire su chi ha risposto.
+        """Build the message reporting expired orders, without misstating who answered.
 
-        Sessanta giorni dopo l'ultima interazione la domanda non viene più
-        fatta: se lo si tace, la merce non arrivata esce di scena senza che
-        nessuno se ne accorga.  «Senza risposta» si dice SOLO di chi non ha
-        mai risposto: un ordine risposto «non ancora arrivata» otto volte non
-        va trattato come uno ignorato (revisione avversariale R4).
+        The question stops being asked a fixed number of days after the
+        last interaction; staying silent about that would let missing
+        merchandise quietly drop out of view. "No answer" is stated only
+        for orders that were genuinely never answered: an order answered
+        "not arrived yet" several times must not be reported the same way
+        as one nobody ever looked at.
         """
 
         frasi = []
         for voce in scaduti:
             momento = order_history.parse_moment(voce.get("createdAt"))
-            # M-5: senza la data di creazione non si dichiara un conteggio mai
-            # fatto — lo si dice.
+            # With no creation date on record, this states that fact rather
+            # than fabricating a count.
             quando = (f" del {consegna.data_leggibile(momento.astimezone())}" if momento
                       else " (la voce non porta la data di creazione)")
             risposta = order_history.parse_moment(voce.get("answeredAt"))
@@ -1962,13 +1954,13 @@ class ReviewStore:
         }
 
     def decorate_pending_orders(self, review: dict[str, Any]) -> None:
-        """Segnala su ogni prodotto gli ordini non ancora ricevuti.
+        """Flag on each product any orders not yet received.
 
-        L'abbinamento avviene per identità dell'articolo: l'EAN quando c'è,
-        altrimenti l'identificativo stabile del prodotto (gli espositori, che
-        un EAN non ce l'hanno).  Gli identificativi product:<riga> restano
-        fuori: dipendono dalla posizione nell'esportazione settimanale e
-        confrontarli produrrebbe corrispondenze sbagliate senza avvisare.
+        Matching is by item identity: the barcode when there is one,
+        otherwise the product's stable identifier (displays have no
+        barcode of their own). `product:<row>` identifiers are excluded:
+        they depend on position in the weekly export, and matching on them
+        would produce wrong matches with no way to tell.
         """
 
         products = review.get("products") or []
@@ -1995,7 +1987,7 @@ class ReviewStore:
             review.setdefault("warnings", []).append(self.avviso_ordini_scaduti(scaduti))
 
     def current_run_id(self) -> str:
-        """Identificativo della run aperta: i suoi ordini non si autosegnalano."""
+        """Id of the currently open run: its own orders are excluded from pending-order flags."""
 
         try:
             review = load_json(self.review_path, {})
@@ -2017,9 +2009,9 @@ class ReviewStore:
         order_id = str(payload.get("orderId") or "").strip()
         if not order_id:
             raise ValueError("Ordine non indicato")
-        # «Non arriverà più» chiude la domanda per sempre: e' la terza risposta,
-        # quella che serve quando la merce non arrivera' mai e segnarla
-        # ricevuta sarebbe scrivere il falso.
+        # "Will never arrive" closes the question permanently: a third
+        # possible answer, needed when the goods will never show up and
+        # marking the order received would be false.
         closed = payload.get("closed") is True
         received = payload.get("received")
         if not closed and not isinstance(received, bool):
@@ -2040,7 +2032,7 @@ class ReviewStore:
             }
 
     def answer_rejected_candidate(self, payload: Any) -> dict[str, Any]:
-        """Accetta o rifiuta una riga proposta, soltanto nella run che l'ha generata."""
+        """Accept or reject a proposed row, only within the run that produced it."""
 
         if not isinstance(payload, dict):
             raise ValueError("Risposta non valida")
@@ -2105,17 +2097,15 @@ class ReviewStore:
             }
 
     def _avanza_la_versione(self, state: dict[str, Any], origine: str) -> int:
-        """Scrive lo stato con la versione avanzata di uno, e la restituisce.
+        """Save state with the version bumped by one, and return the new version.
 
-        ⚠ Il numero **va restituito a chi ha chiesto la modifica**, e non è una
-        cortesia: la scheda dichiara a ogni salvataggio la versione da cui è
-        partita, e se sul disco ce n'è una più nuova il salvataggio viene
-        rifiutato.  Chi avanza la versione qui dentro e non la manda indietro
-        lascia la scheda indietro di uno, e il salvataggio successivo — fatto
-        dalla STESSA scheda — si sente rispondere «un'altra scheda ha salvato
-        dopo di te».  È il difetto del 26 agosto 2026: rifiutare una conferma
-        di corrispondenza ogni due o tre, mandando a cercare una scheda che non
-        esiste.  Tre risposte su cinque se n'erano dimenticate.
+        The returned number must reach the caller, not just get written to
+        disk: every save states the version it started from, and a save
+        against a stale version is rejected. A caller that bumps the
+        version here without returning it to the client leaves the
+        client's own copy one behind, and its next save — from that same
+        client — gets rejected as conflicting with a save that never
+        actually happened.
         """
 
         versione = int(number(state.get("stateVersion")) or 0) + 1
@@ -2125,22 +2115,22 @@ class ReviewStore:
         return versione
 
     def abbina_riga_di_listino(self, payload: Any) -> dict[str, Any]:
-        """«Questa riga del listino è il mio prodotto»: un clic, due effetti.
+        """Manually match a price-list row to a product: one click, two effects.
 
-        **Subito**: l'offerta entra nel confronto di adesso, come quando si
-        accetta la proposta dell'analisi automatica.
+        Immediately: the offer enters the current comparison, the same as
+        accepting an automatic-matching proposal.
 
-        **Per sempre**: si registra che i due codici a barre sono lo stesso
-        articolo. Ricordare «riga 4794 di NOCE» varrebbe una settimana — al
-        listino nuovo la riga si sposta; l'uguaglianza fra codici vale sempre e
-        vale **per tutti i fornitori insieme**, e trasforma il prodotto in un
-        `EAN_ESATTO` nativo al prossimo ricalcolo.
+        Permanently: the two barcodes are recorded as the same item.
+        Remembering just the row position would only last a week — that
+        position shifts with every new price list — while a barcode
+        equality holds indefinitely and across every supplier, turning the
+        match into a native `EAN_ESATTO` match on the next recompute.
 
-        ⚠ Il secondo effetto non è sempre possibile: 6 prodotti su 457 non hanno
-        EAN nel gestionale, e gli espositori LARICE non ce l'hanno a listino.
-        Lì l'abbinamento vale per questo confronto e basta, e la risposta lo
-        dice — lasciarlo sembrare uguale sarebbe una promessa che salta al primo
-        ricalcolo.
+        The permanent effect isn't always possible: a handful of products
+        have no barcode in the management-software export, and some
+        suppliers' display rows carry no barcode either. There, the match
+        only holds for this comparison, and the response says so — treating
+        it as permanent would be a promise broken by the next recompute.
         """
 
         if not isinstance(payload, dict):
@@ -2154,13 +2144,13 @@ class ReviewStore:
         with self.lock:
             review, state = self.review_with_manual_products()
             run_id = str((review.get("run") or {}).get("id") or "")
-            # ⚠ `productId` e `sourceRow` sono posizionali: da una scheda ferma
-            # al confronto della settimana prima indicano, sul confronto nuovo,
-            # due articoli qualsiasi — e li dichiarano uguali per sempre e per
-            # tutti i fornitori. Stesso controllo e stessa frase del rifiuto:
-            # le due rotte rispondono alla stessa domanda (revisione del 6
-            # settembre 2026). Senza `runId` si passa come prima: una pagina
-            # vecchia rimasta in cache non deve rompersi.
+            # `productId` and `sourceRow` are positional: a client stuck on
+            # last week's comparison would point, on the new comparison, at
+            # two arbitrary items — and declare them equal permanently and
+            # across every supplier. Same check and same message as the
+            # rejection route, since both answer the same question. A
+            # request without `runId` is still accepted, so a stale cached
+            # page doesn't break outright.
             dichiarata = str(payload.get("runId") or "").strip()
             if dichiarata and run_id and dichiarata != run_id:
                 raise ValueError("Il confronto è cambiato: ricarica la pagina prima di rispondere")
@@ -2190,11 +2180,11 @@ class ReviewStore:
                 "chosenAt": datetime.now(tz=timezone.utc).isoformat(),
             })
             state["manualMatches"] = abbinamenti
-            # ⚠ Un «no» dato prima all'analisi automatica su questo fornitore
-            # non deve tornare a spegnere l'offerta appena scelta: sono due
-            # risposte umane sullo stesso prodotto, e vince la più recente.
-            # Si toglie, invece di lasciarle convivere e scoprire dopo quale
-            # delle due ha vinto.
+            # An earlier rejection of the automatic proposal for this
+            # supplier must not turn off the offer just chosen manually:
+            # both are human answers on the same product, and the more
+            # recent one wins. It's removed outright, rather than left to
+            # coexist with the risk of ambiguity about which one applies.
             rifiuti_tolti = 0
             rimasti = []
             for voce in state.get("matchOverrides") or []:
@@ -2213,15 +2203,17 @@ class ReviewStore:
             state["updatedAt"] = datetime.now(tz=timezone.utc).isoformat()
             versione = self._avanza_la_versione(state, "abbinamento")
 
-            # ⚠ Anche un «non è lo stesso articolo» detto prima su questo
-            # fornitore va tolto: sono due risposte umane sullo stesso prodotto,
-            # e vince la piu' recente. Serve nel caso preciso in cui l'utente
-            # sfoglia il listino e sceglie a mano PROPRIO la riga che aveva
-            # rifiutato: l'impronta e' la stessa, e senza questa riga il no la
-            # rispegnerebbe subito, in silenzio.
+            # An earlier "not the same item" rejection on this supplier is
+            # cleared too: both are human answers on the same product, and
+            # the more recent one wins. This matters specifically when the
+            # user browses the price list and manually picks the exact row
+            # they had previously rejected: the fingerprint is the same, and
+            # without this the rejection would silently turn the offer back
+            # off right away.
             #
-            # Solo se quello in vigore e' un no: `dimentica` non distingue, e
-            # chiuderebbe anche un si' che nessuno ha revocato.
+            # Only cleared when the current entry is a rejection: `dimentica`
+            # doesn't distinguish, and would just as happily clear a
+            # confirmation nobody revoked.
             articolo_del_prodotto = impronta_prodotto(product)
             magazzino_dei_no = self.magazzino_conferme()
             if magazzino_dei_no is not None and articolo_del_prodotto:
@@ -2233,8 +2225,9 @@ class ReviewStore:
                             quando=datetime.now(tz=timezone.utc).isoformat(),
                         )
                 except MagazzinoNonUtilizzabile as exc:
-                    # L'abbinamento di oggi resta valido: si annota e lo dice il
-                    # confronto, come per l'uguaglianza qui sotto.
+                    # Today's match stays valid regardless: the failure is
+                    # recorded and surfaced by the comparison, same as the
+                    # equality-declaration failure below.
                     self._conferme_guasto = frase(exc) or "Il rifiuto precedente non è stato tolto."
 
             ricordata, motivo = self._ricorda_l_uguaglianza(product, record, supplier_id)
@@ -2253,12 +2246,12 @@ class ReviewStore:
     def _ricorda_l_uguaglianza(
         self, product: Any, record: Any, supplier_id: str
     ) -> tuple[bool, str]:
-        """Registra che i due codici a barre sono lo stesso articolo.
+        """Record that the two barcodes are the same item.
 
-        Restituisce `(ricordata, frase da mostrare)`. Non solleva mai: se il
-        magazzino non si apre l'abbinamento di oggi resta valido lo stesso, e
-        quello che si perde — che valga anche la settimana prossima — va detto,
-        non nascosto dietro un successo.
+        Returns `(recorded, message to show)`. Never raises: if the store
+        fails to open, today's match stays valid regardless, but the part
+        that's lost — it holding for next week too — must be reported, not
+        hidden behind an apparent success.
         """
 
         codice_prodotto = codice_confrontabile((product or {}).get("ean"))
@@ -2295,34 +2288,33 @@ class ReviewStore:
         )
 
     def rifiuta_l_abbinamento(self, payload: Any) -> dict[str, Any]:
-        """«Non e' lo stesso articolo», e il ritorno indietro.
+        """Reject a proposed match ("not the same item") and undo it.
 
-        La risposta che mancava. Finche' non c'era, chi non poteva confermare un
-        abbinamento proposto non aveva **nessuna** uscita: confermare ordina
-        l'articolo sbagliato, non confermare lascia la compilazione ferma su
-        «Conferma richiesta · bloccante», e «Escludi dall'ordine» azzera la
-        quantita' — quindi il prodotto sparisce anche dall'elenco «Prodotti da
-        reperire», che salta chi ha quantita' zero. Misurato il 21 agosto 2026
-        su `conferme.db`: venti conferme, di cui **zero** negative, e undici
-        scritte in trenta secondi.
+        Without this route, a user unable to confirm a proposed match had no
+        way out: confirming orders the wrong item, leaving it unconfirmed
+        blocks compilation on "confirmation required", and excluding the
+        product from the order zeroes its quantity — which also drops it
+        from the to-be-sourced list, since that list skips zero-quantity
+        products.
 
-        Si scrive nel magazzino delle conferme, come riga con `accettata` falsa:
-        `MagazzinoConferme.ricorda` la sa scrivere dal primo giorno. **Non nasce
-        nessuna memoria nuova**, e nessuna chiave nuova in `state.json` — che sta
-        sotto `current/` e muore col ricalcolo, mentre questa risposta deve
-        sopravvivergli: la proposta semantica torna ogni settimana, e un no che
-        scade ogni lunedi' rimette l'utente nello stesso vicolo cieco sette
-        giorni dopo.
+        Recorded in the confirmation store as a row with `accettata` false;
+        `MagazzinoConferme.ricorda` already supports writing that shape, so
+        no new storage is introduced. It is deliberately not written into
+        `state.json`, which lives under the current run and is discarded on
+        recompute, while this answer must survive it: the semantic proposal
+        would otherwise come back every week, and a rejection that expired
+        on each recompute would put the user back in the same dead end.
 
-        Il no vale per la coppia (fornitore, articolo del gestionale), ancorato
-        all'impronta della riga di listino su cui e' stato detto. **Non** e'
-        un'uguaglianza negata: quella varrebbe per tutti i fornitori e per
-        sempre, e il fatto che la riga di LARICE non sia il mio articolo non dice
-        niente su che cosa hanno gli altri.
+        The rejection applies to the pair (supplier, management-software
+        item), anchored to the fingerprint of the price-list row it was
+        said about. It is not a negated equality: an equality would apply
+        to every supplier forever, and one supplier's row not being the
+        right item says nothing about what another supplier carries.
 
-        Dello stato si tocca solo la decisione di quel prodotto: il fornitore
-        scelto si svuota e la conferma cade, **la quantita' no**. E' il numero
-        che serve a reperirlo altrove.
+        Only this product's own decision is touched in state: the selected
+        supplier is cleared and its confirmation drops, but the quantity is
+        left untouched — it's still the number needed to source the item
+        elsewhere.
         """
 
         if not isinstance(payload, dict):
@@ -2345,18 +2337,19 @@ class ReviewStore:
             )
             if product is None:
                 raise ValueError("Questo prodotto non è nel confronto: ricarica la pagina")
-            # ⚠ `find_offer` sul confronto GIA' decorato: se il no c'e' gia',
-            # l'offerta e' qui con `available` falsa e la si ritrova lo stesso.
-            # E' il modo in cui il ritorno indietro funziona.
+            # `find_offer` runs on the already-decorated comparison: if the
+            # rejection is already in force, the offer is still here with
+            # `available` false, and is found all the same. This is what
+            # makes the undo path work.
             offerta = find_offer(product, supplier_id)
             if offerta is None:
                 raise ValueError("Questo fornitore non ha nessuna riga per questo prodotto")
             articolo = impronta_prodotto(product)
             impronta = impronta_articolo(offerta)
-            # Le impronte PRIMA di aprire il file, come in `conferma_in_vigore`:
-            # una riga che non si identifica non si puo' ricordare, e aprire il
-            # magazzino per scoprirlo creerebbe un `conferme.db` a chi non ne ha
-            # nessuno.
+            # Fingerprints checked before opening the store, as in
+            # `conferma_in_vigore`: a row that can't be fingerprinted can't
+            # be recorded, and opening the store just to find that out would
+            # create a `conferme.db` for a program that has none yet.
             if not articolo or not impronta:
                 raise ValueError(
                     "Questa riga non si può rifiutare: prodotto o riga del listino non hanno "
@@ -2378,19 +2371,17 @@ class ReviewStore:
                         motivo="non è lo stesso articolo",
                         quando=quando,
                     )
-                    # ⚠ Questo messaggio e' un avviso che sparisce in 3,6
-                    # secondi (`showToast`), e diceva per intero la regola di
-                    # quanto dura un no — 172 caratteri, la stessa frase che sta
-                    # gia' scritta e ferma nel riquadro del fornitore rifiutato,
-                    # e che stava anche sotto il pulsante prima di premerlo: tre
-                    # copie della stessa cosa, e nessuna diceva quello che serve
-                    # subito. Un avviso che passa conferma il gesto; la regola
-                    # resta dov'e' scritta e non scappa.
+                    # This message is a toast that disappears after a few
+                    # seconds, so it confirms the action taken rather than
+                    # restating the full rule for how long a rejection lasts
+                    # — that explanation is already shown, persistently, on
+                    # the rejected-supplier panel.
                     messaggio = f"{nome_fornitore} esce da questo prodotto. La quantità resta."
                 else:
-                    # ⚠ Si toglie solo se quello in vigore e' un NO. `dimentica`
-                    # non distingue: chiamata alla cieca chiuderebbe anche un si'
-                    # che nessuno ha revocato.
+                    # Only cleared when the current entry is a rejection.
+                    # `dimentica` doesn't distinguish: calling it
+                    # unconditionally would just as happily clear a
+                    # confirmation nobody revoked.
                     voce = magazzino.cerca(supplier_id, articolo)
                     if voce is not None and not voce.get("accettata"):
                         magazzino.dimentica(supplier_id, articolo, quando=quando)
@@ -2399,17 +2390,17 @@ class ReviewStore:
                         "la domanda è di nuovo aperta."
                     )
             except (MagazzinoNonUtilizzabile, ValueError) as exc:
-                # ⚠ Qui si SOLLEVA, al contrario di `ricorda_le_conferme` che
-                # annota e prosegue. La' il salvataggio delle quantita' non deve
-                # morire per una memoria; qui la memoria E' la risposta, e un no
-                # che si crede dato e non lo e' rimanda l'utente esattamente nel
-                # vicolo cieco da cui stava uscendo, senza dirglielo.
+                # Raised here, unlike `ricorda_le_conferme`, which records
+                # the failure and continues. There, saving quantities must
+                # not fail over a memory write; here the memory write IS the
+                # answer, and a rejection the user believes was recorded but
+                # wasn't would silently put them back in the same dead end.
                 raise ValueError(f"La risposta non è stata registrata: {frase(exc)}") from exc
 
-            # Lo stato: solo la decisione di questo prodotto, e solo su chiavi
-            # che `validate_snapshot` ricostruisce comunque dallo snapshot della
-            # scheda. ⚠ Niente chiavi nuove, quindi `CHIAVI_DI_STATO_RICOPIATE`
-            # non si tocca.
+            # State: only this product's own decision, and only on keys
+            # that `validate_snapshot` reconstructs from the snapshot
+            # anyway. No new keys, so `CHIAVI_DI_STATO_RICOPIATE` needs no
+            # changes.
             voci: list[Any] = []
             cambiato = False
             for voce in state.get("products") or []:
@@ -2425,9 +2416,9 @@ class ReviewStore:
                     voci.append(ripulita)
                     continue
                 voci.append(voce)
-            # ⚠ La versione si restituisce anche quando non si e' scritto
-            # niente: la scheda va allineata comunque, e una risposta che tace
-            # la lascia a indovinare.
+            # The version is returned even when nothing was written: the
+            # client still needs to stay in sync, and a silent response
+            # would leave it guessing.
             versione = int(number(state.get("stateVersion")) or 0)
             if cambiato:
                 state["products"] = voci
@@ -2445,12 +2436,12 @@ class ReviewStore:
             }
 
     def togli_uguaglianza(self, payload: Any) -> dict[str, Any]:
-        """Toglie una dichiarazione «questi due codici sono lo stesso articolo».
+        """Remove a "these two codes are the same item" declaration.
 
-        Deve costare un clic: finché non è stata tolta, quella dichiarazione
-        entra in **ogni** confronto futuro e su **tutti** i fornitori. La riga
-        non si cancella — se ha già prodotto un ordine sbagliato è l'unica
-        traccia che lo spiega — si chiude.
+        Must be a single click: until it's removed, the declaration applies
+        to every future comparison and every supplier. The row isn't
+        deleted — if it already caused a wrong order, it's the only record
+        explaining why — it's just closed.
         """
 
         if not isinstance(payload, dict):
@@ -2467,9 +2458,9 @@ class ReviewStore:
         return {
             "ok": True,
             "tolta": tolta,
-            # L'elenco aggiornato torna gia' leggibile: la pagina che l'ha
-            # chiesto e' quella che lo mostra, e farle fare una seconda chiamata
-            # per riavere le stesse righe sarebbe un giro a vuoto.
+            # The updated list comes back already formatted: the page that
+            # called this is the same one that displays it, and forcing a
+            # second round trip for the same rows would be wasted work.
             "uguaglianze": self.elenco_delle_uguaglianze()["uguaglianze"],
             "message": (
                 "Dichiarazione tolta: dal prossimo confronto quei due codici tornano a essere "
@@ -2480,12 +2471,12 @@ class ReviewStore:
         }
 
     def _applica_abbinamenti_manuali(self, review: dict[str, Any], state: dict[str, Any]) -> None:
-        """Le righe scelte a mano diventano offerte, in questo confronto.
+        """Turn manually matched rows into offers within this comparison.
 
-        Vale solo per la run in cui la scelta è stata fatta: al ricalcolo il
-        numero di riga non vuol più dire niente, e a tenere in piedi
-        l'abbinamento c'è l'uguaglianza fra codici, che è un'altra cosa e sta
-        nel magazzino delle conferme.
+        Only applies to the run the match was made in: on recompute the row
+        number no longer means anything, and it's the barcode equality —
+        a separate mechanism, kept in the confirmation store — that keeps
+        the match alive across weeks.
         """
 
         review_run = str((review.get("run") or {}).get("id") or "")
@@ -2507,10 +2498,11 @@ class ReviewStore:
                         review, str(offer.get("supplierId") or ""), voce.get("sourceRow"),
                     )
                 except ValueError:
-                    # Il listino è cambiato sotto: l'offerta non si rimette, e il
-                    # prodotto torna com'era. Non è un errore da fermare — la
-                    # scelta resta scritta e tornerà utile al ricalcolo, che la
-                    # rifà per codice invece che per numero di riga.
+                    # The price list changed underneath this match: the
+                    # offer isn't reinstated, and the product stays as it
+                    # was. Not a failure worth stopping over — the match
+                    # stays recorded and becomes useful again on recompute,
+                    # which resolves it by code instead of row number.
                     continue
                 offer.update(deepcopy(offerta))
                 offer["available"] = True
@@ -2523,15 +2515,13 @@ class ReviewStore:
                 offer["sceltaManuale"] = True
 
     def set_supplier_discount(self, payload: Any) -> dict[str, Any]:
-        """Sconta tutte le offerte di un fornitore e riassegna al piu' conveniente.
+        """Discount a supplier's offers and reassign products to the cheapest one.
 
-        Con le parole di chi lo usa: «BETULLA potrebbe scontare tutto del 6%, devo
-        poter scontare TUTTE LE OFFERTE di un fornitore… lo sconto lo mettero'
-        dopo aver caricato i listini, subito, e verra' riassegnato al piu'
-        conveniente senza dovermelo dire».  Quindi: si riassegna in silenzio, e
-        si riassegna QUI — una volta, quando lo sconto cambia — e non a ogni
-        lettura del confronto, che rifarebbe la scelta anche il giorno dopo,
-        sopra le decisioni prese nel frattempo.
+        This applies a header discount across every offer of a supplier,
+        then silently reselects the cheapest offer per product. Reselection
+        happens right here, once, when the discount is set — not on every
+        comparison read, which would redo the selection later too, undoing
+        decisions made in the meantime.
         """
 
         if not isinstance(payload, dict):
@@ -2565,17 +2555,17 @@ class ReviewStore:
             state["schemaVersion"] = int(number(state.get("schemaVersion")) or 1)
             state["runId"] = run_id
 
-            # I prezzi nuovi: si rilegge il confronto **con** lo sconto appena
-            # deciso, perche' la riassegnazione va fatta sui prezzi che l'utente
-            # avra' davanti, non su quelli di un attimo fa.
+            # The comparison is re-read with the discount just decided,
+            # because reselection must run against the prices the user will
+            # actually see, not the ones from before this change.
             #
-            # ⚠ E lo si rilegge dalla porta di tutti, passandole lo stato che
-            # abbiamo in mano — sul disco lo sconto non c'e' ancora, lo scrive
-            # `_avanza_la_versione` in fondo. Prima qui il confronto si
-            # ricostruiva a mano da `base_review()`: mancavano le risposte alle
-            # proposte e le righe scelte a mano, e la riassegnazione avveniva su
-            # offerte che in pagina non esistevano — l'ordine andava al
-            # fornitore con la riga sbagliata (revisione del 6 settembre 2026).
+            # It's re-read through the same shared decoration path used by
+            # every other caller, passed the in-memory state — the discount
+            # isn't on disk yet, `_avanza_la_versione` writes it below.
+            # Rebuilding the comparison from `base_review()` alone here would
+            # miss answered proposals and manually matched rows, and
+            # reselection would run against offers the page doesn't
+            # actually show.
             scontato, _ = self.review_with_manual_products(state)
 
             decisioni = {str(item.get("id")): item for item in state.get("products") or [] if isinstance(item, dict)}
@@ -2587,20 +2577,17 @@ class ReviewStore:
                 product_id = str(product.get("id") or "")
                 decisione = decisioni.get(product_id)
                 if decisione is None:
-                    # Un prodotto senza decisione salvata veniva saltato in
-                    # silenzio. Oggi il campo dello sconto non e' raggiungibile
-                    # senza passare da un salvataggio che scrive una decisione
-                    # per ogni prodotto del confronto, quindi il caso non si
-                    # vede — ma e' un'invariante che nessuno impone: basta che
-                    # un salvataggio fallisca perche' lo sconto riassegni a
-                    # meta', senza una parola. La decisione si crea invece di
-                    # saltarla.
+                    # A product with no saved decision is not silently
+                    # skipped: nothing guarantees every product already has
+                    # one, and skipping it here would make the discount
+                    # reassign only part of the comparison with no
+                    # indication why. A decision is created instead.
                     #
-                    # ⚠ `quantitySource` va copiato dal confronto, non
-                    # inventato: e' lui a dire se la quantita' viene dal
-                    # gestionale, e senza il ricalcolo successivo smette di
-                    # rileggere i colli e la quantita' resta congelata
-                    # (`pipeline_jobs._ripulisci_stato`).
+                    # `quantitySource` is copied from the comparison, not
+                    # invented: it's what tells the pipeline whether the
+                    # quantity comes from the management software, and
+                    # getting it wrong freezes the quantity out of future
+                    # recomputes (`pipeline_jobs._ripulisci_stato`).
                     origine = str(product.get("quantitySource") or "")
                     decisione = {
                         "id": product_id,
@@ -2612,18 +2599,19 @@ class ReviewStore:
                     }
                     decisioni[product_id] = decisione
                     state.setdefault("products", []).append(decisione)
-                # Il fornitore scelto a mano non si tocca: lo sconto cambia i
-                # prezzi, non le decisioni prese dall'utente. E' lo stesso
-                # marchio che rispetta `review()` dal 26 agosto 2026 — qui non
-                # veniva guardato, e uno sconto portava via un fornitore
-                # scelto apposta (revisione del 6 settembre 2026).
+                # A manually chosen supplier is left untouched: the
+                # discount changes prices, not decisions the user made
+                # explicitly. This checks the same marker `review()`
+                # respects, so a discount never overrides a supplier the
+                # user picked on purpose.
                 if str(decisione.get("selectedSupplierSource") or "") == "utente":
                     continue
                 if str(decisione.get("selectedSupplierId") or "") == migliore["supplierId"]:
                     continue
                 decisione["selectedSupplierId"] = migliore["supplierId"]
-                # La conferma vale per l'articolo guardato: cambiando fornitore
-                # cambia l'articolo, e quella di prima non copre questo.
+                # The confirmation applies to the item it was checked
+                # against: a different supplier means a different item, and
+                # the earlier confirmation doesn't cover it.
                 decisione["confirmed"] = not bool(migliore.get("requiresConfirmation"))
                 decisione.pop("confirmedArticle", None)
                 spostati += 1
@@ -2640,10 +2628,10 @@ class ReviewStore:
 
     @staticmethod
     def _offerta_piu_conveniente(product: Any) -> dict[str, Any] | None:
-        """L'offerta disponibile col prezzo al pezzo piu' basso.
+        """Return the available offer with the lowest unit price.
 
-        Sul prezzo al pezzo, come tutto il resto del programma: e' la decisione
-        commerciale da cui nasce il confronto.
+        Ranked on unit price, consistently with the rest of the program:
+        that's the commercial decision the comparison is built around.
         """
 
         migliori = [
@@ -2656,7 +2644,7 @@ class ReviewStore:
         return min(migliori, key=lambda offer: number(offer.get("unitPriceNet")) or 0.0)
 
     def delete_compilation(self, payload: Any) -> dict[str, Any]:
-        """Elimina una compilazione e tutte le sue voci nello storico ordini."""
+        """Delete a compiled order and all its entries from order history."""
 
         if not isinstance(payload, dict):
             raise ValueError("Richiesta non valida")
@@ -2684,17 +2672,17 @@ class ReviewStore:
                 history_saved = True
                 shutil.rmtree(quarantine)
             except Exception:
-                # Le due parti devono restare allineate: se una fallisce,
-                # cartella e promemoria tornano entrambi com'erano.
+                # Both parts must stay in sync: if one fails, folder and
+                # history both revert to how they were.
                 try:
                     if history_saved:
                         if original_history is None:
                             self.history_path.unlink(missing_ok=True)
                         else:
-                            # Il ramo che deve funzionare quando qualcosa e'
-                            # gia' andato storto: passa dallo stesso aiutante
-                            # degli altri, temporaneo con un nome suo e byte
-                            # sul disco prima di sostituire.
+                            # This branch runs when something has already
+                            # gone wrong, so it uses the same safe-write
+                            # helper as everywhere else: a temp file of its
+                            # own, flushed to disk before replacing.
                             scrittura_sicura.scrivi_bytes(self.history_path, original_history)
                     if quarantine.exists() and not folder.exists():
                         quarantine.rename(folder)
@@ -2712,7 +2700,7 @@ class ReviewStore:
             }
 
     def delete_upload(self, payload: Any) -> dict[str, Any]:
-        """Rimuove un listino dall'app; cancella solo le copie gestite dall'app."""
+        """Remove a price list from the app; only deletes copies the app manages."""
 
         if not isinstance(payload, dict):
             raise ValueError("Richiesta non valida")
@@ -2725,8 +2713,8 @@ class ReviewStore:
             raise ValueError("Listino non trovato")
 
         with self.lock:
-            # Una copia negli upload si elimina davvero; un riferimento a un
-            # originale esterno si stacca soltanto dalla pagina.
+            # A copy inside the uploads folder is actually deleted; a
+            # reference to an external original is only detached from the page.
             path = consegna.file_sicuro(self.upload_dir, name)
             profiles_doc = load_json(
                 self.upload_profiles_path,
@@ -2770,12 +2758,12 @@ class ReviewStore:
             review_changed = bool(riferimenti_documento)
             if review_changed:
                 active_review["files"] = [voce for voce in file_attivi if voce not in riferimenti_documento]
-                # ⚠ Togliere la voce dall'elenco cancella anche la prova che
-                # quel fornitore un documento ce l'aveva: `base_review` non ha
-                # piu' niente da cui dedurre che e' stato tolto.  Quindi la
-                # regola si applica qui, sulla stessa funzione, mentre la prova
-                # c'e' ancora.  (`base_review` continua a servire per i file
-                # spariti fuori dall'applicazione.)
+                # Removing the entry also removes the only evidence that
+                # this supplier had a document: `base_review` would have
+                # nothing left to infer that removal from. So the "supplier
+                # lost its price list" rule is applied here, in this same
+                # function, while the evidence still exists.
+                # (`base_review` still handles files removed outside the app.)
                 fornitori_tolti: dict[str, str] = {}
                 gestionale_tolto = False
                 for voce in riferimenti_documento:
@@ -2787,10 +2775,11 @@ class ReviewStore:
                         fornitori_tolti[chiave] = etichetta
                 self._spegni_i_fornitori_senza_documento(active_review, fornitori_tolti)
                 if gestionale_tolto and active_review.get("products"):
-                    # Eliminare l'elenco del gestionale e' una cosa che si puo'
-                    # fare apposta — serve quando se ne carica uno sbagliato —
-                    # ma i prodotti del confronto vengono da li'.  Restano
-                    # visibili, e va detto da dove arrivano adesso.
+                    # Deleting the management-software export is a
+                    # deliberate action — useful after uploading the wrong
+                    # one — but the comparison's products come from it.
+                    # They stay visible, and their current source must be
+                    # explained.
                     active_review.setdefault("warnings", []).append({
                         "code": "GESTIONALE_ELIMINATO",
                         "severity": "warning",
@@ -2838,9 +2827,9 @@ class ReviewStore:
                     ) from rollback_error
                 raise
 
-            # Che cosa e' cambiato, non solo che qualcosa e' cambiato: e' quello
-            # che permette alla pagina di dire «i prezzi che vedi sono ancora
-            # quelli di lunedi' 10 agosto» nominando il listino tolto.
+            # What changed, not just that something changed: this is what
+            # lets the page name the removed price list when explaining
+            # that the prices shown are from an earlier comparison.
             stato_pipeline = self.pipeline_jobs.input_modificato(
                 "eliminato",
                 documenti=[name],
@@ -2857,33 +2846,32 @@ class ReviewStore:
             }
 
     def nuova_comparazione(self, payload: Any = None) -> dict[str, Any]:
-        """Svuota documenti e confronto per ricominciare da capo.
+        """Clear documents and the current comparison to start over.
 
-        Chiesto da Daniele il 22 agosto 2026. Il giro di ogni lunedì era:
-        togliere l'elenco del gestionale, togliere i listini uno per uno — con
-        cinque fornitori sono sei cancellazioni — e solo allora caricare i
-        nuovi. Chi non lo faceva non se ne accorgeva subito: due listini dello
-        stesso fornitore nel confronto ne fanno entrare **uno solo**, scelto
-        sulla data di modifica del file (`renderDocumentoConteso` in pagina lo
-        dice, ma va letto).
+        Removes uploaded price lists and the management-software export so
+        the next weekly run starts clean, without requiring a manual,
+        file-by-file cleanup first. Without it, two price lists from the
+        same supplier left in the comparison would silently collapse into
+        just one, picked by file modification date (`renderDocumentoConteso`
+        explains this on the page, but it has to be read to be noticed).
 
-        ⚠ **Che cosa NON tocca, ed è il punto della funzione.** Le conferme e
-        le uguaglianze (`conferme.db`), gli schemi dei fornitori imparati qui
-        (`adattatori_imparati.json`), gli ordini di cui si aspetta la merce
-        (`orders.json`) e le compilazioni già fatte. Le prime due sono le
-        memorie che **nessun ricalcolo sa rifare** — le conferme non hanno
-        nemmeno una copia fuori da questo disco — e la
-        terza, cancellata, farebbe riordinare merce che sta già arrivando:
-        l'unico modo in cui un comando di pulizia produce un ordine sbagliato.
-        Chi aggiunge qui una riga che tocca `history/` sta cambiando quello,
-        non sta facendo pulizia.
+        What this deliberately does NOT touch, which is the whole point of
+        the function: confirmations and equalities (`conferme.db`), learned
+        supplier adapters (`adattatori_imparati.json`), orders still
+        awaiting delivery (`orders.json`), and past compilations. The first
+        two are memory no recompute can rebuild — confirmations have no
+        backup copy outside this store — and clearing the third would cause
+        merchandise already on its way to be reordered, which is the one
+        way a cleanup command could itself produce a wrong order. Adding a
+        line here that touches `history/` changes that guarantee, it isn't
+        "more cleanup".
 
-        Quello che sparisce è **solo copie**: i documenti in ingresso sono di
-        sola lettura e il programma se ne fa una copia sua (regola 1), quindi i
-        file di chi ordina restano dove sono.
+        Only copies disappear: input documents are read-only and the
+        program keeps its own copy of them, so the files the user actually
+        uploaded from stay untouched wherever they are.
         """
 
-        del payload  # la richiesta non porta niente: si svuota tutto o niente
+        del payload  # the request carries no fields: this clears everything or nothing
         with self.lock:
             if self.pipeline_jobs.in_corso():
                 raise LavoroGiaInCorso(
@@ -2900,9 +2888,10 @@ class ReviewStore:
             if not isinstance(voci_file, list):
                 voci_file = []
 
-            # I nomi da togliere vengono da tutte e due le parti: un documento
-            # può stare nei profili e non nel confronto (caricato dopo l'ultimo
-            # ricalcolo) o viceversa (il confronto è di prima).
+            # Names to remove come from both sources: a document can be in
+            # the upload profiles but not the comparison (uploaded after the
+            # last recompute), or the other way around (from an earlier
+            # comparison).
             nomi: list[str] = []
             for voce in profili:
                 nome = str(voce.get("file_name") or "").strip()
@@ -2926,9 +2915,9 @@ class ReviewStore:
                 if chiave:
                     fornitori[chiave] = etichetta
 
-            # Solo le copie dentro `uploads/`: un documento che l'utente ha
-            # collegato dal suo disco si stacca dalla pagina e basta, come fa
-            # `delete_upload`, e il suo originale non si tocca mai.
+            # Only copies inside `uploads/`: a document the user linked
+            # directly from disk is only detached from the page, exactly
+            # like `delete_upload` does, and its original is never touched.
             copie: list[Path] = []
             for nome in nomi:
                 if nome == self.upload_profiles_path.name:
@@ -2945,11 +2934,11 @@ class ReviewStore:
                 "generated_at": datetime.now(tz=timezone.utc).isoformat(),
             }
 
-            # Prima si sposta tutto in quarantena, poi si scrive, e solo alla
-            # fine si cancella davvero: è la disciplina di `delete_upload`, e
-            # qui serve di più, perché i file sono tanti e a metà strada si
-            # resterebbe con un confronto che descrive documenti che non ci
-            # sono più.
+            # Everything moves to quarantine first, then gets written, and
+            # only at the end gets actually deleted — the same discipline as
+            # `delete_upload`, and more important here since many files are
+            # involved: a partial failure could otherwise leave a
+            # comparison describing documents that no longer exist.
             quarantena: list[tuple[Path, Path]] = []
             profili_scritti = False
             try:
@@ -2981,25 +2970,26 @@ class ReviewStore:
                 try:
                     riparo.unlink()
                 except OSError:
-                    # Il lavoro è fatto: `uploads/` non lo elenca più e il
-                    # confronto non c'è. Un file di quarantena rimasto è
-                    # sporcizia, non un guasto, e dirlo qui non aiuterebbe.
+                    # The work is already done: `uploads/` no longer lists
+                    # it and the comparison is gone. A leftover quarantine
+                    # file is clutter, not a failure, and reporting it here
+                    # wouldn't help anyone.
                     pass
 
-            # Niente `cambiamento`: quella fascia dice «i prezzi che vedi nelle
-            # pagine 2 e 3 sono ancora quelli di lunedì 10 agosto», e adesso
-            # non ci sono più né prezzi né pagine 2 e 3 da guardare. Lo stato
-            # torna in attesa e basta.
+            # No "stale prices" banner here: that banner exists to say the
+            # prices on screen are from an earlier comparison, and there are
+            # no prices or comparison pages left to look at. State just
+            # returns to awaiting new files.
             stato_pipeline = self.pipeline_jobs.input_modificato()
 
-            # E le domande «è arrivata la merce?» tornano adesso, non fra sette
-            # giorni. Chi risponde «no, non ancora» si sente rinviare la
-            # domanda di una settimana, e va bene finché a scandire il tempo è
-            # un timer; ma cominciare una comparazione nuova è un segnale più
-            # forte del timer — è il momento in cui ci si chiede davvero se la
-            # merce della settimana scorsa è arrivata. Misurato il 22 agosto
-            # 2026: quattro ordini risposti «non ancora» il 19 erano rimandati
-            # al 26, quindi il comando non avrebbe chiesto niente.
+            # "Has this arrived?" questions are reopened now, rather than
+            # waiting for their normal delay. Someone who answers "not yet"
+            # gets that question deferred by a fixed interval, which is fine
+            # when a timer is the only thing tracking time — but starting a
+            # fresh comparison is a stronger signal than the timer: it's the
+            # moment someone actually checks whether last week's order
+            # arrived, so pending questions should surface now rather than
+            # stay deferred past it.
             domande = 0
             storico_illeggibile = ""
             try:
@@ -3007,12 +2997,12 @@ class ReviewStore:
                 domande = order_history.riapri_le_domande(storico)
                 if domande:
                     order_history.save_history(self.history_path, storico)
-            except Exception as exc:  # noqa: BLE001 - la pulizia è già fatta
-                # ⚠ Non si inghiotte: la comparazione nuova è cominciata
-                # davvero e non si annulla per questo, ma «non ho potuto
-                # rimettere le domande» è un'informazione, e uno storico che
-                # non si legge è la stessa cosa che non sapere quale merce sta
-                # arrivando. Lo dice la risposta, invece di sparire.
+            except Exception as exc:  # noqa: BLE001 - cleanup already completed
+                # Not swallowed silently: the new comparison has genuinely
+                # started and isn't rolled back for this, but "couldn't
+                # reopen the pending questions" is information worth
+                # surfacing — an unreadable history is functionally the
+                # same as not knowing what merchandise is still expected.
                 storico_illeggibile = frase(exc) or "Lo storico degli ordini non si è lasciato leggere."
 
             listini = max(0, len(nomi) - elenchi)
@@ -3033,15 +3023,15 @@ class ReviewStore:
         order_key: str = "",
         delivered: set[str] | None = None,
     ) -> list[str]:
-        """Registra il piano appena compilato come ordine in attesa di consegna.
+        """Record the just-compiled order plan as pending delivery.
 
-        Si chiama SOLO a compilazione riuscita davvero — le copie dei listini
-        scritte sul disco — e riceve i fornitori di cui la copia esiste: un
-        ordine che nessuno ha potuto mandare non deve diventare la domanda
-        «è arrivata?» della settimana dopo.
+        Called only after compilation genuinely succeeded — the price-list
+        copies are written to disk — and only for suppliers whose copy
+        exists: an order that couldn't actually be sent must not later
+        become a "has this arrived?" question.
 
-        Le copie ci sono già: un problema qui non deve annullare una
-        compilazione riuscita, quindi viene solo segnalato.
+        The compiled copies already exist by this point; a failure here
+        must not undo a successful compilation, so it's only reported.
         """
 
         try:
@@ -3075,38 +3065,39 @@ class ReviewStore:
         quante: int = 50,
         riga: Any = None,
     ) -> dict[str, Any]:
-        """Una pagina del listino di un fornitore, come il programma l'ha letto.
+        """Return one page of a supplier's price list, as the pipeline read it.
 
-        Serve a rispondere a una domanda che nessun punteggio puo' risolvere:
-        «questo prodotto ce l'ha anche lui, sotto un altro nome?». Il caso vero
-        e' `LUXA SAPONE LIQ. EROG.250ML`, che il gestionale chiama cosi' e
-        NOCE chiama `LUXA SAPONE EROGATORE ORIGINAL ML.250` sotto un altro
-        codice a barre: dal testo non e' deducibile, con il listino davanti si'.
+        Answers a question no matching score can resolve on its own: does
+        this supplier carry the same product under a different name? Two
+        price lists can describe the same item with different wording and
+        a different barcode, in a way that isn't obvious from either
+        description alone — seeing the raw price-list row makes it clear.
 
-        ⚠ Un listino che non si lascia leggere NON fa fallire la richiesta.
-        Prima si': `sfoglia()` alzava, la rotta rispondeva 400, e l'elenco dei
-        fornitori sfogliabili — che sta nella riga sotto — non veniva mai
-        calcolato. In pagina la tendina «Fornitore» restava vuota e l'unica
-        cosa che si poteva fare era chiudere, anche quando gli altri listini
-        stavano benissimo. Adesso la risposta porta SEMPRE l'elenco, e il
-        fornitore che non c'e' lo dice in `problema`, con il motivo vero.
+        A price list that fails to read does NOT fail this request. The
+        list of browsable suppliers (computed on the line below) is always
+        returned regardless, and the requested supplier's own failure is
+        reported through `problema`, with the real reason, rather than
+        failing the whole call and leaving the supplier picker empty even
+        when every other price list is fine.
         """
 
         with self.lock:
             review, _state = self.review_with_manual_products()
-            # PRIMA l'elenco, poi la pagina: e' l'inversione che toglie il
-            # vicolo cieco. Calcolarlo dentro la stessa espressione del
-            # risultato voleva dire non calcolarlo mai quando `sfoglia` alzava.
+            # The supplier list is computed before the requested page, not
+            # inside the same expression as the result: computing it lazily
+            # there would mean never computing it at all when `sfoglia`
+            # raises.
             fornitori = self.catalog.fornitori_sfogliabili(review)
             chiesto = str(fornitore or "").strip().casefold()
-            # Nessun fornitore chiesto vuol dire «scegli tu»: il pulsante
-            # «Sfoglia i listini» di un prodotto senza nessuna offerta non ne
-            # porta uno (app.js, renderApriIlListino), e quel caso finiva su
-            # «Nessun listino caricato per «»».
-            # ⚠ Una scelta ESPLICITA non si sostituisce mai: le righe portano
-            # «E' questo», che abbina al fornitore della finestra. Aprire
-            # LARICE a chi ha chiesto BETULLA vorrebbe dire un abbinamento a mano
-            # sul listino sbagliato, cioe' un ordine sbagliato.
+            # No supplier requested means "pick one for me": the "browse
+            # price lists" button on a product with no offers at all
+            # carries no supplier id, and without this fallback that case
+            # would resolve to an empty supplier name.
+            # An explicit choice is never overridden: matched rows carry
+            # "this is it", tied to the supplier of the window that's open.
+            # Silently switching to a different supplier than the one
+            # requested would let a manual match land on the wrong price
+            # list, producing a wrong order.
             if not chiesto and fornitori:
                 chiesto = str(fornitori[0].get("id") or "")
             try:
@@ -3120,12 +3111,13 @@ class ReviewStore:
     def _listino_non_sfogliabile(
         self, chiesto: str, fornitori: list[dict[str, Any]], *, quante: int
     ) -> dict[str, Any]:
-        """La pagina vuota di un listino che non c'e', con il motivo vero.
+        """Build the empty-page response for a price list that isn't there, with the real reason.
 
-        `SupplierCatalog.load_errors` sa perche' quel fornitore e' uscito —
-        file spostato, schema non riconosciuto, colonne non dichiarate, nessuna
-        riga ordinabile — e lo dice in italiano. «Nessun listino caricato per
-        «betulla»» non diceva ne' che cosa fosse successo ne' che cosa fare.
+        `SupplierCatalog.load_errors` knows why that supplier dropped out
+        — file moved, schema not recognized, columns not declared, no
+        orderable row — and reports it in plain language, rather than a
+        generic "no price list loaded" message that says neither what
+        happened nor what to do about it.
         """
 
         motivo = next(
@@ -3152,9 +3144,9 @@ class ReviewStore:
             "supplierName": supplier_label(chiesto) if chiesto else "",
             "righe": [],
             "da": 0,
-            # Lo stesso tetto che mette `SupplierCatalog.sfoglia`: la pagina
-            # legge `quante` per contare le pagine, e due limiti diversi prima
-            # o poi divergono.
+            # The same cap `SupplierCatalog.sfoglia` applies: the page uses
+            # `quante` to count pages, and two different limits would
+            # eventually disagree.
             "quante": max(1, min(int(quante or 50), 200)),
             "trovate": 0,
             "totale": 0,
@@ -3189,25 +3181,23 @@ class ReviewStore:
     def validate_snapshot(
         self, snapshot: Any, *, for_compile: bool
     ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
-        """Lo stato pulito, gli errori, **e il confronto su cui li ha decisi**.
+        """Return the cleaned state, the errors, and the comparison they were decided against.
 
-        ⚠ Il terzo valore non e' una comodita': senza, chi chiama ricostruiva
-        il confronto una seconda volta subito dopo, e `base_review` rilegge e
-        ripassa da capo `review_data.json` — il file piu' grosso del programma,
-        2,4 MB sul confronto vero. La pagina si autosalva 450 ms dopo ogni
-        modifica, quindi quel lavoro si faceva due volte per ogni quantita'
-        toccata, e il primo dei due risultati si buttava via.
+        Returning the comparison is not just a convenience: without it, callers
+        would rebuild it right afterward, and that means re-reading and re-parsing
+        `review_data.json` (the largest file in the app, ~2.4 MB on a real
+        comparison) a second time. The page autosaves 450 ms after every edit, so
+        that cost would double per quantity change and the first build would be
+        discarded.
 
-        Restituire quello gia' costruito e' lecito, e la ragione va detta
-        perche' e' l'unica cosa che rende sicura questa scorciatoia: fra le due
-        chiamate non cambia niente da cui il confronto dipenda. `review_data.json`
-        e' fermo — la catena adesso prende lo stesso lucchetto delle rotte per
-        sostituirlo — e le quattro chiavi di stato che entrano nel confronto
-        (`manualProducts`, `matchOverrides`, `manualMatches`, `supplierDiscounts`)
-        `clean` le ricopia identiche da quello letto qui: sono esattamente
-        `CHIAVI_DI_STATO_RICOPIATE`. Non e' una cache e non ha nessuna finestra
-        di staleness — il confronto non viene tenuto da parte fra una richiesta
-        e l'altra, si passa di mano dentro la stessa.
+        This is safe because nothing the comparison depends on can change between
+        the two calls: `review_data.json` is frozen while it's in use (the pipeline
+        now takes the same lock the routes do to replace it), and the four state
+        keys that feed into the comparison (`manualProducts`, `matchOverrides`,
+        `manualMatches`, `supplierDiscounts`, listed in `CHIAVI_DI_STATO_RICOPIATE`)
+        are copied verbatim from the state read here. It isn't a cache with a
+        staleness window — the comparison is handed off within the same call, never
+        held between requests.
         """
 
         if not isinstance(snapshot, dict):
@@ -3218,30 +3208,26 @@ class ReviewStore:
         if expected_run and run_id != expected_run:
             raise ValueError("La run dello snapshot non coincide con la run caricata")
 
-        # Due schede aperte sullo stesso confronto si cancellavano il lavoro a
-        # vicenda: `save_state` riscrive TUTTO lo stato, e il controllo della run
-        # non le distingue — e' la stessa run. La scheda dichiara la versione da
-        # cui e' partita; se sul disco ce n'e' una piu' nuova, qualcun altro ha
-        # gia' salvato, e va detto invece di far sparire le sue quantita' (e le
-        # proprie, alla ricarica). Uno snapshot senza versione non viene
-        # rifiutato: e' una pagina vecchia rimasta aperta, e toglierle il
-        # salvataggio sarebbe peggio del rischio che corre.
+        # Two tabs open on the same comparison can overwrite each other's work:
+        # `save_state` rewrites the whole state, and the run check alone can't tell
+        # them apart (same run). Each tab declares the version it started from; if
+        # the one on disk is newer, someone else already saved, and that has to be
+        # reported instead of silently discarding quantities. A snapshot without a
+        # declared version isn't rejected — it's an old tab left open, and blocking
+        # its save would be worse than the small risk it carries.
         versione_sul_disco = int(number(existing_state.get("stateVersion")) or 0)
         versione_dichiarata = number(snapshot.get("stateVersion"))
         if versione_dichiarata is not None and int(versione_dichiarata) != versione_sul_disco:
-            # ⚠ Chi ha scritto quella versione conta: una compilazione riscrive
-            # lo stato prima di produrre le copie, e se poi qualcosa va storto la
-            # scheda resta indietro di un numero senza che nessuna altra scheda
-            # esista. Dirle «un'altra scheda ha salvato dopo di te» la manda a
-            # cercare un collega che non c'e', e il pulsante «riprova» non puo'
-            # funzionare perche' rifa' il salvataggio per primo (revisione di
-            # regressione del 14 agosto 2026).
-            # ⚠ Tre origini, non due.  La terza: sul disco `state.json` non
-            # c'e' affatto, e la scheda ne dichiara una versione — vuol dire
-            # che nel frattempo qualcuno ha premuto «Inizia nuova
-            # comparazione».  Dirle «un'altra scheda ha salvato dopo di te» la
-            # manda a cercare un collega che non esiste, ed e' lo stesso
-            # errore gia' corretto una volta per la compilazione.
+            # Who wrote that version matters: a compilation rewrites the state
+            # before producing the copies, so a tab that falls behind by one number
+            # may not be behind any other tab at all — it's behind its own
+            # compilation. Telling it "another tab saved after you" would send the
+            # user looking for a colleague who isn't there, and "retry" can't work
+            # because it saves again first.
+            # There's a third origin besides another tab and a compilation:
+            # `state.json` may not exist on disk at all while the tab still
+            # declares a version, meaning "Start new comparison" was pressed in the
+            # meantime. That also isn't "another tab saved after you".
             svuotato = versione_sul_disco == 0 and not self.state_path.is_file()
             return {}, [{
                 "code": "STATO_SOVRASCRITTO",
@@ -3271,9 +3257,9 @@ class ReviewStore:
                 errors.append({
                     "code": "QUANTITA_NON_VALIDA",
                     "productId": product_id,
-                    # Il nome viaggia con l'errore: la pagina elenca i prodotti
-                    # fermi uno per uno, e un identificativo non si cerca a mano
-                    # fra cinquecento righe.
+                    # The name travels with the error: the page lists stuck
+                    # products one by one, and an id isn't something to hunt for
+                    # by hand among hundreds of rows.
                     "productName": str(product.get("name") or product.get("description") or product_id),
                 })
                 continue
@@ -3285,35 +3271,29 @@ class ReviewStore:
                 quantity = 0
             offer = find_offer(product, supplier_id)
             product_name = str(product.get("name") or product.get("description") or product_id)
-            # ⚠ Dal 16 agosto 2026 una quantità positiva senza nessun fornitore
-            # disponibile è uno stato valido: il prodotto non entra nel piano né
-            # nei listini dei fornitori, ma nell'elenco «Prodotti da reperire»
-            # che nasce alla compilazione. La regola del 12 agosto — «una riga
-            # d'ordine senza offerta utilizzabile è un ordine che non si può
-            # mandare» — resta intera per gli altri due casi: un fornitore
-            # scelto la cui offerta non si può ordinare, e nessun fornitore
-            # scelto quando invece qualcuno ce l'ha. Lì c'è una decisione da
-            # prendere, e lasciarla passare in silenzio manderebbe un ordine
-            # sbagliato.
+            # A positive quantity with no supplier available at all is a valid
+            # state: the product doesn't enter the plan or any supplier's price
+            # list, but goes into the "items to source" list produced at compile
+            # time. The rule that an order line without a usable offer can't be
+            # sent still applies to the other two cases: a chosen supplier whose
+            # offer can't be ordered, and no supplier chosen when one is actually
+            # available. Those are pending decisions, and letting them through
+            # silently would send a wrong order.
             da_reperire = not supplier_id and nessuna_offerta_utilizzabile(product)
             offerta_da_sistemare = (
                 (not offer_is_available(offer)) if supplier_id else not da_reperire
             )
             if quantity > 0 and offerta_da_sistemare:
-                # Il rifiuto dice DI QUALE prodotto parla: prima la pagina
-                # mostrava «Controlli snapshot non superati» e su un elenco di
-                # cinquecento righe non c'era modo di sapere quale toccare.
+                # The rejection names which product it's about, so the user isn't
+                # left hunting through hundreds of rows.
                 #
-                # ⚠ Due codici e non uno, dal 21 agosto 2026. «Il fornitore
-                # scelto ha un'offerta che non si puo' ordinare» e' un errore da
-                # sistemare subito; «non ho ancora scelto fra quelli che ce
-                # l'hanno» e' una decisione ancora da prendere, e succede
-                # normalmente dopo un «Non e' lo stesso articolo» quando un
-                # altro fornitore l'articolo ce l'ha. Con un codice solo quel
-                # rifiuto spegneva l'autosalvataggio di TUTTI i 459 prodotti —
-                # e' il guasto del 15 agosto rifatto — e per giunta bloccava il
-                # pulsante che serviva a tornare indietro, che salva prima di
-                # rispondere. Ferma la compilazione, non il salvataggio.
+                # Two distinct codes: "the chosen supplier has an offer that can't
+                # be ordered" is an error to fix now, while "no supplier chosen yet
+                # among those who have it" is a pending decision (typically after
+                # rejecting a match when another supplier does carry the item). A
+                # single shared code would block autosave for every product in the
+                # snapshot, including the "go back" action that saves before
+                # responding. This blocks compile, not save.
                 errors.append({
                     "code": "OFFERTA_NON_VALIDA" if supplier_id else "FORNITORE_DA_SCEGLIERE",
                     "productId": product_id,
@@ -3321,20 +3301,17 @@ class ReviewStore:
                     "supplierId": supplier_id,
                     "supplierName": supplier_label(supplier_id) if supplier_id else "",
                 })
-            # Senza un fornitore scelto non c'è niente da confermare: pretendere
-            # una conferma su un prodotto che nessuno ha a listino sarebbe una
-            # casella che l'utente non può spuntare, e fermerebbe la
-            # compilazione per sempre.
+            # With no supplier chosen there's nothing to confirm: requiring a
+            # confirmation on a product no supplier carries would be a checkbox the
+            # user can never tick, and would block compilation forever.
             requires = bool(supplier_id) and offer_needs_confirmation(product, offer)
-            # ⚠ Qui il magazzino delle conferme **non** si guarda, ed e' una
-            # scelta. Chi semina la risposta gia' data e' `review()`, che la
-            # mette su `product.confirmed`; la pagina la rimanda indietro nello
-            # snapshot senza toccarla, ed e' quella che arriva fin qui. Se
-            # invece il magazzino potesse dire di si' anche qui, una spunta
-            # tolta dall'utente verrebbe rimessa dal ricordo di ieri nello
-            # stesso salvataggio in cui l'ha tolta: la revoca non esisterebbe.
-            # Una sola autorita' per volta — il magazzino quando si legge, lo
-            # snapshot quando si salva.
+            # The confirmation store is deliberately not consulted here.
+            # `review()` seeds `product.confirmed` from it, the page echoes that
+            # value back unchanged in the snapshot, and that's what arrives here.
+            # If the store could also answer "yes" at this point, a confirmation
+            # the user just unchecked would be reinstated by yesterday's memory in
+            # the same save that removed it — revocation would be impossible. One
+            # authority at a time: the store on read, the snapshot on save.
             if quantity > 0 and requires and not confirmed:
                 errors.append({
                     "code": "CONFERMA_MANCANTE",
@@ -3346,22 +3323,19 @@ class ReviewStore:
             quantity_source = str(decision.get("quantitySource") or "")
             if quantity_source not in {"gestionale", "utente"}:
                 quantity_source = "gestionale"
-            # Chi ha scelto questo fornitore: il programma o l'utente.
+            # Who chose this supplier: the app's default, or the user.
             #
-            # Non si chiede alla pagina, si deduce — e la deduzione è esatta,
-            # perché il più conveniente il programma **l'ha già selezionato da
-            # sé**: sceglierlo a mano non cambierebbe niente, quindi una
-            # decisione che coincide col migliore non può essere altro che il
-            # default. Chi ha voluto un fornitore diverso dal migliore, invece,
-            # ha fatto una scelta, e quella si difende.
+            # This is inferred rather than asked of the page, and the inference is
+            # exact: the app has already picked the best offer on its own, so a
+            # choice that matches the best offer can only be the default — picking
+            # it by hand wouldn't change anything. A choice that differs from the
+            # best offer is a deliberate one, and stays deliberate.
             #
-            # ⚠ Serve a `review()`, e senza il difetto è questo: il confronto
-            # ricalcolato sceglie di nuovo il più conveniente, poi la decisione
-            # salvata gli passa sopra. Un default calcolato la settimana scorsa
-            # sopravviveva a un ricalcolo che lo rendeva sbagliato travestito da
-            # scelta dell'utente, e NOCE restava fuori dall'ordine con il
-            # prezzo più basso in pagina (difetto trovato il 26 agosto 2026, in
-            # piedi dal primo commit).
+            # `review()` relies on this: a recalculated comparison picks the best
+            # offer again, and the saved decision then overrides it. Without this
+            # inference, a default computed last week would survive a recalculation
+            # that made it wrong, disguised as a user choice — a saved default could
+            # silently outlive the price change that invalidated it.
             migliore = self._offerta_piu_conveniente(product)
             scelta_dell_utente = bool(supplier_id) and (
                 migliore is None or supplier_id != str(migliore.get("supplierId") or "")
@@ -3375,34 +3349,32 @@ class ReviewStore:
                 "excluded": excluded,
                 "quantitySource": quantity_source,
             }
-            # Che cosa e' stato confermato, non solo che qualcosa lo e' stato.
-            # Senza questo, dopo il ricalcolo della settimana dopo la casella
-            # restava spuntata anche quando il prodotto era stato abbinato a
-            # un'altra riga del listino, con altro EAN e altra descrizione: la
-            # conferma dell'utente copriva un articolo che non aveva mai visto.
+            # What was confirmed, not just that something was. Without this, after
+            # a later recalculation the checkbox would stay ticked even if the
+            # product had since matched a different price-list row (different EAN,
+            # different description): the user's confirmation would then cover an
+            # item they never actually saw.
             if confirmed and offer:
                 voce["confirmedArticle"] = impronta_articolo(offer)
             normalized.append(voce)
 
-        # ⚠ Una compilazione fatta di soli prodotti da reperire non è un ordine
-        # vuoto da rifiutare: è una settimana in cui il gestionale chiede merce
-        # che nessun fornitore porta, e l'unica uscita giusta è l'elenco di
-        # quella merce (decisione di Daniele del 16 agosto 2026). `ORDINE_VUOTO`
-        # resta per il caso in cui non c'è né un ordine né un elenco.
+        # A compilation made entirely of items to source is not an empty order to
+        # reject: it's a week where the management software asks for goods no
+        # supplier carries, and the correct output is the list of those items.
+        # `ORDINE_VUOTO` still applies when there is neither an order nor a list.
         if for_compile and not any(item["quantity"] > 0 for item in normalized):
             errors.append({"code": "ORDINE_VUOTO"})
         clean = {
             "schemaVersion": 1,
-            # Cresce a ogni riscrittura completa dello stato (`save_state` e
-            # `compile`): e' il numero con cui la scheda successiva si accorge
-            # di non essere la sola. Chi tocca solo una parte dello stato —
-            # una risposta a un candidato, un prodotto aggiunto a mano — non lo
-            # muove, perche' quelle scritture `validate_snapshot` le ricopia dal
-            # disco e non le puo' perdere.
+            # Bumped on every full state rewrite (`save_state`, `compile`): this
+            # is how the next tab notices it isn't the only one. Writes that touch
+            # only part of the state (a candidate answer, a manually added product)
+            # don't bump it, because `validate_snapshot` copies those fields from
+            # disk and can't lose them.
             "stateVersion": versione_sul_disco + 1,
-            # Chi l'ha scritta: `compile` lo rimette a «compilazione» dopo aver
-            # chiamato questa funzione. Serve alla scheda che si trova indietro
-            # di un numero per sapere se l'ha superata un collega o se stessa.
+            # Who wrote this version: `compile` resets it to "compilazione" after
+            # calling this function, so a tab that finds itself behind can tell
+            # whether it lost to another tab or to its own compilation.
             "stateVersionOrigin": "scheda",
             "runId": run_id,
             "currentStep": max(1, min(3, int(number(snapshot.get("currentStep")) or 1))),
@@ -3411,11 +3383,11 @@ class ReviewStore:
             "updatedAt": datetime.now(tz=timezone.utc).isoformat(),
             "products": normalized,
         }
-        # Le decisioni sui candidati sono legate alla run e alla loro impronta;
-        # lo sconto di testata lo scrive la sua rotta; le righe abbinate a mano
-        # pure. Nessuna delle tre viaggia nello snapshot della scheda, quindi
-        # l'autosalvataggio delle quantità non le deve toccare: si ricopiano dal
-        # disco, una per una, dall'elenco che le tiene tutte.
+        # Candidate decisions are tied to the run and to their fingerprint;
+        # the header discount and manually matched rows are each written by their
+        # own route. None of the three travel in the tab's snapshot, so the
+        # quantity autosave must not touch them — they're copied verbatim from
+        # disk, key by key.
         for chiave, quando_manca in CHIAVI_DI_STATO_RICOPIATE.items():
             clean[chiave] = existing_state.get(chiave) or deepcopy(quando_manca)
         return clean, errors, review
@@ -3425,16 +3397,14 @@ class ReviewStore:
         review: dict[str, Any],
         selections: dict[str, dict[str, Any]],
     ) -> dict[str, Any]:
-        """I totali del Riepilogo, contati qui: testata, somma delle righe, scarto.
+        """Compute the summary totals: header total, sum of the displayed lines, and their gap.
 
-        ⚠ La testata e la somma delle righe non coincidono sempre.  Il totale
-        di un ordine si fa sui prezzi interi (le promozioni e i listini portano
-        fino a sei decimali), mentre ogni riga in pagina si mostra arrotondata
-        al centesimo: sommando le righe mostrate escono anche quattro centesimi
-        di differenza — misurati su BETULLA il 12 agosto 2026, 830,16 € contro
-        830,12 €.  Nessuno dei due numeri è sbagliato; sbagliato è mostrarne uno
-        senza dire dell'altro, perché chi controlla a mano trova un buco e non
-        sa di che cosa sia fatto.
+        The header total and the sum of the displayed lines don't always match.
+        The order total is computed on full-precision prices (promotions and price
+        lists carry up to six decimals), while each line on the page is shown
+        rounded to the cent — summing the displayed lines can differ from the
+        header total by a few cents. Neither number is wrong; showing one without
+        the other is, because a manual check then finds a gap it can't explain.
         """
 
         products_by_id = {str(item.get("id")): item for item in review.get("products") or []}
@@ -3461,14 +3431,13 @@ class ReviewStore:
             })
             voce["lineCount"] += 1
             voce["_intero"] = round(voce["_intero"] + line_net, 4)
-            # ⚠ La somma delle righe deve contare COME CONTA LO SCHERMO.
-            # `round()` di Python arrotonda il double e a metà va al pari;
-            # `Intl.NumberFormat` del browser arrotonda la rappresentazione
-            # decimale e a metà va per eccesso: su 14,665 il primo dice 14,66 e
-            # la pagina mostra 14,67.  La frase del Riepilogo confronta la
-            # testata con «quello che le righe mostrano»: contato diversamente,
-            # dichiarava un numero che sullo schermo non c'era (BLOCCANTE della
-            # revisione avversariale R4).
+            # The line sum must count the way the screen displays it. Python's
+            # `round()` rounds the double and ties go to even; the browser's
+            # `Intl.NumberFormat` rounds the decimal representation and ties go up
+            # — on 14.665 the former gives 14.66, the page shows 14.67. The summary
+            # text compares the header total to "what the lines show"; using a
+            # different rounding here would state a number that never appeared on
+            # screen.
             voce["_arrotondato"] = round(voce["_arrotondato"] + _centesimi_come_in_pagina(line_net), 2)
 
         suppliers = []
@@ -3492,7 +3461,7 @@ class ReviewStore:
         }
 
     def order_summary_from_state(self, review: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
-        """Lo stesso riepilogo, partendo dalle scelte salvate sul disco."""
+        """Same summary, built from the choices saved on disk."""
 
         selections = {
             str(item.get("id") or ""): item
@@ -3503,47 +3472,37 @@ class ReviewStore:
 
     def save_state(self, snapshot: Any) -> dict[str, Any]:
         with self.lock:
-            # Lo stato di prima serve a distinguere una revoca da una scadenza:
-            # va letto adesso, perche' fra un attimo viene sostituito.
+            # The previous state is needed to tell a revocation from an
+            # expiration apart, so it's read now, before it gets replaced.
             precedente = load_json(self.state_path, {}) if self.state_path.is_file() else {}
             clean, errors, review = self.validate_snapshot(snapshot, for_compile=False)
-            # ⚠ Una conferma che manca non impedisce di SALVARE, impedisce di
-            # COMPILARE. Finche' bloccava anche il salvataggio, il passo 2 si
-            # apriva con un riquadro rosso «Salvataggio non riuscito» e da quel
-            # momento **niente** si salvava piu': ne' le quantita' che cambiavi,
-            # ne' i fornitori che sceglievi, finche' non avevi risposto a tutte
-            # le proposte in sospeso. Misurato il 15 agosto 2026 sul confronto
-            # vero: 8 prodotti con la quantita' del gestionale e la
-            # corrispondenza da confermare bastavano a spegnere il
-            # salvataggio di 459.
+            # A missing confirmation blocks compiling, not saving. If it also
+            # blocked saving, a handful of unconfirmed products would silently
+            # stop autosave for every other product in the review until all
+            # pending proposals were answered.
             #
-            # Il cancello resta dov'e' utile: `compile` valida con
-            # `for_compile=True` e li' `CONFERMA_MANCANTE` ferma tutto, con la
-            # frase che dice quale prodotto e quale fornitore. E chi deve
-            # ancora rispondere lo sa gia' dalla pagina, che dichiara le
-            # proposte in sospeso e il filtro «Da confermare»: ripeterlo qui
-            # sarebbe la seconda notifica per la stessa cosa.
-            # ⚠ `FORNITORE_DA_SCEGLIERE` sta accanto a `CONFERMA_MANCANTE` per
-            # la stessa ragione: e' una decisione ancora da prendere, non un
-            # ordine sbagliato, e non deve spegnere il salvataggio degli altri
-            # quattrocentocinquanta prodotti. Con `for_compile=True` ferma
-            # eccome.
+            # The gate stays where it's useful: `compile` validates with
+            # `for_compile=True`, and there `CONFERMA_MANCANTE` does stop
+            # everything, with a message naming the product and supplier. The user
+            # already knows what's pending from the page's own "to confirm"
+            # filter, so repeating it here would just be a second notification for
+            # the same thing.
+            # `FORNITORE_DA_SCEGLIERE` is treated the same way: it's a pending
+            # decision, not a broken order, so it must not block autosave for the
+            # rest of the products either — though it still blocks compilation.
             non_bloccanti = {"CONFERMA_MANCANTE", "FORNITORE_DA_SCEGLIERE"}
             bloccanti = [errore for errore in errors if errore.get("code") not in non_bloccanti]
             if bloccanti:
                 raise SnapshotError(bloccanti)
             atomic_json(self.state_path, clean)
             if str((precedente or {}).get("runId") or "") != str(clean.get("runId") or ""):
-                # ⚠ L'unico caso in cui il confronto costruito da
-                # `validate_snapshot` NON e' quello che si otterrebbe adesso.
-                # Quasi tutto quello che entra nel confronto viene ricopiato
-                # identico dallo stato di prima, ma `apply_match_overrides` — le
-                # risposte date ai candidati — si applica **solo** se lo stato
-                # dichiara la stessa run del confronto: con uno stato che ne
-                # dichiarava un'altra (un'installazione nuova, una catena morta
-                # fra la ripulitura dello stato e la sostituzione del confronto)
-                # quello di prima le ha saltate e quello scritto adesso no. E'
-                # raro e sarebbe silenzioso: si ricostruisce e basta.
+                # The one case where the comparison `validate_snapshot` built
+                # isn't the one we'd get now: `apply_match_overrides` (the answers
+                # given to candidates) only applies when the state declares the
+                # same run as the comparison. If the previous state declared a
+                # different run, it skipped those overrides while the one just
+                # written doesn't — rare, and silent otherwise, so it's rebuilt
+                # here.
                 review, _stato = self.review_with_manual_products()
             self.ricorda_le_conferme(clean, review, precedente if isinstance(precedente, dict) else {})
             selections = {str(item["id"]): item for item in clean["products"]}
@@ -3559,8 +3518,7 @@ class ReviewStore:
                 "stateVersion": clean["stateVersion"],
                 "promotionSummary": decorated.get("promotionSummary") or {"counts": {}},
                 "promotionStates": promotion_states,
-                # I totali del Riepilogo li conta il servizio, e con loro lo
-                # scarto di arrotondamento fra testata e righe.
+                # The summary totals and the header/lines rounding gap.
                 "orderSummary": self.order_summary(review, selections),
             }
 
@@ -3569,14 +3527,14 @@ class ReviewStore:
         review: dict[str, Any],
         selections: dict[str, dict[str, Any]],
     ) -> dict[str, int]:
-        """Quanti omaggi da soglia si portano a casa con queste scelte.
+        """Count the threshold-gift rewards earned by these choices.
 
-        Il NUMERO si calcola con le stesse regole delle promozioni (soglie per
-        singolo ordine e ripetibili); il VALORE dell'omaggio no, per decisione
-        commerciale: l'omaggio informa e basta.
+        The count follows the same promotion rules (single-order and repeatable
+        thresholds); the gift's monetary value doesn't factor in here — it's
+        informational only.
         """
 
-        from promotions import (  # import tardivo: il modulo vive in `scripts`
+        from promotions import (  # deferred import: the module lives under `scripts`
             KIND_THRESHOLD_GIFT,
             STATUS_EARNED,
             calculate_promotion_state,
@@ -3596,16 +3554,16 @@ class ReviewStore:
         return conteggi
 
     def move_preview(self, payload: Any) -> dict[str, Any]:
-        """Preventivo dello spostamento di tutti i prodotti di un fornitore.
+        """Quote what moving all of one supplier's products to another supplier would cost.
 
-        Non scrive niente: ne' lo stato, ne' lo storico, ne' i documenti finali.
-        Mostra soltanto quanto costerebbe cambiare fornitore, cosi' l'utente
-        decide guardando i numeri; lo spostamento vero avviene poi con il
-        normale salvataggio dello stato. Il conto lo fa il server e non il
-        browser perche' prezzi e totali li decide sempre e solo il server.
+        Writes nothing — no state, no history, no final documents. It only shows
+        what changing supplier would cost, so the user can decide from the
+        numbers; the actual move happens through the normal state save. The
+        computation runs on the server, never the browser, because prices and
+        totals are always the server's decision.
 
-        Il numero di colli (o di espositori) non cambia mai: cambia il
-        fornitore, quindi il prezzo dell'unita' d'ordine e i pezzi consegnati.
+        The carton (or display) count never changes; the supplier changes, and
+        with it the order-unit price and the delivered piece count.
         """
 
         if not isinstance(payload, dict):
@@ -3615,27 +3573,26 @@ class ReviewStore:
             raise ValueError("Fornitore di partenza non indicato")
 
         with self.lock:
-            # Stesso controllo degli altri endpoint: run sbagliata, prodotto
-            # sconosciuto o quantita' impossibile vengono rifiutati qui.
-            # CONFERMA_MANCANTE no: un preventivo non scrive niente, e una
-            # conferma che manca su un prodotto di UN ALTRO fornitore non deve
-            # impedire di vedere i numeri di questo. Le conferme che serviranno
-            # dopo lo spostamento vengono comunque dichiarate una per una nel
-            # campo needsConfirmation di ogni assegnazione.
+            # Same checks as the other endpoints: wrong run, unknown product or
+            # impossible quantity are rejected here. Not CONFERMA_MANCANTE though
+            # — a preview writes nothing, and a missing confirmation on a product
+            # from a different supplier shouldn't block seeing this one's numbers.
+            # Confirmations that will be needed after the move are still declared
+            # per assignment, in `needsConfirmation`.
             clean, errors, review = self.validate_snapshot(payload, for_compile=False)
             blocking = [error for error in errors if error.get("code") != "CONFERMA_MANCANTE"]
             if blocking:
                 raise SnapshotError(blocking)
             products_by_id = {str(item.get("id")): item for item in review.get("products") or []}
             supplier_defs = {str(item.get("id")): item for item in review.get("suppliers") or []}
-            # Le scelte di adesso, nella forma che le promozioni sanno leggere:
-            # servono a contare gli omaggi prima e dopo lo spostamento.
+            # Current choices, in the shape promotions understands, for counting
+            # gifts before and after the move.
             selezioni_prima = {str(item["id"]): dict(item) for item in clean["products"]}
             omaggi_prima = self.omaggi_per_fornitore(review, selezioni_prima)
 
-            # Prima passata: totale netto dell'ordine intero riga per riga, con
-            # la stessa aritmetica della compilazione. I prodotti a quantita'
-            # zero e quelli esclusi non pesano (la convalida azzera gli esclusi).
+            # First pass: line-by-line net total of the whole order, same
+            # arithmetic as compilation. Zero-quantity and excluded products don't
+            # count (validation zeroes out excluded items).
             totals_before: dict[str, float] = {}
             current_total = 0.0
             movable: list[dict[str, Any]] = []
@@ -3678,7 +3635,7 @@ class ReviewStore:
                 })
 
             def left_behind_reason(item: dict[str, Any], supplier_id: str | None) -> str:
-                """Perché il prodotto resta dov'è. Non viene azzerato né tolto."""
+                """Why the product stays where it is. It's neither zeroed nor removed."""
 
                 if supplier_id:
                     examined = [find_offer(item["product"], supplier_id)]
@@ -3696,10 +3653,10 @@ class ReviewStore:
                 left_behind: list[dict[str, Any]] = []
                 totals_after = dict(totals_before)
                 delta = 0.0
-                # A parita' di colli i pezzi consegnati cambiano, perche' i colli
-                # di fornitori diversi non contengono la stessa merce. Senza
-                # questi conteggi la differenza di spesa da sola e' ingannevole:
-                # un'opzione che "fa risparmiare" puo' consegnare meta' roba.
+                # Same carton count, different delivered pieces, because cartons
+                # from different suppliers don't hold the same amount of goods.
+                # Without these counts the cost difference alone is misleading: an
+                # option that "saves money" could deliver half the goods.
                 pieces_before = 0.0
                 pieces_after = 0.0
                 moved_net_before = 0.0
@@ -3739,13 +3696,12 @@ class ReviewStore:
                         "newLineNet": round(new_line, 2),
                     })
                 if not assignments:
-                    # Un'opzione che non sposta niente non si propone: sarebbe
-                    # una scelta che non cambia nulla in mezzo alle altre.
+                    # An option that moves nothing isn't offered: it would be a
+                    # choice indistinguishable from doing nothing.
                     return None
-                # Le soglie con omaggio si raggiungono con l'ordine di UN
-                # fornitore: spostando la merce altrove si perdono, e finora il
-                # preventivo non lo diceva. Il conto lo rifa' il servizio con le
-                # scelte di dopo, con le stesse regole delle promozioni.
+                # Threshold gifts are earned on a single supplier's order, so
+                # moving goods away can lose them; recomputed here with the
+                # post-move choices, same promotion rules.
                 selezioni_dopo = {key: dict(value) for key, value in selezioni_prima.items()}
                 for assignment in assignments:
                     voce = selezioni_dopo.get(assignment["productId"])
@@ -3754,11 +3710,10 @@ class ReviewStore:
                 omaggi_dopo = self.omaggi_per_fornitore(review, selezioni_dopo)
                 totale_omaggi_prima = sum(omaggi_prima.values())
                 totale_omaggi_dopo = sum(omaggi_dopo.values())
-                # Persi e guadagnati si contano PER FORNITORE e poi si sommano:
-                # perdere 2 omaggi da LARICE e guadagnarne 2 da BETULLA non e'
-                # «zero» — sono merci diverse di fornitori diversi, e la
-                # differenza dei totali generali le compensava in silenzio
-                # (revisione avversariale R4).
+                # Lost and gained are counted per supplier and then summed:
+                # losing 2 gifts from one supplier and gaining 2 from another isn't
+                # "zero" — they're different goods from different suppliers, and a
+                # plain difference of the grand totals would silently net them out.
                 fornitori_omaggi = set(omaggi_prima) | set(omaggi_dopo)
                 omaggi_persi = sum(
                     max(0, omaggi_prima.get(nome, 0) - omaggi_dopo.get(nome, 0))
@@ -3781,11 +3736,11 @@ class ReviewStore:
                         "giftsBefore": int(omaggi_prima.get(supplier, 0)),
                         "giftsAfter": int(omaggi_dopo.get(supplier, 0)),
                         "threshold": round(threshold, 2),
-                        # meets_threshold segue la regola della compilazione, per
-                        # cui chi non ordina niente non e' "sotto soglia". Senza
-                        # hadOrderBefore chi legge scambia quel vero per "la
-                        # soglia era raggiunta" e racconta che un fornitore
-                        # partito da zero e' sceso.
+                        # meets_threshold follows compile's rule that a supplier
+                        # with no order at all isn't "below threshold". Without
+                        # hadOrderBefore, a reader could mistake that `true` for
+                        # "the threshold was met" and report a supplier that
+                        # started at zero as having dropped.
                         "hadOrderBefore": before > 0,
                         "meetsThresholdBefore": meets_threshold(before, threshold),
                         "meetsThresholdAfter": meets_threshold(after, threshold),
@@ -3805,8 +3760,8 @@ class ReviewStore:
                     "costPerPieceBefore": cost_before,
                     "costPerPieceAfter": cost_after,
                     "deltaCostPerPiece": round(cost_after - cost_before, 4),
-                    # Il numero degli omaggi, mai il loro valore: quanto vale un
-                    # omaggio non lo decide questo programma.
+                    # The gift count, never its monetary value: this app doesn't
+                    # price gifts.
                     "giftsBefore": totale_omaggi_prima,
                     "giftsAfter": totale_omaggi_dopo,
                     "giftsLost": omaggi_persi,
@@ -3817,12 +3772,11 @@ class ReviewStore:
                 }
 
             options = []
-            # "Migliore alternativa": si sceglie sul prezzo AL PEZZO, mai sul
-            # prezzo del collo. Colli di fornitori diversi contengono quantita'
-            # diverse, quindi il collo piu' economico puo' benissimo essere
-            # quello che fa pagare di piu' ogni singolo pezzo. A parita' di
-            # prezzo al pezzo vince il fornitore in ordine alfabetico, cosi' la
-            # stessa domanda ottiene sempre la stessa risposta.
+            # "Best alternative" is chosen on price per piece, never per carton:
+            # cartons from different suppliers hold different quantities, so the
+            # cheapest carton can still be the most expensive per piece. Ties go
+            # to the supplier that sorts first alphabetically, so the same input
+            # always produces the same answer.
             best_choice = {
                 item["id"]: min(
                     item["alternatives"].values(),
@@ -3843,11 +3797,11 @@ class ReviewStore:
                 option = build_option(destination, "supplier", supplier_label(destination), chosen)
                 if option is not None:
                     supplier_options.append(option)
-            # L'ordine di lettura NON puo' essere il totale speso: ordini che
-            # contengono quantita' di merce diverse non sono confrontabili sul
-            # totale, ed e' la stessa trappola del confronto fra offerte. Prima
-            # le opzioni che svuotano di piu' il fornitore (e' lo scopo del
-            # comando), poi quelle che fanno pagare meno OGNI PEZZO.
+            # The display order can't be the total spent: orders that deliver
+            # different amounts of goods aren't comparable on total alone, same
+            # pitfall as comparing offers directly. Options that move the most
+            # products off the source supplier come first (that's the point of
+            # this command), then options with the lowest cost per piece.
             supplier_options.sort(key=lambda option: (
                 -option["movedCount"],
                 option["deltaCostPerPiece"],
@@ -3871,9 +3825,9 @@ class ReviewStore:
         saved = []
         letti_per_il_contenuto: list[str] = []
         rinominati: list[str] = []
-        # Nomi ed estensioni si controllano tutti prima di scrivere anche solo
-        # un byte: se il secondo documento del gruppo e' inaccettabile, il
-        # primo non deve restare sul disco come copia che nessuno conosce.
+        # Names and extensions are all validated before writing a single byte: if
+        # the second document in the batch is rejected, the first must not be left
+        # on disk as an orphaned copy nobody knows about.
         da_scrivere: list[tuple[str, bytes, str]] = []
         for item in files:
             if not isinstance(item, dict):
@@ -3895,12 +3849,12 @@ class ReviewStore:
 
         with self.lock:
             profiles_doc = load_json(self.upload_profiles_path, {"schema_version": 1, "profiles": [], "errors": []})
-            # ⚠ «Gia' presente» vuol dire «la copia c'e'», non «me lo ricordo».
-            # I profili senza piu' una copia sul disco escono dal registro qui:
-            # finche' restavano, il documento cancellato a mano dalla cartella
-            # non si poteva ne' vedere (la pagina li filtra) ne' ricaricare (il
-            # controllo sull'impronta lo dichiarava duplicato e non scriveva
-            # niente), e il confronto non ripartiva piu'.
+            # "Already present" means the copy is on disk, not just remembered.
+            # Profiles whose file is gone from disk are dropped from the registry
+            # here: otherwise a document deleted by hand from the folder could
+            # neither be seen (the page filters it out) nor re-uploaded (the
+            # fingerprint check would call it a duplicate and write nothing),
+            # leaving the comparison permanently stuck.
             profili_veri, fantasmi = self._profili_veri_e_fantasmi(profiles_doc)
             if fantasmi:
                 profiles_doc["profiles"] = profili_veri
@@ -3923,13 +3877,12 @@ class ReviewStore:
                     try:
                         profile = profile_file(destination)
                     except Exception as exc:
-                        # Il documento non arriva a destinazione, quindi il
-                        # motivo va detto qui: senza questo messaggio l'utente
-                        # leggerebbe l'errore del lettore, in inglese e senza
-                        # indicazioni. Il tipo dell'eccezione resta nel
-                        # dettaglio tecnico e sulla console: e' l'unica cosa
-                        # che distingue un documento malformato — che e' colpa
-                        # del file — da un guasto del programma, che non lo e'.
+                        # The document never makes it to its destination, so the
+                        # reason has to be stated here: otherwise the user would
+                        # see the raw reader error, in English and unactionable.
+                        # The exception type stays in the technical detail and on
+                        # the console — it's the only thing that distinguishes a
+                        # malformed file from a bug in the app itself.
                         dettaglio = f"{type(exc).__name__}: {exc}" if str(exc).strip() else type(exc).__name__
                         print(f"[AVVISO] «{name}» non profilato — {dettaglio}")
                         raise ValueError(
@@ -3957,16 +3910,16 @@ class ReviewStore:
                     known_hashes.add(profile.get("sha256"))
                     profili_per_hash[profile.get("sha256")] = profile
                     if destination.name != name:
-                        # Un listino corretto e ricaricato non sostituisce il
-                        # vecchio: convivono, e senza questa riga l'utente non
-                        # saprebbe quale dei due sta confermando.
+                        # A corrected price list, re-uploaded, doesn't replace the
+                        # old one — they coexist, and without this line the user
+                        # wouldn't know which of the two they're confirming.
                         rinominati.append(f"«{name}» era già presente: salvato come «{destination.name}»")
                     formato = str(profile.get("content_format") or "")
                     atteso = FORMATO_DELL_ESTENSIONE.get(Path(destination.name).suffix.casefold())
                     if formato and atteso and formato != atteso:
-                        # Un listino rinominato si legge lo stesso, ma dirlo evita
-                        # che l'utente cerchi per mezz'ora perche' le colonne non
-                        # sono quelle che si aspettava.
+                        # A renamed price list still reads fine, but stating this
+                        # saves the user from puzzling over columns that aren't
+                        # what the extension led them to expect.
                         letti_per_il_contenuto.append(
                             f"«{destination.name}» dentro è un {NOME_DEL_FORMATO.get(formato, formato)}"
                         )
@@ -3987,10 +3940,6 @@ class ReviewStore:
         acquisiti = sum(1 for voce in saved if voce.get("status") == "profiled")
         duplicati = len(saved) - acquisiti
         if acquisiti:
-            # ⚠ Seguiva «Codex deve confermarne la struttura prima del
-            # ricalcolo»: un nome che l'utente non conosce, per un permesso che
-            # dal cantiere R6 non serve piu'.  Adesso la frase dice l'unica cosa
-            # che tocca a lui: quando ha finito di caricare, preme il pulsante.
             message = "1 documento caricato e letto." if acquisiti == 1 else f"{acquisiti} documenti caricati e letti."
             message += " Premi «Confronta i listini» quando hai finito di caricare."
         else:
@@ -4006,9 +3955,9 @@ class ReviewStore:
         if letti_per_il_contenuto:
             coda = "letto per quello che è" if len(letti_per_il_contenuto) == 1 else "letti per quello che sono"
             message += " " + "; ".join(letti_per_il_contenuto) + f": {coda}, non per il nome."
-        # I nomi dei documenti appena entrati e, quando il registro li
-        # riconosce, i fornitori: e' quello che la fascia in pagina nomina —
-        # «CIPRESSO» dice piu' di «Listino3_34.xlsx».
+        # The names of the newly uploaded documents and, when the registry
+        # recognizes them, the supplier names: this is what the banner in the
+        # page names, since a supplier name is more useful than a filename.
         nomi_caricati = [
             str(voce.get("name") or "") for voce in saved
             if str(voce.get("status") or "") == "profiled"
@@ -4022,15 +3971,12 @@ class ReviewStore:
                 adattatore = registro.adattatore(adattatore_id)
             except (KeyError, ValueError):
                 continue
-            # ⚠ Solo i fornitori veri. L'elenco del gestionale ha un
-            # adattatore come tutti (`gestionale_v1`) ma non ha un
-            # `supplier_id`, e `supplier_label("")` risponde «FORNITORE» —
-            # il ripiego generico del registro. Caricando elenco e listino
-            # insieme, la fascia diceva «Hai caricato i listini BETULLA e
-            # FORNITORE dopo l'ultimo confronto»: visto in pagina il 23 agosto
-            # 2026, con il servizio vero. Il `kind` del registro sa gia' chi e'
-            # chi, e la guardia `if etichetta` non poteva bastare, perche'
-            # «FORNITORE» e' una stringa piena.
+            # Real suppliers only. The management-software export has an adapter
+            # of its own (`gestionale_v1`) but no `supplier_id`, and
+            # `supplier_label("")` falls back to a generic placeholder string. A
+            # plain `if etichetta` guard isn't enough to exclude it, since that
+            # placeholder is a non-empty string; the registry's `kind` field is
+            # what actually distinguishes it.
             supplier_id = str((adattatore or {}).get("supplier_id") or "")
             if not supplier_id or (adattatore or {}).get("kind") == "master":
                 continue
@@ -4048,23 +3994,21 @@ class ReviewStore:
             "pipeline": stato_pipeline,
         }
 
-    # Le chiavi che fanno di una dichiarazione del registro una regola di
-    # scrittura utilizzabile da sola, senza la mappatura confermata dall'utente.
+    # The registry keys that turn a registry declaration into a usable write
+    # rule on its own, without the user-confirmed column mapping.
     CHIAVI_REGOLA_DI_SCRITTURA = ("sheet", "header_row", "data_start_row", "order_column", "expected_header")
 
     @staticmethod
     def default_write_rule(supplier: str, percorso: Path | None = None) -> dict[str, Any] | None:
-        """La regola di scrittura dichiarata dal registro per questo fornitore.
+        """Return the write rule the registry declares for this supplier, if any.
 
-        Il registro dichiara gia' BETULLA in colonna C e LARICE in D: averlo anche
-        scritto qui significava **due verita' sullo stesso dato**, e soprattutto
-        un fornitore imparato non ereditava niente — restava per sempre senza
-        regola di ripiego (revisione del 14 agosto 2026).
+        Read from the registry rather than duplicated here, so a supplier known
+        only through the learned-adapter path still inherits a usable rule instead
+        of being permanently left without one.
 
-        Torna `None` quando il registro dice `from_field_mapping`: li' foglio e
-        righe vengono dalla mappatura confermata dall'utente, quindi non esiste
-        una regola *predefinita* e la vera dev'essere in configurazione. E'
-        quello che succedeva prima per CIPRESSO e Noce, e non cambia.
+        Returns `None` when the registry declares `from_field_mapping`: there,
+        sheet and row come from the user-confirmed column mapping instead, so no
+        *default* rule exists and the real one must come from configuration.
         """
 
         chiave = str(supplier or "").strip().casefold()
@@ -4087,37 +4031,32 @@ class ReviewStore:
         return None
 
     def configurazione_di_un_altra_run(self, config: dict[str, Any], plan: dict[str, Any]) -> str:
-        """La difesa decisiva: si scrive solo se la configurazione e' del piano che si compila.
+        """Check that the write configuration belongs to the plan being compiled; refuse to write otherwise.
 
-        ⚠ Dopo un ricalcolo i listini sono altri file, con altri nomi e altre
-        righe.  Se `writer_config.json` non viene riscritto — il processo muore
-        nel mezzo, il riavvio non c'e' stato, la riconfigurazione fallisce — la
-        compilazione prende il listino della settimana scorsa e ci mette dentro
-        i numeri di riga di adesso: la quantita' di un prodotto finisce sulla
-        riga di un altro, e non se ne accorge nessuno.  L'impronta non basta:
-        controlla che il file non sia cambiato **da quando e' stato verificato**,
-        ed e' vera anche quando il file e' quello sbagliato ma coerente con se
-        stesso; e comunque la si guarda solo per due fornitori su quattro.
+        After a recalculation the price lists are different files, with
+        different names and row numbers. If `writer_config.json` isn't rewritten
+        (the process dies mid-run, the restart never happened, reconfiguration
+        fails), compilation would take last week's price list and write this
+        week's row numbers into it — a quantity would end up on the wrong row's
+        cell, undetected. The file fingerprint alone isn't enough: it only
+        confirms the file hasn't changed since it was last verified, which stays
+        true even when it's the wrong-but-internally-consistent file, and it's
+        only checked for some suppliers.
 
-        ⚠ Il confronto si fa con il **piano**, non con il confronto vivo riletto
-        dal disco.  La prima versione rileggeva `review_data.json`, e la
-        revisione avversariale del 13 agosto 2026 ha aperto la finestra: se un
-        ricalcolo finisce fra la costruzione del piano e questa guardia,
-        configurazione e confronto passano insieme alla run nuova mentre il
-        piano — cioe' le righe che stanno per essere scritte — e' della run
-        vecchia, e la guardia direbbe di si' proprio a cio' che deve fermare
-        (i due lucchetti, `store.lock` e `lucchetto_lavori`, non si escludono).
-        Il piano la sua run ce l'ha scritta dentro, nessuno puo' cambiarla
-        sotto i piedi, ed e' la cosa che questa guardia protegge; la coerenza
-        fra piano e confronto la garantisce `validate_snapshot` al momento in
-        cui il piano nasce.
+        The comparison is made against the plan itself, not a live comparison
+        re-read from disk: re-reading `review_data.json` here would open a race
+        where a recalculation finishes between building the plan and this check,
+        so the configuration and the freshly re-read comparison would agree on
+        the new run while the plan — the rows about to be written — still belongs
+        to the old one. The plan carries its own run id, fixed at creation time,
+        which is what this check actually protects; `validate_snapshot`
+        guarantees plan/comparison consistency when the plan is built.
 
-        Il controllo e' un confronto fra due stringhe, e vale per tutti i
-        fornitori compilabili.  Fallisce **chiuso**: una configurazione che non
-        dichiara nessuna run (scritta prima che il campo esistesse) e un piano
-        senza run (il confronto attivo non dichiara nessun ricalcolo) sono due
-        modi di non poter rispondere alla domanda, e a una domanda senza
-        risposta non si scrive dentro il listino di un fornitore.
+        The check itself is a string comparison, applied to every compilable
+        supplier. It fails closed: a configuration that declares no run (written
+        before the field existed) and a plan with no run (the active comparison
+        declares no recalculation) are both treated as "can't answer", and an
+        unanswerable question doesn't get written into a supplier's price list.
         """
 
         attesa = str(plan.get("run_id") or "")
@@ -4140,9 +4079,8 @@ class ReviewStore:
                 "appartiene: non creo copie, perché potrebbe puntare ai listini di una volta "
                 "precedente e le righe finirebbero sbagliate. " + rimedio
             )
-        # Senza tener traccia dell'ordine non si sa quale dei due sia rimasto
-        # indietro: la frase non lo pretende (la prima versione diceva «rimasta
-        # a un ricalcolo precedente» anche quando era il contrario).
+        # Without tracking which came first, it's not knowable which of the two
+        # is stale, so the message doesn't claim to know.
         return (
             "La configurazione per creare le copie dei listini non appartiene allo stesso "
             "confronto di questo piano ordini: non creo copie, perché scriverebbe le quantità "
@@ -4178,10 +4116,10 @@ class ReviewStore:
 
         problema_di_run = self.configurazione_di_un_altra_run(config, plan)
         if problema_di_run:
-            # Si torna subito, senza gli altri controlli: se la configurazione
-            # e' di un'altra run, tutto quello che c'e' scritto dentro parla di
-            # altri file, e un elenco di problemi seppellirebbe l'unico che
-            # conta.
+            # Return immediately, skipping the rest of the checks: if the
+            # configuration belongs to another run, everything else in it refers
+            # to different files, and a longer issue list would bury the only
+            # one that matters.
             return [problema_di_run]
 
         files_value = config.get("supplier_files")
@@ -4196,11 +4134,11 @@ class ReviewStore:
         supplier_rules = {str(key).casefold(): value for key, value in rules_value.items()}
         issues: list[str] = []
 
-        # Chi si compila in posizione non passa da Node: la sua copia e' una
-        # patch sul documento del fornitore, in Python.  Un ordine fatto di soli
-        # fornitori cosi' si compila anche senza il writer, e chiedere Node li'
-        # vorrebbe dire rifiutare una compilazione che si puo' fare.  Chi lo
-        # dichiara e' la regola di scrittura, non il nome del fornitore.
+        # A supplier compiled in place doesn't go through Node: its copy is a
+        # Python patch on the supplier's own document. An order made entirely of
+        # such suppliers compiles without the writer, so requiring Node there
+        # would reject a compilation that's actually possible. Whether a supplier
+        # is patched in place is declared by its write rule, not by its name.
         in_posizione = {
             supplier for supplier in selected
             if procedura_di_scrittura(supplier_rules.get(supplier)) == PATCH_IN_POSIZIONE
@@ -4230,28 +4168,22 @@ class ReviewStore:
                 issues.append(f"Il listino configurato per {supplier_label(supplier)} non è disponibile.")
                 continue
             if source.suffix.casefold() != ".xlsx":
-                # ⚠ Il documento non è sbagliato: è la configurazione a non dire
-                # come si compila. Accusare il listino manderebbe l'utente a
-                # chiedere un altro file al fornitore, che è l'unica cosa che
-                # non risolve niente — mentre la procedura si dichiara dalla
-                # pagina, come fa Noce con il suo `.xls`.
+                # The document itself isn't wrong: the configuration just doesn't
+                # say how to compile it. Blaming the price list would send the
+                # user chasing a different file from the supplier, which fixes
+                # nothing — the write procedure is declared per supplier instead,
+                # as it is for the in-place `.xls` case.
                 if not isinstance(supplier_rules.get(supplier), dict):
-                    # Nessuna regola affatto: la stessa frase che riceve un
-                    # `.xlsx` nella stessa condizione, qualche riga più sotto.
+                    # No rule at all: same message a missing `.xlsx` rule gets
+                    # further below.
                     issues.append(
                         f"{supplier_label(supplier)} è selezionato, ma manca la regola di "
                         "scrittura verificata del suo listino."
                     )
                 else:
-                    # ⚠ Il documento non e' sbagliato e la configurazione
-                    # nemmeno per forza: le due cose vanno dette tutt'e due.
-                    # Prima qui c'era «va riconfigurato dalla pagina Importa i
-                    # dati», che non risolve niente — la pagina non ha nessun
-                    # comando che trasformi un `.xls` in un `.xlsx`, e chi ci
-                    # andava tornava indietro come prima.  Il rimedio che
-                    # l'utente puo' davvero mettere in pratica e' una riga di
-                    # Excel, ed e' lo stesso che dice il lanciatore quando la
-                    # regola non nasce nemmeno.
+                    # Neither the document nor necessarily the configuration is
+                    # wrong here, so both possibilities are stated. The actionable
+                    # fix is a plain Excel re-save, so that's what's suggested.
                     issues.append(
                         f"Il listino di {supplier_label(supplier)} non è un .xlsx e la sua "
                         "configurazione non dichiara come compilarlo: se il fornitore lo manda "
@@ -4281,20 +4213,13 @@ class ReviewStore:
                 issues.append(f"La riga iniziale della regola di scrittura per {supplier_label(supplier)} non è valida.")
                 continue
 
-            # ⚠ Fin qui il controllo valeva per un fornitore solo.  Da qui in
-            # giu' c'era `if supplier != "cipresso": continue`, e con lui
-            # restavano fuori l'impronta del file e la verifica del documento
-            # aperto — cioe' le uniche difese contro «ho eliminato il listino
-            # sbagliato, ho ricaricato quello giusto con lo stesso nome e ho
-            # compilato senza rifare il confronto», che scrive le quantita'
-            # nelle righe del listino nuovo con i numeri di riga del confronto
-            # vecchio (revisione del 14 agosto 2026).
-            #
-            # Adesso si verifica **quello che la regola dichiara**, per
-            # chiunque: il registro decide, il codice esegue.  Un fornitore la
-            # cui regola non dichiara niente non viene controllato piu' di
-            # prima; uno che dichiara impronta e intestazione viene controllato
-            # come Cipresso, senza che il suo nome compaia nel codice.
+            # This check runs for whichever supplier declares it, not for one
+            # hardcoded name: it defends against deleting the wrong price list,
+            # reloading the right one under the same filename, and compiling
+            # without recalculating — which would write the new list's row
+            # numbers against the old comparison's quantities. The registry
+            # decides who gets checked (whoever declares a fingerprint and
+            # expected header), the code just executes it.
             etichetta_fornitore = supplier_label(supplier)
             header_row = number(rule.get("header_row") or rule.get("headerRow"))
             expected_header = normalize_header(
@@ -4305,7 +4230,7 @@ class ReviewStore:
             )
             expected_hash = str(rule.get("source_sha256") or rule.get("sourceSha256") or "").strip().casefold()
 
-            # L'impronta: dichiarata da `source_rule` per **ogni** fornitore.
+            # The fingerprint: declared by `source_rule` for any supplier.
             if expected_hash:
                 if not re.fullmatch(r"[a-f0-9]{64}", expected_hash):
                     issues.append(f"L'impronta dichiarata del listino {etichetta_fornitore} non è valida.")
@@ -4317,7 +4242,7 @@ class ReviewStore:
                     )
                     continue
 
-            # L'intestazione verificata: solo chi la dichiara.
+            # The verified header: only checked for suppliers that declare one.
             if expected_header:
                 if sheet_name.casefold() == "first":
                     issues.append(f"Per {etichetta_fornitore} manca il nome esatto del foglio verificato.")
@@ -4327,8 +4252,8 @@ class ReviewStore:
                     continue
 
             if not expected_header and sheet_name.casefold() == "first":
-                # Senza nome di foglio e senza intestazione dichiarata non c'e'
-                # niente da riaprire: si resta al controllo leggero di prima.
+                # With no sheet name and no declared header there's nothing to
+                # reopen the file for: stick with the lighter check above.
                 continue
 
             try:
@@ -4376,17 +4301,16 @@ class ReviewStore:
     def problemi_in_posizione(
         self, supplier: str, supplier_files: dict[str, Any], supplier_rules: dict[str, Any]
     ) -> list[str]:
-        """Che cosa impedisce di compilare in posizione, detto prima di scrivere.
+        """Return what blocks compiling this supplier in place, checked before writing.
 
-        Il controllo pesante — che la colonna d'ordine sia ancora tutta fatta di
-        numeri a lunghezza fissa — si fa qui e non solo al momento di scrivere:
-        e' la condizione da cui dipende tutta la patch, e va rifatta **a ogni
-        file**, perche' basta che una settimana il fornitore ci metta una
-        formula perche' non valga piu'.
+        The expensive check — that the order column is still all fixed-length
+        numbers — runs here, ahead of the write itself, not only at write time:
+        it's the condition the whole patch depends on, and has to be redone for
+        every file, since one week the supplier could put a formula in that
+        column and invalidate it.
 
-        Vale per chiunque dichiari `patch_xls_in_posizione`, non per un nome
-        cablato: oggi e' Noce, domani e' il fornitore che l'utente ha
-        configurato dalla pagina.
+        Applies to whichever supplier declares `patch_xls_in_posizione` in its
+        write rule, not to a hardcoded name.
         """
 
         from xls_writer import XlsError as ErroreXls, controlla_colonna_ordine
@@ -4433,23 +4357,23 @@ class ReviewStore:
 
     @staticmethod
     def righe_di_listino_contese(orders: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Due righe del piano che finiscono nella **stessa cella** del listino.
+        """Find two plan rows that would land in the same price-list cell.
 
-        ⚠ I due compilatori — il writer Node e `xls_writer` per Noce —
-        sommano le quantita' di due righe del piano che puntano alla stessa riga
-        del listino, e per due articoli del gestionale che sono lo stesso
-        articolo del fornitore quella somma e' giusta.
+        Both writers (the Node writer and `xls_writer` for the in-place case)
+        sum the quantities of two plan rows that point to the same price-list
+        row — correct when two management-software items map to the same
+        supplier item.
 
-        Non lo e' quando le due righe ordinano **unita' diverse**, ed e' un caso
-        che il programma sa costruire da solo: l'offerta di un espositore porta
-        il numero di riga del suo **collo padre** (`display_offer`), e la riga
-        padre resta ordinabile per conto suo.  Chi ordina 4 colli e 6 espositori
-        dello stesso prodotto si vedrebbe scrivere `10` in una cella sola, e il
-        fornitore leggerebbe dieci di qualcosa che nessuno ha ordinato.
+        It's wrong when the two rows order different units, which the app can
+        produce on its own: a display's offer carries the row number of its
+        parent carton (`display_offer`), and that parent carton stays orderable
+        on its own too. Ordering 4 cartons and 6 displays of the same product
+        would then write `10` into a single cell, and the supplier would read ten
+        of something nobody actually ordered.
 
-        Sommare non si puo' e indovinare nemmeno: qui ci si ferma e si dice
-        quali due prodotti se la contendono.  Il numero da scrivere lo decide
-        l'utente, spostando una delle due righe o azzerandola.
+        Summing isn't safe here and guessing isn't either, so this stops and
+        reports which two products are contending for the row. The user decides
+        the number to write, by moving one of the two rows or zeroing it out.
         """
 
         per_riga: dict[tuple[str, int], list[dict[str, Any]]] = {}
@@ -4466,8 +4390,8 @@ class ReviewStore:
             unita = {str(voce.get("desired_quantity_unit") or "") for voce in voci}
             fattori = {round(float(number(voce.get("quantity_factor")) or 0), 6) for voce in voci}
             if len(unita) == 1 and len(fattori) == 1:
-                # Lo stesso articolo del fornitore comprato per due articoli del
-                # gestionale: la somma e' quello che si vuole.
+                # The same supplier item bought for two management-software
+                # items: summing is exactly what's wanted here.
                 continue
             altri = ", ".join(
                 f"«{str(voce.get('description') or voce.get('product_id'))}»" for voce in voci[1:]
@@ -4485,13 +4409,14 @@ class ReviewStore:
 
     def compile(self, snapshot: Any) -> dict[str, Any]:
         with self.lock:
-            # ⚠ Non mentre la catena lavora.  `compile` prende il lucchetto dei
-            # dati, non quello dei lavori: finche' la fase 9 non sostituisce il
-            # confronto vivo, compilare adesso e' legittimo e produce i listini
-            # del confronto **precedente** — con i prezzi della settimana
-            # scorsa, mentre in pagina 1 una barra dice che si sta aggiornando.
-            # Chi preme crede di compilare quello che sta nascendo.  Aspettare
-            # non costa niente: la catena finisce da sola e il pulsante torna.
+            # Not while the pipeline is running. `compile` holds the data lock,
+            # not the pipeline lock: until the pipeline's last stage replaces the
+            # live comparison, compiling now would be legal but would produce the
+            # price lists of the *previous* comparison — last week's prices —
+            # while the page shows a progress bar claiming an update is underway.
+            # The user believes they're compiling what's being built. Waiting
+            # costs nothing: the pipeline finishes on its own and the button comes
+            # back.
             if self.pipeline_jobs.in_corso():
                 raise LavoroGiaInCorso(
                     "Il confronto si sta aggiornando: i listini si compilano quando ha finito, "
@@ -4506,10 +4431,10 @@ class ReviewStore:
             supplier_defs = {str(item.get("id")): item for item in review.get("suppliers") or []}
             totals: dict[str, float] = {supplier: 0.0 for supplier in supplier_defs}
             orders = []
-            # I prodotti che il gestionale chiede e che nessun fornitore porta.
-            # Non entrano nel piano né nei listini dei fornitori — non c'è
-            # nessuna riga su cui scrivere — ma non si perdono: escono in un
-            # foglio a parte, che è l'unica cosa che si può fare con loro.
+            # Products the management software asks for that no supplier
+            # carries. They don't enter the plan or any supplier's price list —
+            # there's no row to write them on — but aren't lost: they go into a
+            # separate list, the only thing that can be done with them.
             da_reperire: list[dict[str, Any]] = []
             for decision in clean["products"]:
                 if decision["quantity"] <= 0:
@@ -4545,8 +4470,8 @@ class ReviewStore:
                 order_price = pricing["orderUnitPriceNet"]
                 is_display = str(product.get("itemType") or product.get("kind") or "").casefold() == "display"
                 desired_quantity = decision["quantity"]
-                # L'utente inserisce direttamente i colli (o gli espositori): nessun
-                # arrotondamento pezzi->colli, per nessun tipo di articolo o fornitore.
+                # The user enters cartons (or displays) directly: no
+                # pieces-to-cartons rounding, for any item type or supplier.
                 order_quantity = desired_quantity
                 delivered_pieces = int(round(order_quantity * factor))
                 excess_pieces = 0
@@ -4594,12 +4519,11 @@ class ReviewStore:
                 "created_at": datetime.now(tz=timezone.utc).isoformat(),
                 "source_review": str(self.review_path),
                 "source_state": str(self.state_path),
-                # ⚠ La run del piano e' quella del confronto che ha risolto le
-                # offerte QUI DENTRO, non quella dichiarata dallo snapshot del
-                # browser: quando il confronto non dichiara nessuna run le due
-                # cose divergono (validate_snapshot non ha niente contro cui
-                # verificare), e il piano non deve poter "appartenere" a una run
-                # per sola parola del client.
+                # The plan's run id is the one from the comparison that resolved
+                # these offers, not the one the browser's snapshot declared: when
+                # the comparison declares no run, the two can diverge
+                # (`validate_snapshot` has nothing to check against), and the plan
+                # must not "belong" to a run on the client's word alone.
                 "run_id": str((review.get("run") or {}).get("id") or ""),
                 "threshold_override_confirmed": clean["acceptBelowThreshold"],
                 "below_threshold": below,
@@ -4608,60 +4532,53 @@ class ReviewStore:
                 "promotions": review.get("promotions") or [],
                 "orders": orders,
             }
-            # Lo stato lo riscrive la compilazione, non la scheda: se da qui in
-            # poi qualcosa va storto, chi si trova indietro di una versione deve
-            # sapere che a superarla e' stata la sua stessa compilazione.
+            # The state is rewritten by compile, not by the tab: if something
+            # goes wrong from here on, a tab that finds itself behind a version
+            # needs to know it was its own compilation that overtook it.
             clean["stateVersionOrigin"] = "compilazione"
             atomic_json(self.state_path, clean)
-            # Da qui in poi si scrive.  La cartella nasce **dopo** l'ultima
-            # convalida — soglia compresa — perche' una compilazione rifiutata
-            # non deve lasciare in giro una cartella vuota che l'elenco delle
-            # compilazioni mostrerebbe come una consegna avvenuta.
+            # Writing starts here. The folder is created only after the last
+            # validation, threshold included, so a rejected compilation doesn't
+            # leave behind an empty folder that the compilations list would show
+            # as a completed delivery.
             momento = datetime.now().astimezone()
             cartella = consegna.crea_cartella(self.orders_dir, momento)
-            # La cartella esiste solo se la consegna arriva in fondo.  L'audit
-            # si scrive per ultimo, e finche' non c'e' la cartella e' un lavoro
-            # a meta': l'elenco delle compilazioni la mostrerebbe come una
-            # consegna avvenuta, con lo zip scaricabile e le copie mai passate
-            # dal controllo di fedelta'.  Prima qui c'era solo `except ValueError`
-            # attorno alla scrittura, quindi bastava un guasto di un'altra
-            # famiglia — un `.xls` illeggibile, il timeout del writer, il disco —
-            # per lasciarla li' (revisione del 14 agosto 2026).
+            # The folder counts as a real delivery only once this reaches the
+            # end. The audit file is written last, and until it exists the work
+            # is incomplete: the compilations list would otherwise show it as
+            # delivered, with a downloadable zip whose copies never passed the
+            # fidelity check.
             consegna_completata = False
-            # ⚠ Lo storico si tocca **prima** dell'audit, e l'audit puo'
-            # fermarsi: disco pieno, antivirus, file bloccato. Fin qui il
-            # `finally` cancellava la cartella e lo storico restava com'era
-            # stato riscritto, cioe' con l'ordine nuovo — mai consegnato — e
-            # senza quello vero, che `record_plan` toglie perche' sostituibile.
-            # La settimana dopo il programma chiedeva «e' arrivata?» di merce
-            # che nessuno aveva ordinato: il sintomo chiuso il 13 agosto 2026.
-            # Le due parti restano allineate, come nell'eliminazione di una
-            # compilazione (revisione del 6 settembre 2026).
+            # History is touched before the audit, and the audit can still fail
+            # (full disk, antivirus, a locked file). If the folder were simply
+            # deleted on failure, history would be left rewritten with the new,
+            # never-delivered order and without the real one — which
+            # `record_plan` drops because it's superseded. The two must stay in
+            # sync, the same way they do when a compilation is deleted.
             storico_di_prima = self.history_path.read_bytes() if self.history_path.exists() else None
             try:
                 plan_path = cartella / consegna.NOME_PIANO
                 atomic_json(plan_path, plan)
-                # Se non c'è niente da reperire il file non nasce, e la pagina
-                # non ha niente di nuovo da mostrare: una settimana in cui tutto
-                # si può ordinare è il caso normale, non una notizia.
+                # If there's nothing to source, the file isn't created, and the
+                # page has nothing new to show: a week where everything can be
+                # ordered is the normal case, not something worth flagging.
                 if da_reperire:
                     da_reperire_modulo.scrivi(cartella, da_reperire, momento)
                 history_issues: list[str] = []
                 writer_issues: list[str] = []
-                # Le due famiglie restano separate anche dopo essere state unite
-                # in `writer_issues`: parlano di cose opposte — una copia che non
-                # e' stata consegnata e una copia che e' stata consegnata con
-                # una riga da ricontrollare — e il messaggio le tratta in modo
-                # diverso.
+                # Kept separate even after being merged into `writer_issues`:
+                # they describe opposite things (a copy that wasn't delivered vs.
+                # a copy that was delivered with a row to double-check), and the
+                # final message treats them differently.
                 avvisi_writer: list[str] = []
                 infedeli: list[str] = []
                 copie: list[tuple[str, Path, Path]] = []
                 problemi_consegna: list[str] = []
                 status = "PLAN_READY"
-                # Perche' le copie non ci sono, quando non ci sono. Vuoto vuol
-                # dire «nessuno ci ha nemmeno provato»: la frase la compone
-                # `messaggio_della_compilazione`, che e' l'unico posto in cui
-                # si decide che cosa l'utente legge.
+                # Why the copies don't exist, when they don't. Empty means
+                # "nothing was even attempted" — the actual sentence is composed
+                # by `messaggio_della_compilazione`, the single place that decides
+                # what the user reads.
                 copie_non_create: list[str] = []
                 if self.writer_config:
                     writer_issues = self.writer_configuration_issues(plan)
@@ -4671,84 +4588,76 @@ class ReviewStore:
                         try:
                             _generated, prodotte, avvisi_writer = self.run_writer(plan_path, cartella)
                         except ValueError as exc:
-                            # Il writer verifica tutto prima di rendere visibili le
-                            # copie. Il piano resta quindi consegnabile anche quando
-                            # una verifica finale del listino fallisce.
+                            # The writer verifies everything before exposing the
+                            # copies, so the plan stays deliverable even when a
+                            # final price-list check fails.
                             #
-                            # ⚠ Il motivo va in `writer_issues`, non solo nel
-                            # `message`: e' lo stesso campo che riempie il ramo
-                            # qui sopra quando a mancare e' la configurazione, ed
-                            # e' l'unico che la pagina legge per capire che la
-                            # compilazione **non** e' riuscita per intero. Finche'
-                            # stava solo nella frase, una compilazione senza
-                            # nessuna copia si presentava col riquadro verde e il
-                            # pulsante primario, come una consegna completa
-                            # (17 agosto 2026). Il codice `FORNITORE_SENZA_COPIA`
-                            # che la pagina traduceva era il posto previsto per
-                            # questa notizia e non e' mai stato riempito: il
-                            # canale vero e' questo, e ha gia' l'intestazione
-                            # giusta («Listini non preparati o da ricontrollare»).
+                            # The reason goes into `writer_issues`, not just the
+                            # final message: it's the same field filled by the
+                            # branch above when the configuration is missing, and
+                            # it's the only one the page reads to know that
+                            # compilation didn't fully succeed. If it stayed only
+                            # in the free-text message, a compilation that
+                            # produced no copy at all could look like a full
+                            # delivery.
                             writer_issues = [frase(exc) or "Le copie dei listini non sono state create."]
                             copie_non_create = list(writer_issues)
                         else:
-                            # ⚠ Prima di consegnare qualsiasi cosa: la copia e' il
-                            # listino del fornitore o e' un'altra cosa?  Il writer
-                            # guarda solo le celle che voleva scrivere; questa
-                            # guardia le guarda tutte.  Una copia che non regge non
-                            # esce di qui.
+                            # Before delivering anything: is the copy actually the
+                            # supplier's price list, or something else? The writer
+                            # only checks the cells it meant to write; this guard
+                            # checks all of them. A copy that fails this never
+                            # leaves this function.
                             prodotte, infedeli = self.scarta_copie_infedeli(plan, prodotte)
-                            # Gli avvisi del writer stanno **davanti**: parlano
-                            # delle copie che si consegnano, e chi legge deve
-                            # trovarli anche quando nessuna copia e' stata
-                            # scartata.  Fino a oggi morivano sulla console.
+                            # Writer warnings come first: they're about the
+                            # copies actually being delivered, and the reader
+                            # needs to see them even when no copy was discarded.
                             writer_issues = [*avvisi_writer, *infedeli]
                             if prodotte:
-                                # La rinomina non puo' far fallire una compilazione
-                                # riuscita: le copie ci sono e sono giuste, e un nome
-                                # brutto si dice, non si trasforma in un guasto.
+                                # A rename failure can't fail an otherwise
+                                # successful compilation: the copies exist and are
+                                # correct, and an ugly filename is reported, not
+                                # turned into an error.
                                 copie, problemi_consegna = self.rinomina_listini(prodotte, momento)
                                 status = "FILES_READY"
                             else:
-                                # ⚠ Qui il motivo sono le copie **scartate**, non
-                                # gli avvisi del writer: quelli dicono «la
-                                # quantita' e' stata scritta lo stesso», e messi
-                                # dentro una frase che dichiara che non e' stato
-                                # creato niente si contraddicono a vicenda.
+                                # Here the reason is the discarded copies
+                                # (`infedeli`), not the writer's own warnings:
+                                # those say "the quantity was written anyway",
+                                # which would contradict a message stating nothing
+                                # was created.
                                 copie_non_create = list(infedeli)
-                # ⚠ La registrazione nello storico sta QUI, dopo la scrittura, e non
-                # prima: fino al 13 agosto 2026 stava subito dopo il piano, e una
-                # compilazione fermata dai `writer_issues` — o dal writer che non
-                # parte — registrava lo stesso l'ordine.  La settimana dopo il
-                # programma chiedeva «è arrivata?» di merce che nessuno aveva mai
-                # potuto ordinare, e segnava quei prodotti come «già ordinati».
-                # La regola è una sola: entra nello storico solo il fornitore di cui
-                # esiste la copia del listino sul disco.
+                # History is recorded here, after the writes, not before: a
+                # compilation stopped by `writer_issues` (or a writer that never
+                # starts) must not register the order in history, since the
+                # program would then ask "did it arrive?" about goods nobody
+                # could actually order. The rule is simple: only a supplier whose
+                # price-list copy exists on disk enters history.
                 if status == "FILES_READY":
                     history_issues = self.record_order_history(
                         plan,
                         order_key=cartella.name,
-                        # Casefold: `record_plan` raggruppa il piano casefoldato, e
-                        # un fornitore con una maiuscola non si incontrava mai con
-                        # la sua copia — ordine sul disco, storico muto (revisione
-                        # avversariale R4).
+                        # Casefolded because `record_plan` groups the plan by
+                        # casefolded supplier name; a supplier name with different
+                        # casing here would never match its own delivered copy.
                         delivered={str(fornitore).strip().casefold()
                                    for fornitore, _sorgente, _copia in copie},
                     )
                 elif status == "PLAN_READY":
-                    # Senza writer non nasce nessuna copia, quindi nessun ordine:
-                    # e' la regola. Ma spegnere TUTTO lo storico — domande, avvisi,
-                    # scadenze — senza una parola trasformava una modalita'
-                    # ordinaria (manca Node, manca un listino) in una perdita
-                    # silenziosa (revisione avversariale R4).
+                    # No writer means no copy, which means no order — that's the
+                    # rule. But silently skipping history too (no reminders, no
+                    # follow-up) would turn an ordinary case (missing Node,
+                    # missing a price list) into a silent loss of tracking, so
+                    # it's stated explicitly instead.
                     history_issues = [
                         "Questa compilazione non entra fra gli ordini da controllare: senza le "
                         "copie dei listini non c'è nessun ordine da mandare, quindi nessuna "
                         "domanda «è arrivata?» nascerà per lei. Il piano ordini JSON resta "
                         "scaricabile."
                     ]
-                # L'elenco dei file si legge dal disco, non dalla lista che abbiamo
-                # in mano: se il writer ha lasciato qualcosa che nessuno aspettava,
-                # l'audit lo deve dire invece di descrivere una cartella immaginaria.
+                # The file list is read from disk, not from the list already in
+                # hand: if the writer left behind something unexpected, the audit
+                # must reflect it instead of describing an imagined folder.
                 file_audit = self.descrivi_cartella(cartella, copie)
                 message = self.messaggio_della_compilazione(
                     status=status,
@@ -4762,8 +4671,8 @@ class ReviewStore:
                 )
                 fornitori_ordinati = sorted({str(item["supplier"]) for item in orders})
                 totali_netti = {supplier: round(totals[supplier], 2) for supplier in fornitori_ordinati}
-                # L'audit si scrive **per ultimo**: quando c'e', dice che tutto il
-                # resto della cartella era gia' al suo posto.
+                # The audit is written last: its presence means everything else
+                # in the folder was already in place.
                 consegna.scrivi_audit(cartella, {
                     "schema_audit": consegna.SCHEMA_AUDIT,
                     "cartella": cartella.name,
@@ -4779,19 +4688,19 @@ class ReviewStore:
                     "avvisi": [*writer_issues, *problemi_consegna, *history_issues],
                     "file": file_audit,
                 })
-                # Da qui la cartella e' una consegna vera e resta sul disco.
+                # From here on the folder is a real delivery and stays on disk.
                 consegna_completata = True
-                # La voce si rilegge dall'audit appena scritto: cosi' la risposta
-                # della compilazione e la riga di `GET /api/ordini` non possono
-                # raccontare due cose diverse della stessa cartella.
+                # The entry is re-read from the audit file just written, so the
+                # compile response and `GET /api/ordini`'s listing can't disagree
+                # about the same folder.
                 voce = consegna.voce(cartella, etichetta_fornitore=supplier_label)
                 return {
                     "ok": True,
                     "status": status,
                     "message": message,
-                    # Anche la compilazione riscrive tutto lo stato: senza
-                    # rimandare la versione nuova, la scheda che ha compilato si
-                    # troverebbe rifiutato il salvataggio successivo.
+                    # Compilation also rewrites the whole state: without
+                    # returning the new version, the tab that just compiled would
+                    # have its next save rejected as stale.
                     "stateVersion": clean["stateVersion"],
                     "cartella": cartella.name,
                     "outputs": [
@@ -4803,12 +4712,10 @@ class ReviewStore:
                     "totalsNet": plan["totals_net"],
                     "belowThreshold": below,
                     "writerIssues": writer_issues,
-                    # ⚠ La consegna aveva i suoi avvisi solo dentro `message`:
-                    # un nome rimasto brutto perche' `os.rename` e' fallito non
-                    # colorava niente, il riquadro restava verde con il pulsante
-                    # primario, e al ricaricamento la notizia spariva. Adesso
-                    # sono un campo, e l'audit li conserva (revisione del 14
-                    # agosto 2026).
+                    # Delivery warnings (e.g. a filename that stayed ugly
+                    # because `os.rename` failed) are a dedicated field, not just
+                    # embedded in `message`, so the page can flag them and the
+                    # audit file preserves them across reloads.
                     "deliveryIssues": problemi_consegna,
                     "historyIssues": history_issues,
                 }
@@ -4818,27 +4725,20 @@ class ReviewStore:
                     if storico_di_prima is None:
                         self.history_path.unlink(missing_ok=True)
                     else:
-                        # Lo stesso aiutante degli altri: temporaneo con un nome
-                        # suo e byte sul disco prima di sostituire, perche' e' il
-                        # ramo che deve funzionare quando qualcosa e' gia'
-                        # andato storto.
+                        # Same helper used elsewhere: write to a temp file first,
+                        # then replace, because this is the branch that has to
+                        # work reliably when something has already gone wrong.
                         scrittura_sicura.scrivi_bytes(self.history_path, storico_di_prima)
 
     @staticmethod
     def spiegazione_del_writer(stderr: str | None, stdout: str | None) -> str:
-        """Che cosa legge l'utente quando il writer si ferma.
+        """Return what the user reads when the writer stops.
 
-        ⚠ Prima qui si ricopiavano gli ultimi quattromila caratteri di `stderr`.
-        Quando il listino cambiava dopo la verifica — il caso piu' frequente e
-        il piu' innocuo, basta ricontrollarlo — l'utente si trovava in pagina la
-        traccia di Node con i percorsi assoluti del computer, mentre il writer
-        la frase in italiano ce l'aveva gia' pronta e la stava dicendo.
-
-        Il writer marca la sua frase con `ERRORE_COMPILAZIONE:` su una riga
-        sola.  Qui si prende quella.  Se non c'e' — un guasto che il writer non
-        ha previsto — si dice che si e' fermato, **senza** riversare in pagina
-        la traccia: i dettagli tecnici restano sulla console del programma, che
-        e' il posto dove servono.
+        The writer marks its own message with `ERRORE_COMPILAZIONE:` on a single
+        line; that's what's extracted and shown. If it's missing — an unexpected
+        failure the writer didn't anticipate — the user is told compilation
+        stopped without dumping the raw Node stack trace into the page: technical
+        details stay on the app's own console, where they're actually useful.
         """
 
         marca = "ERRORE_COMPILAZIONE:"
@@ -4848,9 +4748,9 @@ class ReviewStore:
             if testo.startswith(marca):
                 spiegazione = testo[len(marca):].strip()
                 if spiegazione:
-                    # Quello che accompagna la frase marcata — la traccia, il
-                    # `cause` di un guasto imprevisto — e' dettaglio tecnico:
-                    # resta sulla console del programma, non in pagina.
+                    # Whatever surrounds the marked line (stack trace, the cause
+                    # of an unexpected failure) is technical detail: it stays on
+                    # the app's console, not in the page.
                     tecnico = "\n".join(
                         r for r in righe if not r.strip().startswith(marca)
                     ).strip()
@@ -4868,20 +4768,21 @@ class ReviewStore:
     def scarta_copie_infedeli(
         self, plan: dict[str, Any], prodotte: list[tuple[str, Path, Path]]
     ) -> tuple[list[tuple[str, Path, Path]], list[str]]:
-        """Riapre ogni copia e la confronta **cella per cella** con il suo listino.
+        """Reopen every produced copy and compare it cell by cell against its source price list.
 
-        ⚠ E' la difesa che mancava il 12 agosto 2026, quando la copia LARICE
-        consegnabile aveva 34 celle EAN con scritto «1235» al posto del nulla e
-        aveva perso 641 titoli di sezione — e il programma diceva che era andato
-        tutto bene, perche' guardava soltanto le celle che aveva scritto.
+        This closes a gap the writer's own checks miss, since it only verifies
+        the cells it meant to write — a corrupted copy that still passed those
+        checks (garbled EAN cells, missing section titles) would otherwise be
+        delivered as if nothing were wrong.
 
-        Le uniche differenze ammesse sono nella colonna d'ordine: le quantita'
-        del piano e l'azzeramento delle quantita' che c'erano gia'.  Qualunque
-        altra differenza fa fallire la compilazione di **quel** fornitore: la
-        copia viene cancellata e il motivo si dice, invece di consegnare un
-        documento che somiglia al listino senza esserlo.
+        The only differences allowed are in the order column: the plan's
+        quantities, and zeroing out quantities that were already there. Any other
+        difference fails compilation for that supplier — the copy is deleted and
+        the reason is reported, rather than delivering a document that resembles
+        the price list without actually being it.
 
-        Restituisce le copie che si possono consegnare e le frasi da mostrare.
+        Returns the copies that can be delivered and the messages to show for the
+        rest.
         """
 
         from copia_fedele import confronta_copia, frase_di_rifiuto
@@ -4892,9 +4793,9 @@ class ReviewStore:
         buone: list[tuple[str, Path, Path]] = []
         problemi: list[str] = []
         for fornitore, sorgente, copia in prodotte:
-            # A Noce si manda il **loro** `.xls`, compilato in posizione:
-            # li' la fedelta' non e' un confronto, sono i byte che non si sono
-            # mossi, e `app/xls_writer.py` la difende gia' da solo.
+            # A supplier compiled in place gets back its own `.xls`: fidelity
+            # there isn't a comparison, it's the untouched bytes, already
+            # guaranteed by `app/xls_writer.py` on its own.
             if copia.suffix.casefold() != ".xlsx":
                 buone.append((fornitore, sorgente, copia))
                 continue
@@ -4922,9 +4823,8 @@ class ReviewStore:
                     foglio_ordine=str(regola.get("sheet") or regola.get("sheet_name") or "") or None,
                 )
             except Exception as errore:  # noqa: BLE001 - `ConfrontoImpossibile` compreso
-                # Una copia che non si riesce a verificare non si consegna: e'
-                # la stessa regola del resto del programma, dove il dubbio si
-                # dichiara e non si spedisce.
+                # A copy that can't be verified isn't delivered: same rule as
+                # the rest of the app, where doubt is reported, not shipped.
                 copia.unlink(missing_ok=True)
                 problemi.append(
                     f"La copia per {supplier_label(fornitore)} non è stata verificata e quindi "
@@ -4940,7 +4840,7 @@ class ReviewStore:
 
     @staticmethod
     def messaggio_dei_file(file_audit: list[dict[str, Any]]) -> str:
-        """Il riepilogo di che cosa è stato generato, contato sul disco vero."""
+        """Summarize what was generated, counted straight from disk."""
 
         workbook_count = sum(1 for item in file_audit if item["tipo"] == "listino")
         parts = ["piano ordini JSON"]
@@ -4963,47 +4863,35 @@ class ReviewStore:
         problemi_consegna: list[str],
         history_issues: list[str],
     ) -> str:
-        """La frase che l'utente legge a compilazione finita, e che va nell'audit.
+        """Build the message the user reads at the end of compilation, also stored in the audit file.
 
-        Era una sessantina di righe di `message = f"{message} …"` innestate in
-        sei rami dentro `compile`, che e' anche la funzione piu' lunga del
-        programma: ogni caso nuovo andava infilato in un `if` dentro un `try`
-        dentro un `with`, e sbagliare l'ordine di due `message` e' gia'
-        successo.  Qui dentro non c'e' niente da orchestrare — nessuno stato,
-        nessun disco — quindi i sei casi si provano con una tabella, che prima
-        si potevano guardare solo compilando davvero.
+        This composes the message from a small table of cases instead of nested
+        conditionals, since testing six branches of string concatenation by hand
+        was error-prone and only checkable by actually running a compilation.
 
-        I sei casi, nell'ordine in cui si aggiungono:
+        The cases, in the order they're added:
 
-        1. **senza writer configurato**: nessuna copia, e si dice che cosa
-           manca per averle;
-        2. **copie non create**: la configurazione c'e' ma qualcosa l'ha
-           fermata, oppure sono state tutte scartate.  `copie_non_create`
-           porta il motivo — ⚠ e nel caso delle copie scartate sono gli
-           `infedeli`, non gli avvisi del writer: quelli dicono «la quantita'
-           e' stata scritta lo stesso» e dentro una frase che dichiara che non
-           e' stato creato niente si contraddicono;
+        1. no writer configured: no copies, states what's missing to get them;
+        2. no copies created: configuration exists but something stopped it,
+           or every copy was discarded. `copie_non_create` carries the reason —
+           in the discarded-copy case that's `infedeli`, not the writer's own
+           warnings, which say "the quantity was written anyway" and would
+           contradict a message stating nothing was created.
 
-        ⚠ A separare il primo caso dal secondo e' `writer_configurato`, non il
-        fatto che `copie_non_create` sia vuoto.  Sono due cose diverse — «non
-        ci ha provato nessuno» e «ci ha provato e non ne e' uscito niente» — e
-        confonderle fa leggere «completa la configurazione di scrittura» a chi
-        la configurazione ce l'ha gia' completa.  La prima estrazione le
-        confondeva: trovato dalla verifica avversariale del 20 agosto 2026, che
-        ha fatto girare 11.664 combinazioni contro il codice di prima e ne ha
-        trovate 162 divergenti, tutte questo caso.  Oggi non e' raggiungibile —
-        `run_writer` o solleva o produce una voce per fornitore, e una copia
-        scartata mette sempre una frase negli `infedeli` — ma la frase finisce
-        nell'audit della cartella, dove resta.
-        3. **copie create**: il riepilogo di che cosa c'e' nella cartella;
-        4. **qualche copia scartata e le altre no**: chi legge deve sapere
-           quale listino manca, non contare i file;
-        5. **avvisi del writer**: solo il numero. Il testo lo elenca gia' la
-           pagina da `writerIssues`, e ripeterlo qui lo farebbe comparire due
-           volte sotto un titolo che lo smentisce; il numero resta perche' lo
-           storico delle compilazioni ha il messaggio e non l'elenco;
-        6. **rinomina e storico**: un nome brutto e un ordine che non entra fra
-           quelli da controllare non fanno fallire niente, ma vanno detti.
+        What separates case 1 from case 2 is `writer_configurato`, not whether
+        `copie_non_create` is empty — "nobody even tried" and "it tried and
+        nothing came out of it" are different situations, and confusing them
+        tells a user with a complete configuration to go complete it.
+
+        3. copies created: summarizes what's in the folder;
+        4. some copies discarded, others not: names which price list is
+           missing, rather than just a file count;
+        5. writer warnings: only the count. The text itself is already listed
+           on the page via `writerIssues`; repeating it here would duplicate it
+           under a heading that contradicts it, so only the count is kept, since
+           the compilation history stores this message but not the full list;
+        6. rename and history: an ugly filename or an order that doesn't
+           enter the tracking history don't fail anything, but are worth stating.
         """
 
         if status == "FILES_READY":
@@ -5030,9 +4918,9 @@ class ReviewStore:
         if problemi_consegna:
             message = f"{message} Attenzione: " + " ".join(problemi_consegna)
         if history_issues:
-            # Senza questo avviso la compilazione sembrerebbe perfettamente
-            # riuscita e la settimana prossima mancherebbe il promemoria della
-            # merce non consegnata: proprio il caso che questa funzione evita.
+            # Without this warning, compilation would look fully successful and
+            # the follow-up reminder about undelivered goods would never appear —
+            # exactly what this function exists to prevent.
             message = (
                 f"{message} Attenzione: questo ordine non è stato registrato fra quelli "
                 "da controllare la prossima settimana. "
@@ -5044,36 +4932,33 @@ class ReviewStore:
     def rinomina_listini(
         prodotte: list[tuple[str, Path, Path]], momento: datetime
     ) -> tuple[list[tuple[str, Path, Path]], list[str]]:
-        """Da `ORDINE_LARICE_listino.xlsx` a `Ordine LARICE — 12 agosto 2026.xlsx`.
+        """Rename each produced copy to its human-readable delivery name.
 
-        Restituisce le copie con il nome che hanno **davvero** preso, e l'elenco
-        di quelle che il nome leggibile non l'hanno potuto prendere.
+        Returns the copies with the name they actually ended up with, and the
+        list of ones that couldn't get the readable name.
 
-        ⚠ Un nome brutto non e' un motivo per buttare via un ordine giusto.
-        `os.rename` su Windows alza `PermissionError` (WinError 32) se qualcuno
-        tiene aperto il file: l'antivirus che lo sta scansionando, OneDrive che
-        lo sincronizza, l'utente che l'ha aperto in Excel per controllarlo.
-        Sollevare li' faceva uscire la compilazione con un 500, lasciava una
-        cartella senza audit e la pagina diceva «non riuscita» mentre i listini
-        erano li', giusti e scaricabili.  Quindi si tiene la copia com'e' e si
-        dice che cosa non ha funzionato.
+        An ugly filename isn't a reason to discard a correct order. On Windows,
+        `os.rename` raises `PermissionError` if another process holds the file
+        open (antivirus scanning it, a sync client, the user previewing it in
+        Excel) — raising there would fail the whole compilation with a correct,
+        deliverable price list sitting right there. So the copy is kept as-is and
+        the failure is reported instead.
 
-        La destinazione che esiste gia' non si sovrascrive **mai**: e' il
-        difetto che la 6d chiude, e rifarlo dentro la cartella nuova sarebbe
-        peggio, perche' li' l'utente si aspetta che niente si tocchi piu'.
+        An existing destination is never overwritten: inside a freshly created
+        delivery folder, the user expects nothing in it to be touched again once
+        written.
         """
 
         rinominate: list[tuple[str, Path, Path]] = []
         problemi: list[str] = []
         for fornitore, sorgente, prodotta in prodotte:
-            # L'estensione la porta la copia, non la si sceglie qui: il
-            # documento Noce e' un `.xls` e resta un `.xls`.
-            # ⚠ Il nome che arriva al fornitore e' quello del **registro**, non
-            # l'identificativo tecnico: `consegna.nome_listino` maiuscola quello
-            # che riceve, e passandogli l'identificativo il documento partiva
-            # come «Ordine NUOVO_FORNITORE_1 — 14 agosto 2026.xlsx», underscore
-            # compresi. Il writer il nome giusto lo usava gia' per la copia
-            # intermedia: si perdeva un passo dopo (revisione del 14 agosto).
+            # The copy carries its own extension; it isn't chosen here — a
+            # supplier compiled in place keeps its original `.xls`.
+            # The name used in the delivered filename is the supplier's display
+            # name from the registry, not its internal identifier:
+            # `consegna.nome_listino` uppercases what it's given, so passing the
+            # raw identifier would produce a filename with underscores in it
+            # instead of the readable supplier name.
             destinazione = prodotta.parent / consegna.nome_listino(
                 supplier_label(fornitore), momento, prodotta.suffix
             )
@@ -5102,13 +4987,13 @@ class ReviewStore:
 
     @staticmethod
     def descrivi_cartella(cartella: Path, copie: list[tuple[str, Path, Path]]) -> list[dict[str, Any]]:
-        """L'elenco `file` dell'audit, costruito scandendo la cartella.
+        """Build the audit's `file` list by scanning the folder on disk.
 
-        Si guarda il disco e non la lista dei file che abbiamo appena scritto:
-        un audit costruito dalle proprie intenzioni descrive quello che doveva
-        succedere, non quello che e' successo.  Un `.xlsx` che non abbiamo
-        rinominato noi resta `altro` — non sappiamo di chi sia ne' da dove
-        venga, quindi non finisce fra i listini da consegnare.
+        Reads the disk rather than the list of files just written: an audit
+        built from its own intentions would describe what was supposed to
+        happen, not what actually did. A `.xlsx` this code didn't rename itself
+        stays classified as `altro` — its origin is unknown, so it isn't counted
+        among the price lists to deliver.
         """
 
         listini = {prodotta.name: (fornitore, sorgente) for fornitore, sorgente, prodotta in copie}
@@ -5139,12 +5024,12 @@ class ReviewStore:
 
     @staticmethod
     def riepilogo_del_writer(stdout: str | None) -> dict[str, Any]:
-        """Il riepilogo che il writer Node dichiara alla fine del lavoro.
+        """Return the summary the Node writer declares at the end of its run.
 
-        Non si legge tutto `stdout` come JSON: la libreria dei fogli di calcolo
-        ci scrive righe sue. Il writer marca la sua con `RIEPILOGO_COMPILAZIONE:`
-        apposta. Un writer piu' vecchio non la scrive: in quel caso non si sa
-        niente, e non sapere non e' un guasto.
+        `stdout` as a whole isn't parsed as JSON, since the spreadsheet library
+        writes its own lines into it. The writer marks its summary line with
+        `RIEPILOGO_COMPILAZIONE:` specifically for this. An older writer that
+        doesn't emit it just means nothing is known here, which isn't an error.
         """
 
         marca = "RIEPILOGO_COMPILAZIONE:"
@@ -5163,25 +5048,22 @@ class ReviewStore:
     def copie_dichiarate_dal_writer(
         riepilogo: dict[str, Any], destinazione: Path
     ) -> tuple[dict[str, Path], list[str]]:
-        """Che cosa il writer dice di aver prodotto, e che cosa non ha potuto verificare.
+        """Return what the writer claims to have produced, and what it couldn't verify.
 
-        Due cose escono di qui, e la prima e' la piu' importante: **il nome
-        della copia lo dichiara chi l'ha scritta**.  Il writer costruisce
-        `ORDINE_<nome>_<listino>.xlsx` dal `display_name` che la regola porta
-        dal registro, quindi per un fornitore imparato — identificativo
-        `nuovo_fornitore_1`, nome «Sapori & Co.» — il file si chiama
-        `ORDINE_SAPORI_CO_...`, e il servizio che ricalcolava il nome
-        dall'identificativo cercava un documento che non esiste: compilazione
-        fallita con la copia giusta li' accanto.
+        The copy's filename is declared by whoever wrote it, not recomputed from
+        the supplier's internal identifier: the writer builds
+        `ORDINE_<name>_<pricelist>.xlsx` from the registry's display name, so
+        recomputing the filename from the identifier for a learned adapter would
+        look for a file that doesn't exist under that name, even though the
+        correct copy sits right there.
 
-        La seconda: le righe che il writer ha scritto **senza poter controllare**
-        che fossero la riga giusta.  Le sue frasi finivano sulla console del
-        programma, cioe' in nessun posto che l'utente guardi.
+        Also returns the rows the writer wrote without being able to confirm
+        they were the right ones — otherwise those warnings would only reach the
+        app's own console, never the user.
 
-        ⚠ Una copia dichiarata fuori dalla cartella della compilazione non si
-        prende: il servizio consegna quello che c'e' li' dentro, e un percorso
-        che punta altrove porterebbe nello zip un file che nessuno ha
-        verificato.
+        A copy declared outside the compilation's own folder is rejected: the
+        service only delivers what's inside that folder, and a path pointing
+        elsewhere would put an unverified file into the delivered zip.
         """
 
         copie: dict[str, Path] = {}
@@ -5193,13 +5075,13 @@ class ReviewStore:
             fornitore = str(voce.get("supplier") or "").strip().casefold()
             if not fornitore:
                 continue
-            # Il nome leggibile lo dichiara il writer, che l'ha preso dal
-            # registro: rifarselo qui vorrebbe dire avere due tabelle di nomi.
+            # The readable label is declared by the writer, taken from the
+            # registry: recomputing it here would mean keeping two name tables.
             etichetta = str(voce.get("supplier_name") or "").strip() or supplier_label(fornitore)
             dichiarata = voce.get("destination")
             if voce.get("skipped") or not isinstance(dichiarata, str) or not dichiarata.strip():
-                # Un fornitore configurato ma non ordinato: il writer lo elenca
-                # per completezza, e non c'e' nessuna copia da consegnare.
+                # A supplier configured but not ordered: the writer lists it for
+                # completeness, but there's no copy to deliver for it.
                 continue
             percorso = Path(dichiarata.strip()).expanduser()
             if not percorso.is_absolute():
@@ -5217,11 +5099,11 @@ class ReviewStore:
                 if pulita:
                     avvisi.append(pulita)
                     dette += 1
-            # Le righe non verificabili che una frase non ce l'hanno: succede
-            # quando la regola di scrittura non dichiara nessuna colonna da
-            # controllare, e allora **nessuna** riga di quel fornitore e' stata
-            # verificata.  Senza questa frase la pagina direbbe soltanto
-            # «pronto», che e' la stessa immagine di una verifica riuscita.
+            # Unverifiable rows with no message of their own happen when the
+            # write rule declares no column to check, meaning none of that
+            # supplier's rows were verified at all. Without a message here, the
+            # page would just say "ready", indistinguishable from a successful
+            # check.
             non_verificabili = number(voce.get("unverifiable_rows")) or 0
             verificate = number(voce.get("verified_rows")) or 0
             silenziose = int(non_verificabili) - dette
@@ -5239,12 +5121,12 @@ class ReviewStore:
     def run_writer(
         self, plan_path: Path, destinazione: Path
     ) -> tuple[list[Path], list[tuple[str, Path, Path]], list[str]]:
-        """I documenti attesi, le copie prodotte e gli avvisi del writer.
+        """Return the expected documents, the produced copies, and the writer's warnings.
 
-        ⚠ Gli avvisi sono il terzo valore e non un campo dentro le copie: chi
-        chiama deve **vederli** per forza, perche' una copia consegnata con
-        righe non verificate non e' una compilazione riuscita a meta' — e' una
-        compilazione riuscita di cui va detta una cosa.
+        Warnings are a separate third return value, not a field nested inside
+        each copy: a copy delivered with unverified rows isn't a half-successful
+        compilation — it's a successful one that has something the caller must
+        surface.
         """
 
         if self.writer_config is None:
@@ -5267,8 +5149,8 @@ class ReviewStore:
             for item in plan.get("orders") or []
             if isinstance(item, dict) and item.get("supplier")
         }
-        # Chi si compila in posizione lo dichiara la sua regola di scrittura;
-        # tutti gli altri passano dal writer Node.  Era `!= "noce"`.
+        # Whether a supplier compiles in place is declared by its write rule;
+        # everyone else goes through the Node writer.
         in_posizione = {
             supplier for supplier in ordered_suppliers
             if procedura_di_scrittura(supplier_rules.get(supplier)) == PATCH_IN_POSIZIONE
@@ -5284,15 +5166,15 @@ class ReviewStore:
                 raw_source = self.writer_config.parent / raw_source
             source_paths[supplier] = raw_source.resolve()
         expected = [plan_path]
-        # Fornitore, listino di partenza e copia prodotta viaggiano insieme:
-        # servono tutti e tre dopo, per la rinomina al nome leggibile e per il
-        # campo `origine` dell'audit, e ricostruirli da soli i nomi dei file
-        # vorrebbe dire indovinare da quale listino viene una copia.
+        # Supplier, source price list and produced copy travel together: all
+        # three are needed later, for the readable rename and for the audit's
+        # `origine` field, and reconstructing them from filenames alone would
+        # mean guessing which price list a copy came from.
         prodotte: list[tuple[str, Path, Path]] = []
         avvisi: list[str] = []
-        # Node serve per le copie `.xlsx`, non per Noce: il loro documento
-        # si compila in posizione, qui in Python.  Un ordine di solo Noce
-        # non deve pretendere un writer che non gli serve.
+        # Node is only needed for `.xlsx` copies; a supplier compiled in place
+        # is patched here in Python instead. An order made entirely of in-place
+        # suppliers shouldn't require a writer it doesn't need.
         if ordered_workbooks:
             node_value = config.get("node_executable")
             script_value = config.get("writer_script")
@@ -5309,10 +5191,10 @@ class ReviewStore:
                 str(script),
                 "--plan", str(plan_path),
                 "--config", str(self.writer_config),
-                # Il writer scrive nella cartella della compilazione, non piu' in
-                # `outputs`: e' li' che i suoi file devono nascere, altrimenti fra
-                # la scrittura e lo spostamento ci sarebbe un istante in cui la
-                # compilazione precedente e' gia' stata sovrascritta.
+                # The writer writes directly into the compilation's own folder,
+                # not into a shared `outputs` folder: otherwise there would be a
+                # window between writing and moving where the previous
+                # compilation's files could already be overwritten.
                 "--output-dir", str(destinazione),
             ]
             writer_environment = os.environ.copy()
@@ -5322,10 +5204,9 @@ class ReviewStore:
                 env=writer_environment,
                 capture_output=True,
                 text=True,
-                # ⚠ Node scrive in UTF-8.  Senza dirlo, su Windows Python
-                # decodifica con la codifica della console (cp1252) e la frase
-                # italiana del writer arriva all'utente con i caratteri
-                # sfigurati: «Il listino LARICE Ã¨ cambiato...».
+                # Node writes UTF-8. Without declaring it, Python on Windows
+                # would decode with the console's codepage instead, garbling the
+                # writer's accented characters.
                 encoding="utf-8",
                 errors="replace",
                 timeout=180,
@@ -5340,18 +5221,18 @@ class ReviewStore:
                 if riepilogo:
                     destination = dichiarate.get(supplier)
                     if destination is None:
-                        # Il writer ha parlato e questo fornitore non l'ha
-                        # nominato: qualunque file col nome che ci aspettiamo e'
-                        # di qualcun altro o di un'altra volta.
+                        # The writer reported a summary but didn't name this
+                        # supplier: any file matching the expected name pattern
+                        # would belong to someone else or a previous run.
                         raise ValueError(
                             f"Il writer non dichiara nessuna copia per {supplier_label(supplier)}, "
                             "che il piano ordina."
                         )
                 else:
-                    # Un writer che il riepilogo non lo scrive: resta il nome
-                    # che questo servizio ha sempre ricalcolato.  Non sapere non
-                    # e' un guasto, ma e' anche l'unico caso in cui il nome lo
-                    # indoviniamo noi.
+                    # A writer that doesn't emit a summary: falls back to the
+                    # filename this service has always computed. Not knowing
+                    # isn't a failure, but it's the only case where the filename
+                    # is guessed rather than declared.
                     destination = destinazione / f"ORDINE_{supplier.upper()}_{source.stem}.xlsx"
                 if not destination.is_file():
                     raise ValueError(f"Il writer non ha creato la copia prevista per {supplier_label(supplier)}")
@@ -5366,16 +5247,16 @@ class ReviewStore:
     def compila_in_posizione(
         self, supplier: str, plan: dict[str, Any], config: dict[str, Any], destinazione: Path
     ) -> tuple[str, Path, Path]:
-        """Al fornitore si rimanda il **suo** documento, con la sola colonna d'ordine.
+        """Send the supplier back its own document, with only the order column changed.
 
-        Deciso da Daniele il 12 agosto 2026 per Noce, e vale per chiunque
-        dichiari `patch_xls_in_posizione` nella regola di scrittura.  Non passa
-        dal writer Node, che importa ed esporta `.xlsx` e riscriverebbe il file
-        da capo: qui si cambiano quattro byte per cella dentro una copia del
-        `.xls`, e tutto il resto resta identico byte per byte.
+        Applies to any supplier that declares `patch_xls_in_posizione` in its
+        write rule. This bypasses the Node writer, which imports and re-exports
+        `.xlsx` and would rewrite the whole file from scratch — here only the
+        order-column cells are patched inside a copy of the original `.xls`,
+        everything else stays byte-identical.
 
-        Se la patch non si puo' fare, **la compilazione di quel fornitore
-        fallisce e lo dice**: non ripiega su un formato che non accetta.
+        If the patch can't be applied, compilation for that supplier fails and
+        says so, rather than falling back to a format it doesn't support.
         """
 
         from xls_writer import CompilazioneXlsError, compila_ordine  # import tardivo
@@ -5406,8 +5287,8 @@ class ReviewStore:
                     f"Riga o quantità {nome} non valide: riga {order.get('supplier_source_row')!r}, "
                     f"quantità {order.get('quantity')!r}."
                 )
-            # Due righe del piano sullo stesso prodotto si sommano, come fa il
-            # writer Node per gli altri fornitori.
+            # Two plan rows for the same product are summed, same as the Node
+            # writer does for other suppliers.
             righe[int(riga)] = righe.get(int(riga), 0) + int(quantita)
             ean_attesi[int(riga)] = str(order.get("supplier_ean") or "")
         if not righe:
@@ -5452,13 +5333,13 @@ class ReviewStore:
 
     @staticmethod
     def colonna_ean_dichiarata(sorgente: Path, regola: dict[str, Any]) -> int | str | None:
-        """Quale colonna porta l'EAN, risolta **dalle intestazioni del file**.
+        """Resolve which column carries the EAN, from the file's own header row.
 
-        Nel registro la colonna e' dichiarata per nome (`codice_a_barre`), non
-        per lettera, ed e' giusto cosi': `cat` e `Iva` sono nomi di colonna veri
-        di questo listino e insieme riferimenti Excel validi, quindi il ripiego
-        sulle lettere leggerebbe in silenzio la colonna sbagliata.  La regola
-        che traduce nome -> numero e' quella del lettore, in un posto solo.
+        The registry declares the column by name (e.g. `codice_a_barre`), not by
+        letter — some price lists use column names that are themselves valid
+        Excel column references, so falling back to letter-based lookup could
+        silently read the wrong column. Name-to-index resolution goes through the
+        reader's own logic, in one place.
         """
 
         nome = regola.get("ean_column_name") or regola.get("ean_column")
@@ -5484,11 +5365,11 @@ class ReviewStore:
 
 
 def frase_di_un_errore(errore: dict[str, Any]) -> str:
-    """La riga in italiano di un controllo non superato, col nome del prodotto.
+    """Build the user-facing sentence for a failed check, naming the product.
 
-    Il codice da solo non basta a nessuno: la pagina mostra `message`, e un
-    «Controlli snapshot non superati» davanti a cinquecento righe non dice
-    quale riga guardare.
+    The bare error code isn't enough for anyone: the page shows `message`, and a
+    generic "checks failed" in front of hundreds of rows doesn't say which one
+    to look at.
     """
 
     codice = str(errore.get("code") or "")
@@ -5561,7 +5442,7 @@ def frase_di_un_errore(errore: dict[str, Any]) -> str:
 
 
 def frase_degli_errori(errori: list[dict[str, Any]], *, massimo: int = 3) -> str:
-    """Le prime frasi, e quante altre ce ne sono: un elenco infinito non si legge."""
+    """Return the first few sentences plus a count of the rest: an unbounded list isn't readable."""
 
     frasi: list[str] = []
     for errore in errori or []:
@@ -5587,31 +5468,31 @@ class SnapshotError(ValueError):
 
 
 # ----------------------------------------------------------------------------
-# La pagina Impostazioni
+# The Settings page
 # ----------------------------------------------------------------------------
 
-# Le sole voci che si cambiano da questa pagina.  Restano fuori di proposito
-# `versione_prompt` e `versione_avversario` — sono componenti del programma,
-# scelti misurando quanti `ALTA` sbagliati producono, non preferenze — e con
-# loro `max_tokens`, `temperature` e `base_url`, che fanno parte della stessa
-# misura o dell'indirizzo del servizio.  Una manopola in piu' qui vorrebbe dire
-# che l'utente puo' rendere falsa quella misura senza che niente glielo dica.
+# The only entries changeable from this page. `versione_prompt` and
+# `versione_avversario` are deliberately excluded — they're app components
+# chosen by measuring how many wrong `ALTA` outcomes they produce, not user
+# preferences — and so are `max_tokens`, `temperature` and `base_url`, which are
+# part of that same measurement or of the service address. Exposing them here
+# would let the user invalidate that measurement without anything flagging it.
 VOCI_IMPOSTAZIONI = ("model", "tetto_spesa_usd", "tetto_chiamate", "parallelismo", "timeout_secondi")
 
-# `GET /api/v1/models` di OpenRouter risponde **anche senza chiave e anche con
-# una chiave scaduta**: un menu' che si popola non prova niente sulla chiave.
-# La frase viaggia con l'elenco perche' e' la pagina a doverla dire, e perche'
-# chi un domani riusa questa rotta la trova insieme ai dati.
+# OpenRouter's `GET /api/v1/models` responds even without a key and even with
+# an expired one: a populated model menu proves nothing about the key. This
+# warning travels with the list because the page has to state it, and because
+# whoever reuses this route later finds it attached to the data.
 AVVISO_ELENCO_PUBBLICO = (
     "L’elenco dei modelli è pubblico: si carica anche senza chiave e anche con una chiave "
     "scaduta. Che la chiave funzioni lo dice soltanto «Prova la connessione»."
 )
 
-# Che cosa dire all'utente per ogni stato che `prova_connessione` puo' tornare.
-# Il tono e' solo il colore dell'avviso: `ok` in risposta e' vero **soltanto**
-# per `OK`, perche' e' l'unico caso in cui chiave, identificativo del modello e
-# formato della risposta hanno funzionato tutti e tre insieme.  Dire «chiave
-# valida» su un 429 sarebbe una deduzione, e questa pagina non ne fa.
+# What to tell the user for each status `prova_connessione` can return. The
+# tone only controls the warning's color; `ok` in the response is true only for
+# `OK`, since that's the only case where key, model id and response format all
+# worked together. Saying "key valid" on a 429 would be an inference this page
+# deliberately doesn't make.
 MESSAGGI_DELLA_PROVA: dict[str, tuple[str, str]] = {
     ai_client.STATO_OK: ("success", "La chiave funziona: il modello ha risposto nel formato previsto."),
     ai_client.STATO_SENZA_CHIAVE: ("danger", "Non c’è nessuna chiave da provare: incollala nel campo qui sopra."),
@@ -5628,9 +5509,9 @@ MESSAGGI_DELLA_PROVA: dict[str, tuple[str, str]] = {
     ai_client.STATO_TETTO_CHIAMATE: ("danger", "Il tetto di chiamate impostato non lascia partire nemmeno la chiamata di prova: alzalo e riprova."),
 }
 
-# Qui la chiamata e' partita, il modello ha risposto e la risposta e' arrivata
-# storta.  Non e' un guasto della chiave, ed e' comunque una ragione per non
-# usare quel modello: con una risposta cosi' la fase AI non deciderebbe niente.
+# Here the call went through, the model answered, and the answer came back
+# malformed. Not a key failure, but still a reason not to use that model: with
+# a response like this the AI matching stage couldn't decide anything.
 STATI_RISPOSTA_INUTILIZZABILE = frozenset({
     ai_client.STATO_TRONCATA,
     ai_client.STATO_CONTENUTO_VUOTO,
@@ -5642,12 +5523,12 @@ STATI_RISPOSTA_INUTILIZZABILE = frozenset({
 
 
 def chiave_dal_corpo(payload: Any) -> str:
-    """La chiave incollata nel corpo della richiesta, o stringa vuota.
+    """Return the key pasted into the request body, or an empty string.
 
-    Sta in una funzione sola perche' il valore che torna di qui e' anche quello
-    che il gestore mette da parte per ripulire i messaggi d'errore: se i due
-    punti leggessero il corpo in due modi diversi, la chiave che sfugge alla
-    lettura sfugge anche alla ripulitura.
+    Kept in one function because the value returned here is also what the
+    handler sets aside to scrub from error messages: if the two call sites read
+    the body differently, a key missed by one read would also be missed by the
+    scrubbing.
     """
 
     if not isinstance(payload, dict):
@@ -5656,16 +5537,16 @@ def chiave_dal_corpo(payload: Any) -> str:
 
 
 class ServizioImpostazioni:
-    """Chiave, modello e tetti: tutto quello che la pagina Impostazioni tocca.
+    """API key, model and usage caps: everything the Settings page touches.
 
-    Sta fuori da `ReviewStore` di proposito.  `GET /api/review` e' la risposta
-    piu' grande e piu' letta del programma, e la configurazione AI non deve
-    poterci finire dentro: tenerla in un altro oggetto rende la cosa vera per
-    costruzione, invece che per attenzione di chi scrivera' il prossimo campo.
+    Kept outside `ReviewStore` on purpose. `GET /api/review` is the largest and
+    most frequently read response in the app, and the AI configuration must
+    never be able to end up in it; keeping it in a separate object makes that
+    true by construction instead of by convention.
 
-    `leggi_modelli` e `crea_client` sono i due punti in cui si tocca la rete, e
-    sono iniettabili per la stessa ragione per cui lo e' `ClientAI(trasporto=…)`:
-    nessun test di questa suite deve chiamare OpenRouter.
+    `leggi_modelli` and `crea_client` are the two points where the network is
+    touched, and they're injectable for the same reason `ClientAI(trasporto=…)`
+    is: no test in this suite should ever call OpenRouter.
     """
 
     def __init__(
@@ -5691,19 +5572,20 @@ class ServizioImpostazioni:
         return ai_client.carica_configurazione(self.percorso_impostazioni)
 
     def chiave_salvata(self) -> str:
-        """La chiave che il servizio userebbe se il corpo non ne porta una.
+        """Return the key the service would use if the request body carries none.
 
-        Non esce mai verso il browser: serve solo a `_chiave_in_volo`, cioe' a
-        sapere che cosa nascondere se qualcosa va storto mentre la si usa.
+        Never sent to the browser: it's only used by `_chiave_in_volo`, i.e. to
+        know what to scrub if something fails while using it.
         """
 
         return ai_client.leggi_chiave(self.percorso_secrets) or ""
 
     def stato(self) -> dict[str, Any]:
-        """Com'e' configurato il programma adesso. **Senza la chiave.**
+        """Return the app's current configuration. Never includes the key itself.
 
-        `stato_chiave` torna soltanto presenza, origine e coda di quattro
-        caratteri: e' l'unica cosa che di una chiave puo' arrivare al browser.
+        `stato_chiave` returns only presence, origin, and the last four
+        characters — the only thing about a key that's allowed to reach the
+        browser.
         """
 
         configurazione = self.configurazione()
@@ -5716,12 +5598,12 @@ class ServizioImpostazioni:
         }
 
     def modelli(self) -> dict[str, Any]:
-        """L'elenco per il menu'.  Un guasto qui non e' un guasto della pagina.
+        """Return the model list for the dropdown. A failure here isn't a page failure.
 
-        Il menu' e' una comodita': l'identificativo si puo' sempre scrivere a
-        mano, ed e' l'unico modo di usare un modello uscito ieri.  Quindi una
-        rete che non risponde torna `ok: false` con il motivo scritto, non un
-        500 che spegne la pagina.
+        The dropdown is a convenience: the model id can always be typed by hand,
+        which is also the only way to use a model released yesterday. So a
+        network failure returns `ok: false` with a reason, not a 500 that breaks
+        the page.
         """
 
         configurazione = self.configurazione()
@@ -5742,7 +5624,7 @@ class ServizioImpostazioni:
     # -- scrittura -----------------------------------------------------------
 
     def salva_chiave(self, payload: Any) -> dict[str, Any]:
-        """Scrive la chiave e risponde con il solo stato: il valore non torna."""
+        """Write the key and reply with the status only; the value itself is never echoed back."""
 
         ai_client.salva_chiave(chiave_dal_corpo(payload), self.percorso_secrets)
         return {
@@ -5752,12 +5634,11 @@ class ServizioImpostazioni:
         }
 
     def salva(self, payload: Any) -> dict[str, Any]:
-        """Salva le voci esposte.  Un valore rifiutato e' un errore, non un ripiego.
+        """Save the exposed settings. A rejected value is an error, not silently coerced.
 
-        `salva_impostazioni` solleva `ValueError` con un messaggio gia' in
-        italiano e gia' leggibile — «attenzione al separatore decimale…» — e
-        quel messaggio arriva all'utente cosi' com'e': riscriverlo qui vorrebbe
-        dire due testi da tenere allineati.
+        `salva_impostazioni` raises `ValueError` with an already user-facing
+        message, and that message reaches the user unchanged — rewriting it here
+        would mean keeping two texts in sync.
         """
 
         valori = payload.get("impostazioni") if isinstance(payload, dict) else None
@@ -5779,31 +5660,31 @@ class ServizioImpostazioni:
     # -- la prova ------------------------------------------------------------
 
     def prova(self, payload: Any) -> dict[str, Any]:
-        """Una chiamata vera al modello, con la chiave che l'utente sta provando.
+        """Make a real call to the model, using the key the user is currently testing.
 
-        La chiave arriva nel corpo e **non viene salvata**: cosi' si prova prima
-        di salvare, e una chiave sbagliata non sostituisce quella che funziona.
-        Se il corpo non la porta si prova quella gia' configurata.
+        The key arrives in the request body and is never saved: this lets the
+        user test before saving, without a bad key overwriting a working one. If
+        the body carries none, the already-configured key is tested instead.
         """
 
         chiave = chiave_dal_corpo(payload)
         if not chiave:
-            # Si legge **dal percorso di questo servizio**, non lasciando cercare
-            # il client: `ClientAI(chiave=None)` guarderebbe il percorso
-            # predefinito del modulo, che in produzione e' lo stesso ma altrove
-            # no. La prova finirebbe per dire com'e' una chiave diversa da
-            # quella che la pagina mostra due riquadri piu' su.
+            # Read from this service's own path rather than letting the client
+            # fall back on its own: `ClientAI(chiave=None)` would look at the
+            # module's default path, which matches production but not
+            # necessarily every environment. Otherwise the test could report on
+            # a different key than the one the page shows above.
             chiave = ai_client.leggi_chiave(self.percorso_secrets) or ""
 
         configurazione = self.configurazione()
         modello = str((payload or {}).get("model") or "").strip() if isinstance(payload, dict) else ""
         if modello:
-            # Si prova l'identificativo che l'utente ha appena scritto, prima di
-            # salvarlo: un modello che non esiste risponde 400 e si scopre qui.
+            # Test the model id the user just typed, before saving it: a model
+            # that doesn't exist responds 400 and is caught here.
             configurazione = {**configurazione, "model": modello}
 
-        # `chiave=""` dichiara al client che la chiave non c'e', ed e' quello che
-        # fa tornare `SENZA_CHIAVE` invece di una ricerca a sorpresa.
+        # `chiave=""` tells the client the key is absent, producing
+        # `SENZA_CHIAVE` instead of an unexpected lookup.
         client = self._crea_client(configurazione, chiave)
         esito = client.prova_connessione()
 
@@ -5820,9 +5701,9 @@ class ServizioImpostazioni:
             tono = "danger"
             messaggio = f"Prova non riuscita ({esito.stato}). Il dettaglio qui sotto dice che cosa è successo."
 
-        # `ClientAI` toglie gia' la chiave da ogni campo dell'esito.  Si rifa'
-        # qui perche' questa risposta esce verso il browser e la difesa che
-        # conta e' quella che sta nel punto d'uscita, non quella a monte.
+        # `ClientAI` already scrubs the key from every field of its result. It's
+        # scrubbed again here because this response is what reaches the browser,
+        # and the defense that matters is the one at the exit point, not upstream.
         return {
             "ok": esito.stato == ai_client.STATO_OK,
             "tono": tono,
@@ -5838,15 +5719,14 @@ class ServizioImpostazioni:
 class AppHandler(BaseHTTPRequestHandler):
     server_version = "ComparaOrdini/0.1"
 
-    # La chiave che sta passando in **questa** richiesta, e solo per la sua
-    # durata.  Serve a `senza_segreti`: il corpo di un 500 rimanda `str(exc)` al
-    # browser — e dal 20 agosto 2026 il traceback finisce anche su `stderr` —
-    # e un'eccezione sollevata mentre si prova una chiave se la porterebbe
-    # dietro, dalla libreria HTTP, da urllib, da un `KeyError` su un dizionario
-    # di intestazioni.  E' la chiave appena incollata **oppure quella salvata**,
-    # perche' e' quest'ultima che viene usata quando il corpo non ne porta
-    # nessuna, cioe' quasi sempre.  Sta sull'istanza e non e' un dato di modulo
-    # perche' ogni connessione ha la sua istanza e il suo thread.
+    # The key currently in flight for this request, and only for its duration.
+    # Used by `senza_segreti`: a 500's body echoes `str(exc)` to the browser (and
+    # the traceback also goes to `stderr`), and an exception raised while testing
+    # a key could carry it along — from the HTTP library, from urllib, from a
+    # `KeyError` on a headers dict. It's either the freshly pasted key or the
+    # saved one, since the saved key is what's used when the body carries none,
+    # which is most of the time. It's an instance attribute, not a module-level
+    # one, because each connection gets its own instance and thread.
     _chiave_in_volo: str = ""
 
     @property
@@ -5862,13 +5742,13 @@ class AppHandler(BaseHTTPRequestHandler):
         return servizio
 
     def senza_segreti(self, testo: Any) -> str:
-        """Il testo che sta per uscire verso il browser, senza la chiave dentro."""
+        """Return text about to go to the browser, with the key scrubbed out."""
 
         return senza_la_chiave(str(testo), self._chiave_in_volo)
 
     def log_message(self, format_string: str, *args: Any) -> None:
-        # La riga di richiesta finisce qui a ogni chiamata: e' la ragione per cui
-        # la chiave viaggia soltanto nel corpo di una POST e mai in una query.
+        # The request line lands here on every call — the reason the key only
+        # ever travels in a POST body, never in a query string.
         print(f"{self.address_string()} - {self.senza_segreti(format_string % args)}")
 
     def end_headers(self) -> None:
@@ -5888,60 +5768,54 @@ class AppHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _stampa_il_guasto(self) -> None:
-        """Il traceback di un guasto imprevisto, sulla finestra del programma.
+        """Print an unexpected failure's traceback to the app's own console.
 
-        ⚠ Fino al 20 agosto 2026 non finiva da nessuna parte. La frase tecnica
-        arrivava in pagina dentro `DETTAGLIO_TECNICO` — «KeyError: 'offers'» —
-        e li' si fermava: `traceback` e `logging` non erano importati in nessun
-        file di `app/`, e un file di registro non esiste. In negozio, davanti a
-        quel messaggio, non c'era modo di sapere da quale delle 5.200 righe
-        venisse: restava farsi raccontare i passi al telefono.
+        The technical error text also reaches the page (in `DETTAGLIO_TECNICO`),
+        but without a full traceback anywhere there was no way to tell which line
+        of a large codebase a failure came from — only the exception message,
+        with no location. This prints the traceback where whoever is watching the
+        app can actually see it.
 
-        Non cambia nessuna risposta HTTP e l'utente non lo vede: esce da
-        `stderr`, che e' la finestra di PowerShell del lanciatore, e serve a chi
-        sta guardando mentre succede.
+        Doesn't change the HTTP response and the user never sees it: it goes to
+        `stderr`, the launcher's console window.
 
-        Passa da `senza_segreti` come tutto il resto: la chiave puo' comparire
-        in un traceback di `urllib`, ed e' esattamente la ragione per cui
-        `_chiave_in_volo` esiste.
+        Scrubbed through `senza_segreti` like everything else: a key can show up
+        inside an `urllib` traceback, which is exactly why `_chiave_in_volo`
+        exists.
         """
 
         tipo, valore, _traccia = sys.exc_info()
         if tipo is None:
-            # Un 500 dichiarato a mano, senza nessuna eccezione in volo:
-            # `format_exc()` scriverebbe la riga inutile «NoneType: None».
+            # A 500 raised manually, with no exception actually in flight:
+            # `format_exc()` would just print the useless "NoneType: None".
             return
         if isinstance(valore, (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)):
-            # ⚠ Non e' un guasto del programma: e' il browser che ha staccato a
-            # meta' — l'utente che annulla uno scaricamento, la scheda che si
-            # chiude su un file grosso. Succede per davvero, e un traceback per
-            # ognuno riempirebbe di rumore proprio la finestra in cui il giorno
-            # del guasto vero bisogna saper guardare. Trovato dalla verifica
-            # avversariale del 20 agosto 2026, riproducendolo su un file da
-            # 60 MB interrotto a meta'.
+            # Not an app failure: the browser disconnected mid-response — a
+            # cancelled download, a tab closed on a large file. A traceback for
+            # every one of these would bury the console in noise exactly when it
+            # needs to stay readable for a real failure.
             return
         dove = self.senza_segreti(f"{self.command} {self.path}")
         print(
             f"[GUASTO] {dove}\n{self.senza_segreti(traceback.format_exc()).rstrip()}",
             file=sys.stderr,
-            # Senza, il testo resta nel tampone: se il programma muore subito
-            # dopo, il traceback muore con lui — cioe' proprio nel caso in cui
-            # serviva.
+            # Without this, the text stays buffered: if the process dies right
+            # after, the traceback dies with it — exactly when it would matter
+            # most.
             flush=True,
         )
 
     def error_response(self, status: int, message: str, errors: list[dict[str, Any]] | None = None) -> None:
-        # Ogni messaggio d'errore passa da qui, compreso il `str(exc)` dei 500:
-        # e' il solo punto in cui basta ripulire una volta per coprirli tutti.
+        # Every error message passes through here, including a 500's
+        # `str(exc)`: the one place where scrubbing once covers all of them.
         pulito = self.senza_segreti(message)
         voci = list(errors or [])
         if status == HTTPStatus.INTERNAL_SERVER_ERROR:
             self._stampa_il_guasto()
-            # ⚠ Un guasto imprevisto arrivava in pagina cosi' com'era: «[Errno
-            # 13] Permission denied: 'C:\\Users\\HP\\...\\review_data.json'».
-            # Inglese, percorsi del computer, e nessuna indicazione di cosa
-            # fare.  La frase tecnica non si butta — serve a chi deve capire —
-            # ma va di lato, non al posto della risposta.
+            # An unexpected failure would otherwise reach the page as a raw
+            # exception message: English, local file paths, no indication of what
+            # to do. The technical message isn't discarded — it's useful for
+            # diagnosis — but it goes alongside the response, not in place of it.
             voci = [{"code": "DETTAGLIO_TECNICO", "message": pulito}, *voci]
             pulito = (
                 "Ho avuto un problema con questa operazione. Riprova; se succede "
@@ -5960,35 +5834,33 @@ class AppHandler(BaseHTTPRequestHandler):
         return json.loads(raw.decode("utf-8"))
 
     def _origini_della_pagina(self) -> set[str]:
-        """Gli unici indirizzi da cui la pagina del comparatore puo' arrivare.
+        """Return the only origins the comparator's own page can arrive from.
 
-        La porta non e' cablata e non va passata a mano: il lanciatore ripiega
-        sulla 8766, 8767 e via cosi' quando la 8765 e' occupata, e una guardia
-        con la porta scritta dentro rifiuterebbe proprio la pagina vera.
-        `self.server.server_address[1]` e' quella su cui questo servizio sta
-        rispondendo, sempre.
+        The port isn't hardcoded: the launcher falls back to 8766, 8767 and so on
+        when the default is already taken, and a check with a fixed port would
+        reject the app's own page. `self.server.server_address[1]` is always the
+        port this instance is actually listening on.
         """
 
         porta = self.server.server_address[1]
         return {f"http://{macchina}:{porta}" for macchina in ("127.0.0.1", "localhost", "[::1]")}
 
     def richiesta_dalla_nostra_pagina(self) -> bool:
-        """Vero se questa richiesta con effetti arriva dalla pagina del comparatore.
+        """Return whether this state-changing request actually came from the comparator's page.
 
-        ⚠ Il metodo POST non e' una difesa, e per un po' qui si e' creduto che
-        lo fosse.  Una POST con `Content-Type: text/plain` e' una «simple
-        request» per il browser: parte senza preflight, e l'effetto avviene
-        anche se chi l'ha mandata non legge la risposta.  Finche' il
-        comparatore e' acceso, qualunque pagina aperta in quel browser poteva
-        cosi' caricare un listino, avviare la catena — che spende credito
-        OpenRouter — compilare gli ordini, cancellare i caricamenti,
-        sovrascrivere la chiave e spegnere il programma.
+        The POST method alone is not a defense: a POST with
+        `Content-Type: text/plain` is a browser "simple request" — it's sent
+        without a CORS preflight, and its effect happens even if the sender never
+        reads the response. Without this check, any page open in the same
+        browser could upload a price list, start the pipeline (spending
+        OpenRouter credit), compile orders, delete uploads, overwrite the API key
+        or shut the app down, while the comparator was running.
 
-        Si guarda quello che c'e', non si pretende che ci sia: il lanciatore
-        chiama `/api/spegni` con urllib, che `Origin` non lo manda affatto, e
-        un browser vecchio puo' non mandare `Sec-Fetch-Site`.  Le `fetch` della
-        nostra pagina, servita da questo stesso servizio, mandano sempre tutti
-        e due e sono sempre same-origin.
+        This checks the headers that are present rather than requiring them: the
+        launcher calls `/api/spegni` via urllib, which never sends `Origin`, and
+        an older browser may not send `Sec-Fetch-Site`. Requests from our own
+        page, served by this same instance, always send both and are always
+        same-origin.
         """
 
         sito = str(self.headers.get("Sec-Fetch-Site") or "").strip()
@@ -6006,11 +5878,11 @@ class AppHandler(BaseHTTPRequestHandler):
         )
 
     def _host_della_pagina(self) -> set[str]:
-        """Gli unici valori di `Host` che possono venire dalla pagina del comparatore.
+        """Return the only `Host` header values the comparator's page can send.
 
-        Con la porta di questo servizio e senza: alcuni client mandano
-        `Host: 127.0.0.1` senza porta, e la regola deve accettarli comunque.
-        La porta si legge da `self.server.server_address[1]`, mai cablata.
+        Both with and without this instance's port: some clients send
+        `Host: 127.0.0.1` with no port, and the check has to accept that too. The
+        port always comes from `self.server.server_address[1]`, never hardcoded.
         """
 
         porta = self.server.server_address[1]
@@ -6018,21 +5890,18 @@ class AppHandler(BaseHTTPRequestHandler):
         return set(macchine) | {f"{macchina}:{porta}" for macchina in macchine}
 
     def richiesta_con_host_valido(self) -> bool:
-        """Vero se l'intestazione `Host` punta a questo servizio, o manca del tutto.
+        """Return whether the `Host` header points at this instance, or is absent entirely.
 
-        ⚠ Un sito che l'utente ha aperto puo' far scadere il proprio DNS e
-        ripuntare il proprio dominio su 127.0.0.1 (DNS rebinding): da quel
-        momento il browser manda le richieste a
-        `http://dominio-cattivo.example:<porta>/api/...`, che per lui restano
-        same-origin — quindi la pagina cattiva LEGGE la risposta, e in una
-        GET l'`Origin` spesso non c'e' nemmeno, quindi la guardia anti-CSRF da
-        sola non basta. L'intestazione `Host` pero' arriva sempre com'era nella
-        barra dell'indirizzo del sito cattivo, mai come l'IP a cui il DNS ha
-        ripuntato: controllarla chiude il buco.
+        A malicious site can let its own DNS record expire and re-point its
+        domain to 127.0.0.1 (DNS rebinding): from then on the browser sends
+        requests to that domain on this app's port, which the browser treats as
+        same-origin — so the malicious page can read the response, and on a GET
+        `Origin` is often absent anyway, so the CSRF check above isn't enough on
+        its own. The `Host` header, however, always carries the attacker's
+        domain, never the rebound IP, so checking it closes this gap.
 
-        HTTP/1.0 puo' non mandare `Host` affatto, e alcuni client la mandano
-        senza porta: i due casi passano, altrimenti la pagina vera smetterebbe
-        di aprirsi.
+        HTTP/1.0 may omit `Host` entirely, and some clients omit the port: both
+        are accepted, or the real page would stop working too.
         """
 
         host = str(self.headers.get("Host") or "").strip()
@@ -6056,22 +5925,23 @@ class AppHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", mime)
         self.send_header("Content-Length", str(len(content)))
         if download:
-            # Misurato: `filename="Ordine LARICE — 12 agosto 2026.xlsx"` non si
-            # codifica in latin-1, e le intestazioni di
-            # BaseHTTPRequestHandler sono latin-1: la risposta morirebbe con
-            # UnicodeEncodeError a corpo gia' promesso.  La forma RFC 5987 la
-            # costruisce `consegna`, in un posto solo per tutte le rotte.
+            # A non-ASCII filename (accented characters, an em dash) can't be
+            # encoded in latin-1, which is what `BaseHTTPRequestHandler`'s
+            # headers use — a plain `filename=` would raise a
+            # `UnicodeEncodeError` after the body has already been promised. The
+            # RFC 5987 fallback form is built by `consegna`, in one place shared
+            # by every download route.
             self.send_header("Content-Disposition", consegna.intestazione_allegato(path.name))
         self.end_headers()
         self.wfile.write(content)
 
     def scarica_le_conferme(self) -> None:
-        """`GET /api/conferme/esporta`: le conferme date, come file da salvare.
+        """`GET /api/conferme/esporta`: given confirmations, as a file to save.
 
-        Non passa da `json_response` perche' questa risposta non e' per la
-        pagina: e' un file che l'utente salva. L'intestazione la costruisce
-        `consegna`, come per tutti gli altri scaricamenti — il nome porta la
-        data in italiano e in latin-1 non si codifica.
+        Doesn't go through `json_response`, since this response isn't for the
+        page — it's a file the user saves. The header is built by `consegna`,
+        like every other download, because the filename carries a date that
+        doesn't encode in latin-1.
         """
 
         conferme, uguaglianze = self.store.esporta_le_conferme()
@@ -6082,10 +5952,10 @@ class AppHandler(BaseHTTPRequestHandler):
                 "esportate_il": momento.isoformat(),
                 "quante": len(conferme),
                 "conferme": conferme,
-                # ⚠ Anche le uguaglianze, e non e' un extra: stanno nello stesso
-                # `conferme.db`, sono memoria «per sempre» come le conferme, e
-                # questo file e' presentato in pagina come la copia che ci si
-                # puo' portare via. Senza, sarebbe meta' del magazzino.
+                # Equivalences too, not an extra: they live in the same
+                # `conferme.db`, are permanent memory just like confirmations, and
+                # this file is presented on the page as the exportable copy of
+                # that memory. Leaving them out would export only half of it.
                 "quante_uguaglianze": len(uguaglianze),
                 "uguaglianze": uguaglianze,
             },
@@ -6100,13 +5970,13 @@ class AppHandler(BaseHTTPRequestHandler):
         self.wfile.write(corpo)
 
     def servi_consegna(self, resto: str) -> None:
-        """`/ordini/<cartella>/<nome>` e `/ordini/<cartella>/zip`.
+        """Serve `/ordini/<cartella>/<nome>` and `/ordini/<cartella>/zip`.
 
-        Il percorso arriva gia' decodificato (`unquote` in `do_GET`), quindi
-        `..%2f..%2fsecrets.json` a questo punto e' `../../secrets.json`: qui si
-        contano i segmenti **dopo** la decodifica, e ogni segmento passa dalle
-        difese di `consegna`.  I messaggi non ripetono mai il percorso chiesto:
-        direbbero a chi prova che cosa ha provato.
+        The path arrives already decoded (`unquote` in `do_GET`), so
+        `..%2f..%2fsecrets.json` is `../../secrets.json` by this point: segments
+        are counted after decoding, and each one passes through `consegna`'s own
+        checks. Error messages never echo back the requested path, so an attacker
+        probing this route learns nothing from the response.
         """
 
         pezzi = resto.split("/")
@@ -6128,16 +5998,16 @@ class AppHandler(BaseHTTPRequestHandler):
         self.serve_file(percorso, download=True)
 
     def servi_zip(self, cartella: Path) -> None:
-        """Lo zip di quello che si consegna, costruito al momento e mai su disco.
+        """Build the delivery zip in memory, never written to disk.
 
-        Sono i listini compilati e, quando c'è, l'elenco dei prodotti che nessun
-        fornitore porta: chi scarica lo zip sta preparando la settimana, e
-        quell'elenco è parte del lavoro di quella settimana quanto un ordine.
+        Contains the compiled price lists and, when present, the list of
+        products no supplier carries: whoever downloads the zip is preparing the
+        week's order, and that list is as much part of that work as an order is.
         """
 
         voce = consegna.voce(cartella)
-        # I tipi da consegnare stanno in `consegna`, in un posto solo: due
-        # elenchi da tenere allineati sono un elenco che si dimentica.
+        # The file types to deliver live in `consegna`, in one place: two lists
+        # to keep in sync is a list that eventually falls out of sync.
         nomi = [item["nome"] for item in voce["file"]
                 if item["tipo"] in consegna.TIPI_DA_CONSEGNARE]
         if not nomi:
@@ -6146,8 +6016,8 @@ class AppHandler(BaseHTTPRequestHandler):
         try:
             contenuto = consegna.zip_in_memoria(cartella, nomi)
         except ValueError:
-            # L'audit nomina un listino che sul disco non c'e' piu': la cartella
-            # e' stata toccata a mano.  E' un 404, non un guasto del programma.
+            # The audit names a price list no longer on disk: the folder was
+            # edited by hand. This is a 404, not an app failure.
             self.error_response(HTTPStatus.NOT_FOUND, "In questa compilazione non ci sono listini da scaricare")
             return
         self.send_response(HTTPStatus.OK)
@@ -6209,9 +6079,9 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.json_response(self.store.schemi_pendenti())
                 return
             if route == "/api/schemas/documento":
-                # Il nome del documento non e' un percorso: e' una voce
-                # dell'elenco che il servizio ha appena dato alla pagina, e
-                # `colonne_del_documento` lo ricontrolla sulla cartella.
+                # The document name isn't a path: it's an entry from the list
+                # this service just returned to the page, and
+                # `colonne_del_documento` re-validates it against the folder.
                 parameters = parse_qs(parsed.query)
                 nome = str((parameters.get("nome") or [""])[0]).strip()
                 self.json_response(self.store.colonne_del_documento(nome))
@@ -6223,8 +6093,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.json_response(self.impostazioni.stato())
                 return
             if route == "/api/impostazioni/modelli":
-                # L'elenco e' pubblico e non porta nessun segreto: e' l'unica
-                # rotta delle impostazioni che puo' essere una GET.
+                # This list is public and carries no secret, which is why it's
+                # the only settings route allowed to be a GET.
                 self.json_response(self.impostazioni.modelli())
                 return
             if route == "/api/ordini":
@@ -6234,18 +6104,17 @@ class AppHandler(BaseHTTPRequestHandler):
                 })
                 return
             if route == "/api/health":
-                # `firmaDelCodice` dice **quale** programma sta rispondendo, non
-                # solo che qualcuno risponde.  Senza, il lanciatore trovava un
-                # server sano e lo riusava anche quando i sorgenti erano cambiati
-                # sotto: si riapriva il `.cmd` credendo di riavviare e si tornava
-                # sul programma di due giorni prima.
+                # `firmaDelCodice` identifies which build is answering, not just
+                # that something is. Without it, the launcher could find a
+                # healthy server and reuse it even after the source changed
+                # underneath, effectively restarting into a stale build.
                 self.json_response({
                     "ok": True,
                     "status": "ready",
                     "firmaDelCodice": versione_del_codice.firma(),
-                    # La data della versione pubblicata che sta girando: la
-                    # pagina la mostra in alto, perche' l'allineamento a GitHub
-                    # puo' fallire in silenzio e nessuno se ne accorgerebbe.
+                    # The published version's date, currently running: shown at
+                    # the top of the page, since a failed sync to the published
+                    # source would otherwise go unnoticed.
                     "versionePubblicata": versione_del_codice.pubblicata(),
                 })
                 return
@@ -6253,11 +6122,10 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.servi_consegna(route.removeprefix(consegna.PREFISSO_URL + "/"))
                 return
             if route.startswith("/outputs/"):
-                # Stessa difesa della rotta gemella `/ordini/<cartella>/<nome>`:
-                # `.name` da solo blocca il traversal, ma non un collegamento
-                # simbolico dentro `outputs/` — quello lo ferma solo il
-                # controllo di contenimento dopo `resolve()` che `file_sicuro`
-                # fa gia' per l'altra rotta.
+                # Same defense as the sibling `/ordini/<cartella>/<nome>` route:
+                # `.name` alone blocks path traversal, but not a symlink placed
+                # inside `outputs/` — that's stopped by `file_sicuro`'s own
+                # containment check after `resolve()`.
                 percorso = consegna.file_sicuro(
                     self.store.output_dir, Path(route.removeprefix("/outputs/")).name
                 )
@@ -6283,11 +6151,11 @@ class AppHandler(BaseHTTPRequestHandler):
             self.error_response(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
 
     def do_PUT(self) -> None:  # noqa: N802
-        # Per simmetria con `do_POST`.  Qui non e' dove si gioca la partita —
-        # `PUT` non e' un metodo «semplice», quindi il browser fa comunque il
-        # preflight e `/api/state` e' gia' fuori dalla portata di un altro sito
-        # — ma una guardia che vale per un metodo con effetti e non per l'altro
-        # e' una guardia che qualcuno prima o poi legge al contrario.
+        # Kept symmetric with `do_POST`. `PUT` isn't a "simple" method, so the
+        # browser already runs a CORS preflight and `/api/state` is already out
+        # of another site's reach — but a check applied to one state-changing
+        # method and not the other invites someone to eventually read it as
+        # intentional.
         if not self.richiesta_con_host_valido():
             self.rifiuta_l_host()
             return
@@ -6307,16 +6175,17 @@ class AppHandler(BaseHTTPRequestHandler):
             self.error_response(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
 
     def _spegni(self) -> dict[str, Any]:
-        """Ferma il servizio, ma **non** mentre la catena sta lavorando.
+        """Stop the service, but never while the pipeline is running.
 
-        Una run uccisa a meta' lascia una cartella datata orfana e il lavoro
-        gia' pagato all'AI da rifare: chi chiede di spegnere deve sapere che
-        c'e' qualcosa in corso e decidere lui.  Chi chiama e' il lanciatore,
-        che in quel caso riusa il server invece di riavviarlo.
+        A run killed mid-way leaves an orphaned dated folder and AI work already
+        paid for that would have to be redone; whoever asks to shut down needs to
+        know something is in progress and decide explicitly. The caller here is
+        the launcher, which reuses the running server instead of restarting it in
+        that case.
 
-        Lo spegnimento vero parte **dopo** la risposta: `shutdown()` aspetta che
-        il ciclo del servizio si fermi, e chiamarlo da dentro un handler
-        bloccherebbe il servizio contro se stesso.
+        The actual shutdown starts after the response: `shutdown()` waits for the
+        serve loop to stop, and calling it from inside a request handler would
+        deadlock the service against itself.
         """
 
         stato = self.store.stato_pipeline()
@@ -6331,18 +6200,18 @@ class AppHandler(BaseHTTPRequestHandler):
                 ),
             }
 
-        # Il file delle conferme si restituisce **prima** di fermarsi: SQLite lo
-        # tiene aperto finche' la connessione vive, e su Windows un file aperto
-        # non si rinomina e non si cancella. Chi spegne perche' sta per
-        # riavviare col codice nuovo (`/api/health` → firma diversa) deve
-        # trovare la cartella libera.
+        # The confirmations database is released before stopping: SQLite holds
+        # it open for the connection's lifetime, and on Windows an open file
+        # can't be renamed or deleted. Whoever shuts down to restart into new
+        # code (`/api/health` reporting a different build signature) needs the
+        # folder to be free.
         self.store.chiudi()
         threading.Thread(target=self.server.shutdown, daemon=True).start()
         return {"ok": True, "spento": True}
 
     def do_POST(self) -> None:  # noqa: N802
-        # Prima di leggere il corpo: nessuna delle diciannove rotte qui sotto
-        # deve poter partire da una pagina che non e' la nostra.
+        # Before reading the body: none of the routes below may be triggered
+        # by a page other than this app's own.
         if not self.richiesta_con_host_valido():
             self.rifiuta_l_host()
             return
@@ -6353,19 +6222,17 @@ class AppHandler(BaseHTTPRequestHandler):
         try:
             payload = self.read_json()
             if route.startswith("/api/impostazioni"):
-                # Da qui in poi la chiave puo' essere nel corpo: si mette da
-                # parte **prima** di toccarla, cosi' qualunque eccezione fra
-                # questa riga e la risposta esce gia' ripulita.
+                # From here on the key may be in the body: it's set aside
+                # before it's touched, so any exception between this line and
+                # the response is already scrubbed.
                 #
-                # ⚠ E se nel corpo non c'e', quella che sta per essere usata e'
-                # la chiave **salvata**: e' il caso piu' comune di tutti — chi
-                # preme «Prova la connessione» senza reincollare niente manda un
-                # corpo senza `chiave`, e il servizio ripiega su quella del
-                # file. Finche' qui si guardava solo il corpo, in quel caso
-                # `_chiave_in_volo` restava vuota e la sola difesa era la forma
-                # `sk-...`, che una chiave presa da `OPENROUTER_API_KEY` — mai
-                # controllata da nessuno — non e' tenuta ad avere. Trovato dalla
-                # verifica avversariale del 20 agosto 2026.
+                # When the body carries no key, the one about to be used is the
+                # saved one — the common case: pressing "test connection"
+                # without pasting anything sends a body with no `chiave`, and the
+                # service falls back to the saved file. If this only checked the
+                # body, `_chiave_in_volo` would stay empty in that case, and a
+                # key sourced from an environment variable wouldn't necessarily
+                # match the `sk-...` pattern the alternative safeguard relies on.
                 self._chiave_in_volo = chiave_dal_corpo(payload) or self.impostazioni.chiave_salvata()
             if route == "/api/impostazioni":
                 self.json_response(self.impostazioni.salva(payload))
@@ -6396,11 +6263,11 @@ class AppHandler(BaseHTTPRequestHandler):
             elif route == "/api/suppliers/discount":
                 self.json_response(self.store.set_supplier_discount(payload))
             elif route == "/api/suppliers/move-preview":
-                # Sola lettura: e' un preventivo, non applica niente.
+                # Read-only: it's a quote, applies nothing.
                 self.json_response(self.store.move_preview(payload))
             elif route == "/api/pipeline/avvia":
-                # Non aspetta la catena: torna subito con lo stato iniziale, e
-                # la pagina lo interroga finche' non finisce.
+                # Doesn't wait for the pipeline: returns immediately with the
+                # initial status, and the page polls until it finishes.
                 self.json_response(self.store.avvia_pipeline(), HTTPStatus.ACCEPTED)
             elif route == "/api/schemas/validate":
                 self.json_response(self.store.valida_schemi(payload))
@@ -6416,11 +6283,11 @@ class AppHandler(BaseHTTPRequestHandler):
             elif route == "/api/compile":
                 self.json_response(self.store.compile(payload))
             elif route == "/api/spegni":
-                # Lo chiede il lanciatore quando i sorgenti sono cambiati: e'
-                # lui che riapre subito dopo.  POST e non GET perche' un
-                # `<img src=...>` non deve poter spegnere il programma — ma il
-                # POST da solo non basta e non e' mai bastato: a fermare le
-                # pagine estranee e' la guardia in cima a `do_POST`.
+                # Requested by the launcher when the source has changed; it
+                # reopens the app right after. POST rather than GET so an
+                # `<img src=...>` can't trigger a shutdown — but POST alone isn't
+                # the defense: the origin/host guard at the top of `do_POST` is
+                # what actually stops requests from other pages.
                 self.json_response(self._spegni())
             else:
                 self.error_response(HTTPStatus.NOT_FOUND, "Percorso non trovato")
@@ -6433,9 +6300,9 @@ class AppHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             self.error_response(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
         finally:
-            # Una connessione tenuta aperta serve piu' richieste con la stessa
-            # istanza: la chiave della richiesta precedente non deve restare a
-            # disposizione della successiva.
+            # A kept-alive connection serves multiple requests through the same
+            # instance: the previous request's key must not stay available to
+            # the next one.
             self._chiave_in_volo = ""
 
 
@@ -6460,7 +6327,7 @@ def main() -> int:
     store = ReviewStore(args.review, args.state, args.uploads, args.output_dir, args.writer_config, args.history, args.orders_dir)
     server = ThreadingHTTPServer((args.host, args.port), AppHandler)
     server.store = store  # type: ignore[attr-defined]
-    # La configurazione AI non passa dallo store: vedi ServizioImpostazioni.
+    # AI configuration doesn't go through the store; see ServizioImpostazioni.
     server.impostazioni = ServizioImpostazioni()  # type: ignore[attr-defined]
     print(f"Comparatore locale: http://{args.host}:{args.port}")
     print("Premere Ctrl+C per fermare il server. Gli originali non vengono modificati.")

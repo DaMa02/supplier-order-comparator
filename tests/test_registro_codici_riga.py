@@ -1,13 +1,10 @@
-"""I codici di riga dei fornitori stanno nel registro, non nel codice.
+"""Supplier row codes live in the adapter registry, not in the code.
 
-Larice marca con `SM` la riga premio di una soglia con omaggio: ha codice, EAN
-e descrizione veri, ma non è merce acquistabile. Fino a questa correzione
-restava fuori dall'ordine solo perché la cella del prezzo era vuota — una
-protezione per caso, che sarebbe caduta il giorno in cui il fornitore ci avesse
-scritto il valore dell'omaggio.
-
-Il programma finito gira da solo: la regola deve poter cambiare aggiornando
-`references/adapters.json`, senza toccare il codice.
+Larice marks a threshold's reward row with `SM`: it has a real code, EAN and
+description, but it isn't merchandise the store can order. A price-only check
+would flag it by accident and stop working the day the supplier fills in a
+price for the free item. The rule must change by editing
+`references/adapters.json`, without touching the code.
 """
 
 from __future__ import annotations
@@ -36,13 +33,13 @@ from prepare_manifest_sources import read_mapped_csv_supplier, read_mapped_xlsx_
 from promotion_bridge import PromotionService  # noqa: E402
 
 
-# Le colonne del listino Larice, dalla A alla R, come le dichiara l'adattatore.
+# Larice price-list columns (A to R), as declared by the adapter.
 COLONNA = {"supplier_code": 3, "pieces_per_carton": 5, "pallet": 6, "description": 7,
            "unit_price_pre_discount": 15, "discount": 16, "vat": 17, "ean": 18}
 
 
 def scrivi_listino_larice(percorso: Path, righe: list[dict[str, object]]) -> Path:
-    """Un foglio con la forma del listino Larice: intestazione e poi le righe."""
+    """Build a sheet shaped like the Larice price list: header then data rows."""
 
     workbook = Workbook()
     sheet = workbook.active
@@ -73,7 +70,7 @@ class CodiciDiRigaTests(unittest.TestCase):
         self.radice = Path(tempfile.mkdtemp(prefix="collaudo_codici_"))
         self.addCleanup(shutil.rmtree, self.radice, True)
 
-    # -- la regola vive nel registro ---------------------------------------
+    # -- the rule lives in the registry --------------------------------
 
     def test_il_registro_dichiara_che_cosa_significa_ogni_codice(self) -> None:
         codici = registro.codici_di_riga(registro.adattatore("larice_v1"))
@@ -86,8 +83,8 @@ class CodiciDiRigaTests(unittest.TestCase):
         self.assertIn("omaggio", codici["codes"]["SM"]["means"].casefold())
 
     def test_i_codici_ammessi_li_dice_il_registro_e_non_il_codice(self) -> None:
-        """Il giorno in cui Larice spiega che cosa vuol dire «**», si aggiorna il
-        registro e basta: nessuno deve rimettere le mani in una funzione."""
+        """When Larice defines what "**" means, only the registry needs updating,
+        not a function."""
         _sconto, _tipo, avviso = larice_discount("**", {"TP", "SM"})
         self.assertEqual(avviso, "Codice sconto testuale inatteso: **")
 
@@ -113,12 +110,11 @@ class CodiciDiRigaTests(unittest.TestCase):
         self.assertIn("non è merce acquistabile", premio["not_orderable_reason"])
 
     def test_una_riga_premio_con_un_prezzo_resta_non_ordinabile(self) -> None:
-        """La prova che conta.
+        """A reward row must stay non-orderable even once it carries a price.
 
-        Prima di questa regola la riga restava fuori solo perché il prezzo
-        mancava: bastava che il fornitore ci scrivesse il valore dell'omaggio —
-        come fa QUERCIA nella sua sezione promozionale — perché il comparatore
-        proponesse di comprare merce che non è in vendita.
+        Some suppliers, like Quercia in its promotional section, do fill in a
+        price for the free item; a price-only check would then treat it as a
+        purchasable offer.
         """
         premio_con_prezzo = {**PREMIO, "unit_price_pre_discount": 4.90}
         listino = scrivi_listino_larice(self.radice / "larice.xlsx", [PRODOTTO, premio_con_prezzo])
@@ -126,14 +122,14 @@ class CodiciDiRigaTests(unittest.TestCase):
         records, _avvisi = read_larice(listino)
 
         premio = records[1]
-        # Il prezzo viene letto: non si nasconde un dato che il listino porta.
+        # The price is still read: no data from the file is hidden.
         self.assertEqual(premio["unit_price_net"], "4.9000")
-        # Ma la riga non diventa acquistabile.
+        # But the row never becomes orderable.
         self.assertFalse(premio["usable"])
         self.assertEqual(premio["row_type"], "OMAGGIO")
 
     def test_senza_la_regola_nel_registro_la_riga_tornerebbe_acquistabile(self) -> None:
-        """Controprova: è il registro a decidere, non il codice."""
+        """Counter-check: the registry decides, not the code."""
         premio_con_prezzo = {**PREMIO, "unit_price_pre_discount": 4.90}
         listino = scrivi_listino_larice(self.radice / "larice.xlsx", [PRODOTTO, premio_con_prezzo])
         registro_senza = self.radice / "adapters_senza_regola.json"
@@ -152,11 +148,11 @@ class CodiciDiRigaTests(unittest.TestCase):
         self.assertTrue(records[1]["usable"])
         self.assertIsNone(records[1].get("row_type"))
 
-    # -- la stessa regola per un fornitore qualunque ------------------------
+    # -- the same rule for an arbitrary mapped supplier ------------------
 
     def test_la_stessa_regola_vale_per_un_fornitore_mappato(self) -> None:
-        """La regola non è di Larice: è del motore. Un fornitore nuovo la
-        dichiara nella propria mappatura e funziona allo stesso modo."""
+        """The rule belongs to the engine, not to Larice: any supplier can
+        declare it in its own mapping and get the same behavior."""
         percorso = self.radice / "nuovo_fornitore.csv"
         percorso.write_text(
             "ean;descrizione;pezzi;prezzo;codice\n"
@@ -172,9 +168,9 @@ class CodiciDiRigaTests(unittest.TestCase):
                 "ean": "ean", "description": "descrizione",
                 "pieces_per_carton": "pezzi", "unit_price_net": "prezzo", "discount": "codice",
             },
-            # `field` è il campo del record normalizzato — `discount_raw` —, non
-            # il nome della colonna nel file: così la regola non dipende da come
-            # il fornitore ha intitolato la colonna.
+            # `field` names the normalized record field (`discount_raw`), not the
+            # column header in the file, so the rule doesn't depend on how the
+            # supplier named its column.
             "row_markers": {
                 "field": "discount_raw",
                 "codes": {"OM": {"means": "Riga regalo, non acquistabile.", "orderable": False, "row_type": "OMAGGIO"}},
@@ -191,7 +187,7 @@ class CodiciDiRigaTests(unittest.TestCase):
         self.assertEqual(lettura["rows_not_orderable"], {"OMAGGIO": 1})
 
     def test_la_stessa_regola_vale_anche_su_un_foglio_di_calcolo(self) -> None:
-        """Il formato non c'entra: la regola è del motore, non del lettore."""
+        """The format doesn't matter: the rule belongs to the engine, not the reader."""
         percorso = self.radice / "nuovo_fornitore.xlsx"
         workbook = Workbook()
         sheet = workbook.active
@@ -222,12 +218,12 @@ class CodiciDiRigaTests(unittest.TestCase):
         self.assertEqual(records[1]["row_type"], "OMAGGIO")
         self.assertEqual(lettura["rows_not_orderable"], {"OMAGGIO": 1})
 
-    # -- il fornitore che la riga premio non la marca affatto ---------------
+    # -- a supplier that doesn't mark the reward row at all --------------
 
     def test_una_riga_premio_senza_codice_si_riconosce_dal_testo(self) -> None:
-        """Il canvass nuovo di LARICE non marca la riga premio: dice PROMO su
-        tutta la merce in promozione, premio compreso. L'unico segnale è il
-        testo, e a leggerlo è già il motore delle offerte."""
+        """Larice's newer canvass marks all promoted rows as PROMO, reward rows
+        included; the only signal left is the description text, which the
+        promotion engine already parses."""
         percorso = self.radice / "canvass.xlsx"
         workbook = Workbook()
         sheet = workbook.active
@@ -263,9 +259,9 @@ class CodiciDiRigaTests(unittest.TestCase):
         self.assertEqual(lettura["rows_not_orderable"], {"OMAGGIO": 1})
 
     def test_senza_reward_rows_il_premio_col_prezzo_batte_la_merce(self) -> None:
-        """La controprova, che è il danno vero: le due righe portano lo stesso
-        EAN e il premio costa meno. Senza la dichiarazione il confronto ha due
-        offerte per lo stesso prodotto, e la più bassa è quella del regalo."""
+        """Counter-check: both rows share an EAN and the reward row is cheaper.
+        Without `reward_rows`, the comparison sees two offers for the same
+        product and picks the free one as the best price."""
         percorso = self.radice / "canvass_senza_regola.xlsx"
         workbook = Workbook()
         sheet = workbook.active
@@ -291,11 +287,11 @@ class CodiciDiRigaTests(unittest.TestCase):
         self.assertEqual(min(record["unit_price_net"] for record in ordinabili), "0.6500")
 
     def test_una_riga_premio_marcata_ordinabile_resta_fuori_lo_stesso(self) -> None:
-        """Fra le due risposte vince «non ordinabile».
+        """When a code and `reward_rows` disagree, "not orderable" wins.
 
-        Scambiare un prodotto per un premio si vede subito — manca dal
-        confronto —; scambiare un premio per un prodotto mette a listino un
-        prezzo che non esiste, e si scopre dal fornitore.
+        Mistaking a product for a reward is visible immediately (it's missing
+        from the comparison); mistaking a reward for a product puts a price
+        that doesn't exist into the order, and only the supplier catches it.
         """
         percorso = self.radice / "canvass_marcato.xlsx"
         workbook = Workbook()
@@ -328,17 +324,17 @@ class CodiciDiRigaTests(unittest.TestCase):
         self.assertFalse(records[0]["usable"])
         self.assertEqual(records[0]["row_type"], "OMAGGIO")
 
-    # -- il premio non fa raggiungere la soglia a se stesso -----------------
+    # -- the reward row doesn't count toward its own threshold -----------
 
     def test_il_premio_non_conta_fra_i_prodotti_che_fanno_soglia(self) -> None:
-        """Una riga premio il cui testo non dice «in omaggio» è riconoscibile
-        solo dal codice: senza la regola verrebbe contata fra i prodotti
-        acquistati che portano alla soglia."""
+        """A reward row whose description doesn't say "in omaggio" is only
+        recognizable by its code; without the rule it would be counted among
+        the purchased items that reach the threshold."""
         listino = scrivi_listino_larice(self.radice / "larice.xlsx", [
             {"description": "ACQUISTANDO 3 CT TRA"},
             {**PRODOTTO, "ean": "8000000000011"},
             {**PRODOTTO, "ean": "8000000000012", "description": "BAGNO VIDOR 500 ML VITAMINA C"},
-            # Il premio, marcato SM ma con il nome del prodotto regalato.
+            # The reward row: marked SM but described with the gifted product's name.
             {**PREMIO, "description": "RESALINA SALE LAVASTOVIGLIE KG1"},
             {**PREMIO, "description": "IN OMAGGIO 1 CT DI"},
         ])
@@ -355,13 +351,12 @@ class CodiciDiRigaTests(unittest.TestCase):
 
 
 class IlCanvassNuovoDiLariceLettoDavvero(unittest.TestCase):
-    """Il listino vero, con l'adattatore che il negozio riceve.
+    """Runs against the real Larice price list and its shipped adapter.
 
-    Le prove qui sopra girano su fogli costruiti apposta. Questa gira sul
-    documento che LARICE ha mandato il 4 settembre 2026, perché il difetto che
-    la regola chiude si vede solo lì: le sei righe «IN OMAGGIO ...» hanno un
-    prezzo vero e nessun codice, e cinque delle sei ripetono l'EAN di un
-    articolo già a listino a prezzo pieno.
+    The tests above use fixtures built for the purpose; this one needs the
+    real file because the defect the rule closes only shows up there: the six
+    "IN OMAGGIO ..." rows carry a real price and no code, and five of the six
+    repeat the EAN of an item already listed at full price.
     """
 
     LISTINO = SKILL_ROOT / "listini-storici" / "New Larice N°37(v.0).xls"
@@ -385,7 +380,7 @@ class IlCanvassNuovoDiLariceLettoDavvero(unittest.TestCase):
         self.assertEqual(lettura["rows_not_orderable"]["OMAGGIO"], 6)
 
     def test_il_prezzo_del_regalo_non_diventa_un_offerta(self) -> None:
-        """L'EAN 8019580330416 sta a 0,68 come merce e a 0,65 come regalo."""
+        """EAN 8019580330416 is 0.68 as merchandise and 0.65 as the reward."""
 
         records, _avvisi = read_mapped_xlsx_supplier(
             self.LISTINO, "larice", self.adattatore["field_mapping"]
@@ -399,10 +394,10 @@ class IlCanvassNuovoDiLariceLettoDavvero(unittest.TestCase):
         self.assertEqual(offerte[0]["unit_price_net"], "0.6800")
 
     def test_le_sei_soglie_con_omaggio_si_ricompongono_tutte(self) -> None:
-        """Sei intestazioni di soglia, sei righe premio, sei condizioni.
+        """Six threshold headers, six reward rows, six resulting conditions.
 
-        Il nome del premio esce pulito: testo e premio stanno nella stessa
-        colonna E, e leggerla due volte lo farebbe uscire scritto due volte.
+        The reward name comes out clean: the promo text and the reward
+        description share column E, and reading it twice would duplicate it.
         """
 
         promozioni, errore = PromotionService().condizioni_di(

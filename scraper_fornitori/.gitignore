@@ -1,6 +1,6 @@
 __pycache__/
 *.py[cod]
-# I cataloghi scaricati non entrano nel repository: sono dati di un fornitore,
-# pesano, e invecchiano in una settimana.
+# Downloaded catalogs stay out of the repository: supplier data, heavy, and
+# stale within a week.
 output/
 output-*/

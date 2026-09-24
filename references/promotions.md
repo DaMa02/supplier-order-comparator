@@ -1,19 +1,17 @@
-# Promozioni: contratto di integrazione
+# Promotions: integration contract
 
-## Scopo
+## Purpose
 
-Il motore in `scripts/promotions.py` trasforma le annotazioni dei listini in
-regole strutturate. Non modifica i file originali, non cambia il fornitore
-scelto e non sottrae il valore degli omaggi dal totale.
+The engine in `scripts/promotions.py` turns price-list annotations into structured rules. It never modifies the original files, never changes which supplier is chosen, and never subtracts a reward's value from the total.
 
-Gestisce quattro casi:
+It handles four cases:
 
-1. `sconto_numerico`: percentuale esplicita e calcolabile;
-2. `soglia_omaggio`: acquisto di una quantità minima con premio;
-3. `confezione_promozionale`: contenuto aggiuntivo già dentro la confezione;
-4. `offerta_ambigua`: testo promozionale che richiede conferma.
+1. `sconto_numerico`: an explicit, computable percentage;
+2. `soglia_omaggio`: buying a minimum quantity earns a reward;
+3. `confezione_promozionale`: extra content already included in the pack;
+4. `offerta_ambigua`: promotional text that needs confirmation.
 
-## Contratto di una promozione
+## A promotion's contract
 
 ```json
 {
@@ -55,24 +53,17 @@ Gestisce quattro casi:
 }
 ```
 
-`eligible` deve avere almeno un riferimento concreto: identificativi prodotto,
-EAN, righe del listino oppure un gruppo presente nei prodotti o nelle offerte.
-Senza questo collegamento la regola resta `da_verificare` e non viene calcolata.
+`eligible` must carry at least one concrete reference: product ids, EANs, price-list rows, or a group that exists among the products or offers. Without that link the rule stays `da_verificare` and is never applied.
 
-## Dove un fornitore scrive le sue condizioni: lo dice il registro
+## Where a supplier writes its conditions: the adapter registry says
 
-⚠ **Fino al 15 agosto 2026 il lettore conosceva un fornitore solo.** Andava a
-prendere `larice_v1` per nome, apriva il documento di `paths["larice"]` e
-scriveva «LARICE» nei messaggi: le condizioni degli altri non le guardava
-nessuno, e non c'era modo di dichiararle senza rimettere mano al codice. Adesso
-la domanda che il ponte fa al registro è «quali fornitori dichiarano dove
-tengono le loro condizioni?», e la risposta sta in `references/adapters.json`.
+The bridge asks the adapter registry "which suppliers declare where they keep their commercial conditions?", and the answer is in `references/adapters.json`.
 
-Un adattatore che vuole essere letto aggiunge una voce `commercial_conditions`:
+An adapter that wants to be read adds a `commercial_conditions` entry:
 
 ```json
 "commercial_conditions": {
-  "note": "perché sta qui e su quale listino è stato misurato",
+  "note": "why this is here, and which price list it was measured on",
   "layout": "blocchi",
   "sheet": "FIRST",
   "data_start_row": 1,
@@ -86,109 +77,48 @@ Un adattatore che vuole essere letto aggiunge una voce `commercial_conditions`:
 }
 ```
 
-- **`layout`** — la forma in cui il fornitore scrive. Due valori:
-  - `blocchi`: una condizione occupa più righe — l'intestazione con la
-    quantità da acquistare, poi la merce ammessa, poi la riga con l'omaggio.
-    È come scrive LARICE, ed è l'unica forma misurata su un listino vero.
-    Pretende tutte e quattro le colonne: senza il nome del premio la soglia si
-    ricompone lo stesso ma esce `da_verificare`, e l'utente perde l'omaggio in
-    un altro modo. ⚠ `reward` **può nominare la stessa colonna di `text`**,
-    quando il fornitore scrive il nome del premio dentro la riga stessa: è come
-    scrive il canvass nuovo di LARICE («IN OMAGGIO 1CT SH. A/ERBAR. 250ML
-    LAVANDA», tutto in colonna E). In quel caso la colonna si legge una volta
-    sola — leggerla due volte faceva uscire il premio scritto due volte nella
-    frase che l'utente legge.
-  - `riga`: una riga porta per intero la sua condizione, in una colonna sola.
-    Pretende la sola colonna `text`. È la forma che avrebbero BETULLA
-    («LINDA SETA … 11+1 Gratis Pz», dentro la descrizione) e NOCE (la
-    colonna `descrizione_offerta`, oggi vuota).
-  Una parola che il motore non conosce **ferma la lettura e lo dice**: un
-  adattatore imparato male non deve leggere «qualcosa comunque».
-- **`fields`** — quale colonna dell'adattatore fa da `text`, `reward`, `ean`,
-  `row_code`. Sono **nomi di colonna, non lettere**: la posizione si cerca in
-  `column_map` (chi le indica per lettera, come LARICE) e poi in
-  `header_signature.columns` (chi le indica per nome di intestazione, come
-  BETULLA e NOCE). Sta scritta in un posto solo apposta: quando l'utente
-  conferma una variazione di schema il registro riscrive quelle, e le
-  condizioni seguono i prezzi invece di restare indietro di una settimana.
-  Una colonna che il registro non dichiara **non si indovina**: il lettore si
-  ferma e nomina in italiano quella che manca.
-- **`sheet`** — il nome del foglio, oppure `FIRST` per il primo. Il confronto
-  è quello del registro: punti, spazi e maiuscole non contano.
-- **`data_start_row`** — da quale riga cominciano i dati (predefinito 1).
-- **`max_block_rows`** — solo per `blocchi`: oltre questa distanza
-  dall'intestazione il blocco si abbandona, lasciando una condizione
-  `da_verificare`. È una difesa contro un listino malformato, non una regola
-  commerciale (predefinito 500).
-- **`row_markers`** dell'adattatore vale in tutte e due le forme: una riga il
-  cui codice è dichiarato `orderable: false` non fa raggiungere la soglia e non
-  porta una condizione tutta sua. ⚠ Il fornitore che la riga premio **non la
-  marca affatto** la dichiara con `row_markers.reward_rows`: a riconoscerla è
-  il testo, con lo stesso giudizio che chiude un blocco
-  (`promotions.looks_like_reward`). Serve dal canvass nuovo di LARICE, dove la
-  colonna dei marcatori dice `PROMO` su tutta la merce in promozione, premio
-  compreso — e il premio, che lì un prezzo ce l'ha, sarebbe diventato l'offerta
-  più conveniente di quel prodotto.
+- `layout` — the shape the supplier writes in. Two values:
+  - `blocchi`: a condition spans several rows — the heading with the quantity to buy, then the eligible merchandise, then the reward row. This is how LARICE writes, and the only shape measured on a real price list so far. It requires all four columns: without the reward's name the threshold is still reconstructed, but comes out `da_verificare`, and the user loses the reward in a different way. `reward` can name the same column as `text`, when the supplier writes the reward's name inside the row itself — as the new LARICE canvass does ("IN OMAGGIO 1CT SH. A/ERBAR. 250ML LAVANDA", all in column E). In that case the column is read once, not twice — reading it twice made the reward's name appear twice in the sentence the user reads.
+  - `riga`: a single row carries its whole condition, in one column. It requires only the `text` column. This would be the shape used by BETULLA ("LINDA SETA … 11+1 Gratis Pz", inside the description) and by NOCE (the `descrizione_offerta` column, currently empty for every row).
+  A word the engine doesn't recognize stops the read and says so: a badly learned adapter must not read "something anyway".
+- `fields` — which adapter column plays `text`, `reward`, `ean`, `row_code`. These are column names, not letters: the position is looked up in `column_map` (which declares columns by letter, as LARICE does) and then in `header_signature.columns` (which declares them by header name, as BETULLA and NOCE do). It is written in one place on purpose: when the user confirms a schema change, the registry rewrites those, and the commercial conditions follow the prices instead of lagging a week behind. A column the registry doesn't declare is never guessed: the reader stops and names the missing one.
+- `sheet` — the sheet name, or `FIRST` for the first one. The comparison is the registry's own: punctuation, spaces and case don't matter.
+- `data_start_row` — the row data starts on (default 1).
+- `max_block_rows` — only for `blocchi`: past this distance from the heading, the block is abandoned and the condition is left `da_verificare`. It's a defense against a malformed price list, not a commercial rule (default 500).
+- `row_markers` on the adapter applies in both shapes: a row whose code is declared `orderable: false` never reaches the threshold and never carries a condition of its own. A supplier whose reward row carries no marker of its own declares it through `row_markers.reward_rows`: it is then recognized from its text, with the same judgment applied when closing a block (`promotions.looks_like_reward`). The new LARICE canvass needs this: its marker column reads `PROMO` on every promoted item, reward rows included, and without `reward_rows` the reward — which does carry a price there — would become that product's cheapest offer.
 
-Il formato del documento lo decidono i primi byte, non l'estensione: `.xlsx` e
-Excel 97-2003 (`.xls`, quello di NOCE) si leggono tutti e due.
+The document's format is decided by its first bytes, not its extension: both `.xlsx` and Excel 97-2003 (`.xls`, NOCE's format) are read.
 
-**Un fornitore che non dichiara `commercial_conditions` non viene letto e non
-produce nessun avviso.** È la differenza fra «non ha condizioni commerciali» e
-«non so leggerle»: un avviso che compare a ogni ricalcolo e non chiede di fare
-niente non lo legge più nessuno.
+A supplier that doesn't declare `commercial_conditions` is never read, and produces no warning. That's the difference between "has no commercial conditions" and "I can't read them": a warning that fires on every recompute and asks for nothing gets ignored.
 
-### Chi lo dichiara oggi, e perché solo lui
+### Who declares it today, and why only them
 
-Misurato il **15 agosto 2026** sui quattro listini veri della settimana, cella
-per cella:
+Measured cell by cell on the week's four real price lists:
 
-| Fornitore | Documento | Testi con una parola promozionale | Condizioni vere |
+| Supplier | Document | Texts with a promotional word | Real conditions |
 |---|---|---|---|
-| LARICE | `33-34.1 07-21 ago.xlsx` | 28 in colonna G | **13 intestazioni di soglia + 13 righe premio** |
-| BETULLA | `LISTINO BETULLA … 01-09-26 (1).xlsx` | 12 nella descrizione (D) | 3 confezioni `N+M` già nel prezzo; **7 dei 12 sono la parola «Ogni» di «Ogni Superficie»** |
-| CIPRESSO | `Listino3_34.xlsx` | 1 nella descrizione (B) | **nessuna**: è un nome di prodotto che contiene «offerta» |
-| NOCE | `formattato_104233.xls` | 5 `N+M GRATIS` nella descrizione (D), 1 dei quali FOOD | **nessuna**: `descrizione_offerta` (P) è vuota su tutte e 18.074 le righe e `offerta` (J) dice `NO` su tutte e 17.148 quelle compilate |
+| LARICE | `33-34.1 07-21 ago.xlsx` | 28 in column G | 13 threshold headings + 13 reward rows |
+| BETULLA | `LISTINO BETULLA … 01-09-26 (1).xlsx` | 12 in the description (D) | 3 `N+M` packs already in the price; 7 of the 12 are the word "Ogni" in "Ogni Superficie" |
+| CIPRESSO | `Listino3_34.xlsx` | 1 in the description (B) | none — it's a product name that happens to contain "offerta" |
+| NOCE | `formattato_104233.xls` | 5 `N+M GRATIS` in the description (D), 1 of them FOOD | none — `descrizione_offerta` (P) is empty on all 18,074 rows, and `offerta` (J) reads `NO` on all 17,148 filled ones |
 
-⚠ Dal **4 settembre 2026** i documenti di LARICE sono due, e `commercial_conditions`
-la dichiarano tutti e due: `larice_v1` per il canvass senza intestazioni (testo
-in G, premio in J) e `larice_canvass_v1` per quello nuovo (testo e premio
-tutt'e due in E). Sul nuovo la misura è **6 soglie su 6**. Quale dichiarazione
-valga per il documento in mano lo decide l'identificativo che l'ha
-riconosciuto, non l'estensione: due schemi dello stesso fornitore possono avere
-lo stesso formato.
+LARICE's documents now come in two shapes, and `commercial_conditions` is declared on both: `larice_v1` for the header-less canvass (text in G, reward in J) and `larice_canvass_v1` for the new one (text and reward both in E). On the new one the measurement is 6 thresholds out of 6. Which declaration applies to the document at hand is decided by the identifier that recognized it, not by the file extension: two schemas from the same supplier can share the same format.
 
-Per questo `commercial_conditions` la dichiara **solo LARICE**. Accendere la
-colonna della descrizione di BETULLA farebbe comparire dodici condizioni di cui
-nove non sono condizioni: inventare offerte a chi non ne ha è peggio del
-difetto che si stava correggendo. Il giorno che BETULLA ne scrive una davvero, o
-che NOCE comincia a compilare `descrizione_offerta`, si aggiunge la voce al
-registro — il codice non si tocca.
+For this reason `commercial_conditions` is declared only for LARICE. Turning on BETULLA's description column would surface twelve conditions, nine of which aren't conditions at all — inventing offers for a supplier that has none is worse than the gap it would fix. The day BETULLA writes a real one, or NOCE starts filling in `descrizione_offerta`, an entry is added to the registry — the code itself doesn't change.
 
-## Rilevazione dalle fonti
+## Detection per source
 
 ### BETULLA
 
-Passare la descrizione con `included_in_product=True`. Per esempio
-`Sheet1!D3230`, “11+1 Gratis”, produce una confezione promozionale. Il prezzo
-resta quello del listino: l'unità aggiuntiva è soltanto informativa.
+Call `detect_promotions(..., included_in_product=True)` on the description. For example `Sheet1!D3230`, "11+1 Gratis", produces a promotional pack. The price stays the price-list price: the extra unit is informational only.
 
-Una coppia `N+M` diventa una confezione promozionale **solo** se nessuna unità
-di misura la governa. “ELIDERMA Bagnodoccia 500+100 Omaggio=600 Ml” sono
-millilitri e “CUKO ALLUMINIO MT.16+4 GRATIS” sono metri: testi così ricadono
-su `detect_ambiguous_offer` e restano `da_verificare`. La grandezza dei numeri
-non distingue i due casi — “8+2” è un conteggio giusto sui rasoi e una misura
-sbagliata sull'alluminio — quindi il discriminante è l'unità attaccata alla
-coppia, prima (`MT.16+4`) o dopo (`500+100 Omaggio=600 Ml`).
+An `N+M` pair becomes a promotional pack only if no unit of measure governs it. "ELIDERMA Bagnodoccia 500+100 Omaggio=600 Ml" is milliliters and "CUKO ALLUMINIO MT.16+4 GRATIS" is meters: text like this falls through to `detect_ambiguous_offer` and stays `da_verificare`. The size of the numbers doesn't tell the two cases apart — "8+2" is a correct count on razors and a wrong measurement on aluminum foil — so the discriminant is the unit attached to the pair, before it (`MT.16+4`) or after it (`500+100 Omaggio=600 Ml`).
 
 ### Larice
 
-Le condizioni le legge il ponte da solo, seguendo la `commercial_conditions`
-dichiarata dal registro (vedi sopra): niente è cablato nel codice, e chi
-chiama direttamente il rilevatore lo fa per costruire una regola a mano.
+The bridge reads the conditions on its own, following the `commercial_conditions` the registry declares (see above): nothing is hard-coded, and calling the detector directly is only for building a rule by hand.
 
-Per una promozione a blocchi, unire il testo dell'intestazione e quello della
-riga omaggio e fornire le righe prodotto ammesse. Per esempio:
+For a block promotion, join the heading text and the reward-row text, and supply the eligible product rows. For example:
 
 ```python
 detect_threshold_gift(
@@ -199,44 +129,33 @@ detect_threshold_gift(
 )
 ```
 
-Gli sconti numerici della colonna `P` sono deterministici. Se il prezzo netto
-è già stato calcolato in fase di normalizzazione, impostare
-`already_applied=True` per impedire una seconda applicazione.
+Numeric discounts in column `P` are deterministic. If the net price was already computed during normalization, set `already_applied=True` to prevent it being applied twice.
 
 ### Noce
 
-Raggruppare le righe che hanno lo stesso testo promozionale nel campo
-`availability`; gli EAN o le righe del gruppo diventano `eligible`. Il
-rilevatore riconosce anche grafie reali non corrette come `ACQUSITA`.
+Group the rows that share the same promotional text in the `availability` field; the group's EANs or rows become `eligible`. The detector also recognizes real-world misspellings such as `ACQUSITA`.
 
-`LOVEHOME 1+1 OMAGGIO` resta volutamente `offerta_ambigua`: il testo non dice
-se si può mescolare la merce né quale articolo viene regalato.
+`LOVEHOME 1+1 OMAGGIO` stays deliberately `offerta_ambigua`: the text doesn't say whether merchandise can be mixed, or which item is the reward.
 
-## Calcolo dello stato
+## Computing the state
 
-`calculate_promotion_state(...)` restituisce:
+`calculate_promotion_state(...)` returns:
 
-- `ottenuta`: soglia raggiunta;
-- `vicina`: manca al massimo una unità oppure è stato raggiunto almeno
-  l'80% della soglia;
-- `non_raggiunta`: quantità ancora lontana o nulla;
-- `da_verificare`: regola ambigua, non confermata o non collegabile ai prodotti.
+- `ottenuta`: threshold reached;
+- `vicina`: at most one unit short, or at least 80% of the threshold reached;
+- `non_raggiunta`: quantity still far off, or zero;
+- `da_verificare`: an ambiguous rule, unconfirmed, or not linkable to any product.
 
-`reward_count` indica quante volte è stato ottenuto il premio.
+`reward_count` says how many times the reward has been earned.
 
-`repeatable` non si legge nel listino: è una condizione del rapporto
-commerciale, decisa dall'utente e valida per tutte le soglie. Il rilevatore la
-mette sempre a `true`, quindi `reward_count` vale `floor(progresso / soglia)`
-e il messaggio dice quanto manca al premio successivo, non che l'omaggio è
-stato ottenuto. Dedurla dalla parola “OGNI” significava leggerla in un listino
-solo: nei quattro listini Larice misurati “OGNI” non compare mai.
+`repeatable` isn't read from the price list: it's a property of the business relationship, set by the user, and applies to every threshold. The detector always sets it to `true`, so `reward_count` is `floor(progress / threshold)`, and the message states how much is left before the next reward rather than claiming the reward was already earned. Inferring it from the word "OGNI" ("every") would have meant reading it off a single price list — "OGNI" never appears in any of the measured Larice price lists.
 
-## Decorazione dei dati di confronto
+## Decorating the comparison data
 
 ```python
 from promotions import decorate_review_data
 
-review_decorata = decorate_review_data(
+decorated_review_data = decorate_review_data(
     review_data,
     promotions,
     selections={
@@ -245,20 +164,16 @@ review_decorata = decorate_review_data(
 )
 ```
 
-La funzione restituisce una copia e aggiunge:
+The function returns a copy and adds:
 
-- `promotions` e `promotionSummary` al livello principale;
-- `promotions` a ogni prodotto interessato;
-- `promotions` a ogni offerta del fornitore interessato;
-- `promotionEffectiveUnitPrice` e `promotionEffectiveOrderUnitPrice` soltanto
-  per uno sconto numerico confermato, attivo e non già applicato.
+- `promotions` and `promotionSummary` at the top level;
+- `promotions` on every affected product;
+- `promotions` on every affected supplier offer;
+- `promotionEffectiveUnitPrice` and `promotionEffectiveOrderUnitPrice`, only for a numeric discount that is confirmed, active and not already applied.
 
-I campi originali `selectedSupplierId`, `price`, `unitPriceNet` e
-`orderUnitPriceNet` non vengono mai riscritti. Un eventuale ordinamento che
-voglia considerare il prezzo promozionale deve usare il campo aggiuntivo solo
-quando `economic_effect.affects_supplier_choice` è `true`.
+The original fields `selectedSupplierId`, `price`, `unitPriceNet` and `orderUnitPriceNet` are never rewritten. Any ranking that wants to consider the promotional price must use the extra field only when `economic_effect.affects_supplier_choice` is `true`.
 
-## Uso da riga di comando
+## Command-line use
 
 ```text
 python scripts/promotions.py \
@@ -267,6 +182,4 @@ python scripts/promotions.py \
   --output review_data_decorata.json
 ```
 
-Questo passaggio può essere inserito dopo la costruzione dei dati di confronto
-oppure eseguito al momento della lettura dello stato utente. Non richiede
-modifiche ai listini sorgente.
+This step can run either right after the comparison data is built, or when the user's saved state is read. It requires no changes to the source price lists.

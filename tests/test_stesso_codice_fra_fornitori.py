@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
-"""La regola 7 del merge vista dalla pagina: dal listino fino al «si'» e al «no».
+"""The merge's same-barcode rule (rule 7 in `scripts/merge_match_decisions.py`),
+seen from the page: from the price list to the "yes" and the "no".
 
-Il 18 settembre 2026 le Linda Seta x18 sono andate a NOCE a 2,31 mentre
-LARICE le aveva a 2,25 con lo stesso codice a barre: il gestionale le chiama
-8009405394204, tutti e due i listini 8009496220932. L'AI aveva accettato
-NOCE e rifiutato LARICE. `test_merge_match_decisions` prova la regola da
-sola; qui si prova quello che vede chi ordina, passando per i due script veri e per
-il servizio vero, con il suo magazzino delle conferme:
+Two suppliers can list the same product under the same barcode at different
+prices, while the AI accepts the match with one and rejects it with the
+other. `test_merge_match_decisions` tests the rule in isolation; this module
+tests what the ordering user sees, going through the real scripts and the
+real service, with its confirmation store:
 
-1. la riga LARICE costa meno, quindi viene scelta, e chiede conferma dicendo
-   perche';
-2. un «no» la spegne e resta spento al confronto dopo; il prodotto torna a
-   NOCE e chiede conferma anche li', perche' ha lo stesso codice della
-   riga appena rifiutata;
-3. un «si'» si ricorda, e al confronto dopo il prodotto nasce confermato.
+1. the cheaper row wins and asks for confirmation, stating why;
+2. a "no" turns it off, and it stays off on the next comparison; the product
+   falls back to the other supplier and asks for confirmation there too,
+   because that row shares the same barcode as the one just rejected;
+3. a "yes" is remembered, and the product starts the next comparison already confirmed.
 """
 
 from __future__ import annotations
@@ -56,7 +55,7 @@ def scrivi(cartella: Path, nome: str, documento: Any) -> Path:
 
 
 def confronto(cartella: Path, run_id: str) -> dict[str, Any]:
-    """Merge e `build_review_data` veri, lanciati come li lancia la catena."""
+    """The real merge and `build_review_data` scripts, run the way the pipeline runs them."""
 
     cartella.mkdir(parents=True, exist_ok=True)
     matching = [{"gestionale": GESTIONALE, "suppliers": {
@@ -146,11 +145,12 @@ class LaStessaRigaVistaDaPapaTests(unittest.TestCase):
         self.assertTrue(self.offerta(prodotto, "noce")["available"])
 
     def test_dopo_il_no_anche_noce_chiede_conferma(self) -> None:
-        """La riga rifiutata e quella NOCE hanno lo stesso codice: se la
-        prima non e' le Lines, la seconda e' sospetta. NOCE era un `ALTA`,
-        che da solo non chiederebbe niente: la domanda la mette il servizio
-        sull'**offerta** (`_riscegli_dopo_il_no`), cosi' vale per qualunque
-        strada la faccia scegliere."""
+        """The rejected row and the other supplier's row share the same
+        barcode: if the first one wasn't the right product, the second one is
+        suspect too. The second offer alone was `ALTA` confidence, which would
+        not ask for confirmation by itself: the service adds the question at
+        the offer level (`_riscegli_dopo_il_no`), so it holds no matter which
+        path selects that offer."""
 
         store = self.negozio("r1")
         store.rifiuta_l_abbinamento({"runId": "r1", "productId": "product:273",
@@ -177,14 +177,15 @@ class LaStessaRigaVistaDaPapaTests(unittest.TestCase):
         prodotto = self.prodotto(store)
 
         self.assertEqual(prodotto["selectedSupplierId"], "noce")
-        # La domanda di prodotto era della riga spenta: adesso la fa l'offerta.
+        # The product-level question belonged to the row that's now off; the offer asks it now.
         self.assertFalse(prodotto["requiresConfirmation"])
 
     def test_il_si_su_noce_dopo_il_no_vale_anche_la_settimana_dopo(self) -> None:
-        """Trovato dalla revisione del 21 settembre 2026: la settimana dopo il
-        confronto nasceva ancora su LARICE (la catena i no non li conosce), il
-        si' si cercava su LARICE e quello dato su NOCE non si riapplicava
-        mai. Una domanda bloccante ogni settimana."""
+        """Guards a defect where the next comparison still started on the
+        rejected supplier (the pipeline has no memory of "no" answers), the
+        stored "yes" was looked up under the rejected supplier, and the "yes"
+        actually given for the new one never reapplied — a blocking question
+        every single run."""
 
         store = self.negozio("r1")
         store.rifiuta_l_abbinamento({"runId": "r1", "productId": "product:273",
@@ -232,9 +233,9 @@ class LaStessaRigaVistaDaPapaTests(unittest.TestCase):
 
 
 class UnNoSullaRigaSceltaRifaLaSceltaTests(unittest.TestCase):
-    """Il caso generale, senza propagazione: una proposta dell'AI rifiutata,
-    e un altro fornitore che ha il prodotto per codice a barre. La domanda
-    della riga rifiutata non deve restare appesa a quella nuova."""
+    """The general case, without any barcode sharing: an AI proposal gets
+    rejected, and another supplier has the product matched by barcode. The
+    rejected row's question must not carry over to the new one."""
 
     def setUp(self) -> None:
         temporanea = tempfile.TemporaryDirectory()
@@ -268,7 +269,7 @@ class UnNoSullaRigaSceltaRifaLaSceltaTests(unittest.TestCase):
         self.addCleanup(self.store.chiudi)
 
     def test_la_riga_esatta_non_eredita_la_domanda(self) -> None:
-        """E non si prende la frase sullo «stesso codice», che per lei e' falsa."""
+        """And doesn't pick up the "same barcode" message, which would be false for it."""
 
         self.store.rifiuta_l_abbinamento({"runId": "r1", "productId": "product:410",
                                           "supplierId": "larice", "rifiutata": True})
@@ -284,12 +285,13 @@ class UnNoSullaRigaSceltaRifaLaSceltaTests(unittest.TestCase):
 
 
 class LaRigaColCodiceRifiutatoChiedeSempreTests(unittest.TestCase):
-    """Trovato dalla verifica avversariale del 21 settembre 2026. Tre fornitori:
-    LARICE propagato (2,25, codice X), NOCE accettato `ALTA` (2,31, codice
-    X), BETULLA col codice del gestionale (2,28). Dopo il no su LARICE la domanda
-    stava sul prodotto, calcolata sul ripiego senza sconti (BETULLA): con uno
-    sconto su NOCE, o spostandolo a mano, la riga col codice appena
-    rifiutato andava in ordine senza conferma."""
+    """Guards an adversarial case with three suppliers: one matched by shared
+    barcode, one accepted at `ALTA` confidence with the same barcode, one
+    matched by the management software's own code. The confirmation question
+    must stay computed off the product's real selection, not off its
+    no-discount fallback (the third supplier): applying a discount to the
+    second supplier, or picking it by hand, must still ask for confirmation
+    on the row that carries the just-rejected barcode."""
 
     def setUp(self) -> None:
         temporanea = tempfile.TemporaryDirectory()

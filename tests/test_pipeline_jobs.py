@@ -1,25 +1,22 @@
-"""L'orchestratore della catena (Fase 6c).
+"""Tests for the pipeline orchestrator (`pipeline_jobs`).
 
-Quattro cose valgono da sole l'intero file, e sono quelle in cui una
-implementazione plausibile sbaglia **in silenzio**:
+Four properties matter most, because a plausible implementation gets each
+one wrong silently:
 
-1. **Se una fase fallisce, il confronto precedente resta intatto.**  E' la
-   promessa su cui poggia il pulsante: chi lo preme non deve poterci perdere il
-   lavoro della settimana.  Qui si prova su ogni singola fase, una per una.
-2. **Un artefatto che il passo dice di aver scritto e che non c'e' ferma la
-   catena.**  E' il difetto storico numero 1 del piano — «un passo saltato
-   lascia in giro il file di ieri» — e la difesa e' un registro delle impronte,
-   non una promessa.
-3. **L'attivazione ha delle precondizioni, e sono numeri.**  Zero prodotti,
-   zero fornitori, o una contabilita' dei casi che non torna: nessuna delle tre
-   deve poter attivare un confronto.
-4. **Il controllo con la volta prima avvisa e non ferma.**  Un listino che
-   dimezza le righe o raddoppia i prezzi produce un avviso in cima alla pagina e
-   una run che arriva in fondo.
+1. If a step fails, the previous comparison stays untouched. This is the
+   promise the "Ricalcola" button rests on: pressing it must never cost the
+   week's work. Checked here per individual step.
+2. A step that claims to have written an artifact, but didn't, stops the
+   pipeline. The defense is a registry of file hashes, not a promise.
+3. Activation has numeric preconditions: zero products, zero suppliers, or
+   a case count that doesn't add up must never activate a comparison.
+4. The comparison against the previous run warns but never stops. A price
+   list that loses half its rows or doubles its prices produces a warning
+   at the top of the page, and the run still completes.
 
-Niente rete e niente sottoprocessi: l'esecutore e' iniettato e simula i nove
-comandi scrivendo gli artefatti che scriverebbero davvero.  Il collaudo con i
-comandi veri e' la prova di accettazione, e sta nel piano.
+No network calls and no real subprocesses: the executor is injected and
+simulates the nine pipeline commands by writing the artifacts they would
+really write. Testing against the real scripts is a separate acceptance test.
 """
 
 from __future__ import annotations
@@ -50,10 +47,10 @@ from pipeline_jobs import (  # noqa: E402
 )
 
 
-# ⚠ Il codice a barre non e' decorazione: dal 15 agosto 2026 e' lui a dire se
-# la riga 1 del confronto nuovo porta lo stesso articolo della riga 1 di prima.
-# Un fixture che cambia nome allo stesso prodotto senza cambiargli l'EAN
-# descrive un prodotto sostituito, e le decisioni prese su di lui si scollegano.
+# The barcode is not decoration: it decides whether row 1 of the new
+# comparison is the same item as row 1 of the previous one. A fixture that
+# renames a product without changing its EAN would describe a replaced
+# product, and decisions made on the old one would be discarded.
 CONFRONTO_PRECEDENTE = {
     "run": {"id": "vecchia", "status": "ready"},
     "files": [],
@@ -76,12 +73,12 @@ def profilo(nome: str, adattatore: str, *, stato: str = "SCHEMA_NOTO", quando: s
 
 
 class EsecutoreFinto:
-    """Simula i nove comandi scrivendo gli artefatti veri, senza sottoprocessi.
+    """Simulates the nine pipeline commands by writing real artifacts, with no subprocesses.
 
-    Ogni comando puo' essere alterato dal test: `uscite` cambia il codice
-    d'uscita, `salta` gli impedisce di scrivere i propri file, `esplode` lo fa
-    fallire.  E' cosi' che si provano i modi di fallire senza dover rompere gli
-    script veri.
+    Each command's behavior can be overridden per test: `uscite` sets its
+    exit code, `salta` stops it from writing its own output files, `esplode`
+    makes it raise. This is how failure modes get tested without having to
+    break the real scripts.
     """
 
     def __init__(self, **impostazioni) -> None:
@@ -151,13 +148,12 @@ class EsecutoreFinto:
         argomenti = list(comando)
         script = Path(argomenti[1]).name
         self.chiamati.append(script)
-        # Il tetto oltre il quale il passo si considera impiantato: qui non
-        # serve a niente, ma se l'orchestratore smettesse di passarlo nessun
-        # collaudo se ne accorgerebbe — e il tetto non ci sarebbe piu'.
+        # The per-step timeout: unused by this fake executor, but recording
+        # it lets a test catch the orchestrator silently dropping it.
         self.tetti[script] = timeout_secondi
-        # Gli argomenti veri di ogni passo: `chiamati` dice **che** un comando e'
-        # stato lanciato, non **con che cosa**, e un ingresso che l'orchestratore
-        # dimentica di passare non si vedrebbe da nessuna parte.
+        # The real arguments passed to each step: `chiamati` only records
+        # that a command ran, not what it was called with, so an argument
+        # the orchestrator forgets to pass would otherwise go unnoticed.
         self.argomenti[script] = argomenti
         riepilogo: dict = {}
         se_scrive = script not in self.salta
@@ -295,9 +291,9 @@ class RunCompleta(BancoPipeline):
         self.assertTrue(all(fase["stato"] == pipeline_jobs.COMPLETATO for fase in esito["fasi"]))
 
     def test_esegue_gli_otto_comandi_nell_ordine(self) -> None:
-        # Le fasi sono nove: l'attivazione non e' un comando, e' l'unico passo
-        # che l'orchestratore fa da se' perche' e' quello che tocca il
-        # confronto vivo.
+        # There are nine phases: activation isn't a command, it's the one
+        # step the orchestrator does itself, since it's the one that
+        # touches the live comparison.
         esecutore = EsecutoreFinto()
         self.esegui(esecutore)
         self.assertEqual(esecutore.chiamati, [
@@ -317,8 +313,8 @@ class RunCompleta(BancoPipeline):
         self.assertTrue(cartella.is_dir())
         audit = json.loads((cartella / pipeline_jobs.NOME_AUDIT_ESECUZIONE).read_bytes())
         self.assertEqual(audit["stato"], pipeline_jobs.COMPLETATO)
-        # Il registro delle impronte: e' quello che rende «l'ho scritto» una
-        # cosa verificabile invece di una promessa.
+        # The artifact hash registry: it's what makes "I wrote it" a
+        # verifiable fact instead of a claim.
         self.assertIn("dati/audit.json", audit["artefatti"])
         self.assertEqual(len(audit["artefatti"]["dati/audit.json"]["sha256"]), 64)
 
@@ -336,11 +332,11 @@ class RunCompleta(BancoPipeline):
         self.assertTrue(all(v["state"] == "SCHEMA_NOTO" for v in decisioni["decisions"]))
 
     def test_la_mappatura_del_registro_entra_nella_decisione(self) -> None:
-        """Senza, la compilazione di Cipresso direbbe «manca la mappatura».
+        """Without this, order compilation would report a missing column mapping.
 
-        E' il modo con cui la fermata numero uno «si automatizza da se'»: la
-        decisione generata deve contenere tutto quello che conteneva quella
-        scritta a mano, colonna d'ordine compresa.
+        The auto-generated decision for a known adapter must carry
+        everything a hand-written one would, including the order column,
+        for the schema-recognition stop to actually resolve itself.
         """
 
         esecutore = EsecutoreFinto(profili=[
@@ -354,7 +350,7 @@ class RunCompleta(BancoPipeline):
 
 
 class IlConfrontoPrecedenteRestaIntatto(BancoPipeline):
-    """La promessa del pulsante: una run che fallisce non costa il confronto."""
+    """The button's promise: a failed run never costs the live comparison."""
 
     def _prova_fase(self, script: str) -> dict:
         esito = self.esegui(EsecutoreFinto(uscite={script: 9}))
@@ -418,7 +414,7 @@ class LeDueFermate(BancoPipeline):
         self.assertEqual(esito["stato"], pipeline_jobs.COMPLETATO, esito.get("messaggio"))
 
     def _decisione_confermata(self, *, impronta: str | None) -> None:
-        """Una mappatura confermata nella pagina, legata (o no) a un documento."""
+        """A mapping confirmed on the page, optionally tied to a document's hash."""
 
         voce = {
             "file_name": "misterioso.xlsx",
@@ -439,7 +435,7 @@ class LeDueFermate(BancoPipeline):
         ])
 
     def test_la_decisione_vale_finche_il_documento_e_lo_stesso(self) -> None:
-        # `profilo()` costruisce l'impronta "000...0": è quella confermata.
+        # `profilo()` builds the hash "000...0": that's the one confirmed.
         self._decisione_confermata(impronta="0" * 64)
 
         esito = self.esegui(self._con_misterioso())
@@ -448,11 +444,11 @@ class LeDueFermate(BancoPipeline):
         self.assertNotIn("DECISIONE_MANUALE_SCARTATA", {avviso["code"] for avviso in esito["avvisi"]})
 
     def test_un_altro_documento_con_lo_stesso_nome_non_eredita_le_colonne(self) -> None:
-        """Il caso vero: si elimina un listino configurato male e si ricarica.
+        """Real-world case: a misconfigured price list gets deleted and re-uploaded.
 
-        Il file nuovo si chiama come quello di prima. Riapplicargli la mappatura
-        vecchia vuol dire leggere le colonne sbagliate — cioè scrivere le
-        quantità sulle righe sbagliate — senza che niente lo dica.
+        The new file has the same name as the old one. Reapplying the old
+        column mapping to it means reading the wrong columns — writing
+        quantities on the wrong rows — with nothing to say so.
         """
 
         self._decisione_confermata(impronta="a" * 64)
@@ -465,13 +461,13 @@ class LeDueFermate(BancoPipeline):
         )
         self.assertIn("misterioso.xlsx", avviso["title"])
         self.assertIn("un altro documento con lo stesso nome", avviso["message"])
-        # E la decisione non copre più il documento: la catena si ferma a
-        # chiedere le colonne, invece di inventarsele.
+        # The decision stops covering the document: the pipeline halts
+        # to ask for the columns instead of guessing them.
         self.assertEqual(esito["fermata"]["code"], "SCHEMA_SCONOSCIUTO")
         self.assertEqual(esito["fermata"]["documenti"], ["misterioso.xlsx"])
 
     def test_una_decisione_scritta_a_mano_senza_impronta_continua_a_valere(self) -> None:
-        """È la via d'uscita documentata: toglierla toglierebbe il rimedio."""
+        """The documented escape hatch: removing it would remove the remedy."""
 
         self._decisione_confermata(impronta=None)
 
@@ -495,11 +491,11 @@ class LeDueFermate(BancoPipeline):
         self.assertEqual(esito["fermata"]["code"], "NESSUN_DOCUMENTO")
 
     def test_un_manifest_bocciato_ferma_la_catena(self) -> None:
-        """`prepare_manifest_sources` gira anche su un manifest bocciato.
+        """`prepare_manifest_sources` would run even on a rejected manifest.
 
-        Non legge `manifest_validation.json`: se non si ferma qui, due fornitori
-        con lo stesso identificativo o un master mancante diventano un confronto
-        sbagliato invece di un messaggio.
+        It never reads `manifest_validation.json` itself: without an
+        upstream stop, two suppliers with the same id or a missing master
+        turn into a wrong comparison instead of an error message.
         """
 
         esecutore = EsecutoreFinto(validazione={"errors": ["Due master nel manifest"], "warnings": []})
@@ -517,12 +513,11 @@ class LeDueFermate(BancoPipeline):
         self.assertEqual(esito["fermata"]["code"], "FORNITORE_SENZA_RIGHE")
 
     def test_la_fermata_senza_righe_indica_il_rimedio(self) -> None:
-        """E' la terza fermata (13 agosto 2026, su delega): deve dire che fare.
+        """Like the pipeline's other stop conditions, the message must carry the remedy, not just the diagnosis.
 
-        Un fornitore caricato apposta non puo' sparire dal confronto con un
-        semplice avviso — gli ordini si farebbero senza di lui.  E come le
-        altre due fermate, il messaggio deve portare il rimedio, non solo la
-        diagnosi.
+        A supplier the user deliberately uploaded can't silently drop out of
+        the comparison with a mere warning — orders would go out without
+        them.
         """
 
         esecutore = EsecutoreFinto(audit={
@@ -555,11 +550,12 @@ class LePrecondizioniDellAttivazione(BancoPipeline):
         self.assertEqual(esito["fermata"]["code"], "ATTIVAZIONE_RIFIUTATA")
 
     def test_i_casi_ricevuti_devono_tornare_con_i_candidati_prodotti(self) -> None:
-        """La tautologia della 6b, spostata di un livello e chiusa qui.
+        """The AI step's received-case count must match the shortlist it was given.
 
-        Se i candidati sono mille e la fase AI dichiara di averne ricevuti
-        cinquecento, cinquecento prodotti sono spariti dalla valutazione e ogni
-        singolo passo esce con zero.  E' il numero che se ne accorge.
+        If the shortlist has a thousand candidates and the AI step reports
+        receiving five hundred, five hundred products silently dropped out
+        of evaluation while every individual step still exits cleanly. This
+        check is what catches it.
         """
 
         esecutore = EsecutoreFinto(
@@ -617,7 +613,8 @@ class IlDegradoNonFerma(BancoPipeline):
         self.assertEqual(esito["stato"], pipeline_jobs.ERRORE)
 
     def test_gli_avvisi_finiscono_nel_confronto_e_non_solo_nel_job(self) -> None:
-        """Due minuti dopo nessuno guarda più la barra di avanzamento."""
+        """A warning that lives only in the job's transient state won't be
+        seen once the page is reopened later."""
 
         esecutore = EsecutoreFinto(
             uscite={"valuta_shortlist.py": 5},
@@ -633,16 +630,17 @@ class IlDegradoNonFerma(BancoPipeline):
 
 
 class UnListinoSenzaPrezziSiDice(BancoPipeline):
-    """Bloccante 3 della verifica del 12 agosto 2026.
+    """A supplier with all prices at zero must produce a warning, not silence.
 
-    Il prezzo puntato sulla colonna sbagliata dava 242 prodotti a 0,00 € con
-    confidenza CERTA e un piano d'ordine da 0,00 €, mentre `dati/audit.json`
-    scriveva gia' `usable: 0` per quel fornitore.  Zero avvisi: il controllo
-    sui prezzi confrontava solo «con la volta prima» — quindi alla prima run
-    non guardava niente — e dalla seconda saltava proprio il crollo a nulla,
-    perche' una mediana assente usciva da `if not prima or adesso is None`.
+    A price column pointed at the wrong header can produce 242 products at
+    €0.00 with CERTAIN confidence and a €0.00 order plan, while
+    `dati/audit.json` already reports `usable: 0` for that supplier. Without
+    this check nothing warns: comparing only against the previous run means
+    the very first run checks nothing, and a missing median would fall
+    through `if not prima or adesso is None`.
 
-    Un fornitore a zero non sparisce dal confronto: **vince**, su ogni riga.
+    A supplier at zero doesn't drop out of the comparison: it wins, on
+    every row, because it's the cheapest.
     """
 
     @staticmethod
@@ -670,11 +668,11 @@ class UnListinoSenzaPrezziSiDice(BancoPipeline):
         self.assertIn("PREZZI_A_ZERO", {voce["code"] for voce in esito["avvisi"]})
 
     def test_l_avviso_e_rosso_e_non_ferma_la_compilazione(self) -> None:
-        """La forma decisa: si vede come un errore, ma «avvisa e non ferma».
+        """It reads as an error, but never blocks compilation.
 
-        `blocking: true` chiuderebbe la compilazione, e le fermate sono
-        soltanto quelle sull'ingresso; `severity: "warning"` lo farebbe
-        leggere di sfuggita in mezzo agli altri.
+        `blocking: true` would stop compilation, and pipeline stops are
+        reserved for input problems; `severity: "warning"` would make it
+        easy to skim past among the others.
         """
 
         esito = self.esegui(EsecutoreFinto(audit=self._audit(usable=0, median=None)))
@@ -684,7 +682,8 @@ class UnListinoSenzaPrezziSiDice(BancoPipeline):
         self.assertIs(avviso["blocking"], False)
 
     def test_l_avviso_entra_anche_nel_documento(self) -> None:
-        """Due minuti dopo nessuno guarda più la barra di avanzamento."""
+        """A warning that lives only in the job's transient state won't be
+        seen once the page is reopened later."""
 
         self.esegui(EsecutoreFinto(audit=self._audit(usable=0, median=None)))
 
@@ -692,7 +691,7 @@ class UnListinoSenzaPrezziSiDice(BancoPipeline):
         self.assertIn("PREZZI_A_ZERO", {voce["code"] for voce in confronto["warnings"]})
 
     def test_anche_alla_seconda_run_con_le_stesse_righe(self) -> None:
-        """È il caso che passava: stesse righe, prezzi crollati, zero parole."""
+        """Same row count as before, prices collapsed to zero: must still warn."""
 
         primo = self.esegui(EsecutoreFinto())
         self.assertEqual(primo["stato"], pipeline_jobs.COMPLETATO, primo.get("messaggio"))
@@ -706,7 +705,7 @@ class UnListinoSenzaPrezziSiDice(BancoPipeline):
         self.assertIn("PREZZI_A_ZERO", {voce["code"] for voce in esito["avvisi"]})
 
     def test_un_listino_con_i_prezzi_non_avvisa(self) -> None:
-        """Un avviso che parte sempre è un avviso che nessuno legge più."""
+        """A warning that fires on every run is a warning nobody reads anymore."""
 
         esito = self.esegui(EsecutoreFinto())
 
@@ -714,12 +713,12 @@ class UnListinoSenzaPrezziSiDice(BancoPipeline):
         self.assertNotIn("fornitoriSenzaPrezzi", esito["numeri"])
 
     def test_un_audit_senza_riepilogo_prezzi_non_grida_al_lupo(self) -> None:
-        """«Non misurato» non e' «misurato zero».
+        """Not measured is not the same as measured zero.
 
-        Un audit di formato piu' vecchio, senza `price_summary`, accendeva
-        PREZZI_A_ZERO su ogni fornitore della run: un avviso rosso per
-        fornitore su una cosa che nessuno ha misurato e' rumore che spegne
-        l'avviso vero (revisione avversariale del 13 agosto 2026).
+        An older-format audit with no `price_summary` must not trigger
+        PREZZI_A_ZERO for every supplier in the run: a red warning per
+        supplier over something nobody measured would be noise that drowns
+        out the real warning.
         """
 
         esito = self.esegui(EsecutoreFinto(audit={
@@ -747,7 +746,7 @@ class UnListinoSenzaPrezziSiDice(BancoPipeline):
         self.assertEqual(codici.count("PREZZI_NON_MISURATI"), 1, esito["avvisi"])
 
     def test_la_frase_non_promette_prezzi_maggiori_di_zero_con_la_mediana_a_zero(self) -> None:
-        """«4660 prezzi maggiori di zero» e «mediana zero» non stanno insieme."""
+        """A "4660 prices greater than zero" message and a zero median contradict each other."""
 
         esito = self.esegui(EsecutoreFinto(audit=self._audit(usable=4660, median="0.0000")))
 
@@ -757,11 +756,11 @@ class UnListinoSenzaPrezziSiDice(BancoPipeline):
 
 
 class ChiNonSiPuoCompilareSiDice(BancoPipeline):
-    """Satellite 1: un fornitore nel confronto per cui non nascera' nessuna copia.
+    """A supplier in the comparison that no order file will ever be written for must be named.
 
-    Misurato il 12 agosto 2026: 102 prodotti assegnati a ACERO e
-    avvertimenti vuoti, perche' i compilabili erano una tupla nel codice del
-    lanciatore e chi non c'era spariva prima di essere nominato.
+    Compilability is registry-driven rather than hardcoded in the
+    launcher, specifically so a supplier outside it is named instead of
+    silently disappearing with its assigned products left unwarned.
     """
 
     CONFRONTO_CON_ACERO = {
@@ -789,11 +788,10 @@ class ChiNonSiPuoCompilareSiDice(BancoPipeline):
         self.assertNotIn("FORNITORE_NON_COMPILABILE", {voce["code"] for voce in esito["avvisi"]})
 
     def test_la_regola_viene_dal_registro_e_non_dal_codice(self) -> None:
-        """Basta dichiarare `order_write` perche' l'avviso taccia: nessun codice.
+        """Declaring `order_write` in the registry silences the warning, no code change needed.
 
-        E' la prova che la compilabilita' e' dichiarativa — cioe' che un
-        fornitore imparato la settimana prossima potra' diventare compilabile
-        senza che nessuno tocchi il programma.
+        Proves that compilability is data-driven: a supplier learned next
+        week can become compilable without anyone touching the program.
         """
 
         registro_di_prova = self.radice / "adapters.json"
@@ -823,11 +821,13 @@ class ChiNonSiPuoCompilareSiDice(BancoPipeline):
 
 
 class LeVociImparateSuperateSiMettonoDaParteAllInizio(BancoPipeline):
-    """Dal 5 settembre 2026 lo spedito piu' recente vince, e la catena lo
-    applica al file **prima** di profilare qualunque documento: e' nella
-    profilazione che `registro.riconosci` sceglie l'adattatore, e una voce
-    imparata vecchia si prenderebbe il listino al posto di quella spedita.
-    L'avviso esce una volta, perche' la voce esce dal file.
+    """The shipped adapter registry always wins over a locally learned one with the same id.
+
+    The pipeline applies this rule to the registry file before profiling
+    any document: it's during profiling that `registro.riconosci` picks the
+    adapter, and a stale learned entry would claim the price list instead
+    of the shipped one. The warning fires once, since the entry is removed
+    from the file.
     """
 
     def test_la_voce_superata_esce_dal_file_e_l_utente_lo_sa(self) -> None:
@@ -837,12 +837,12 @@ class LeVociImparateSuperateSiMettonoDaParteAllInizio(BancoPipeline):
         self._scrivi(registro_di_prova, documento)
         imparato = registro_di_prova.with_name("adattatori_imparati.json")
         self._scrivi(imparato, {"schema_version": 1, "adapters": [
-            # Senza timbro sopra una spedita: e' la voce del 21 agosto sul PC
-            # del negozio, quella che copriva BETULLA.
+            # No shipped entry with the same id covers this one: a locally
+            # learned adapter for BETULLA.
             {"id": "betulla_v1__locale", "supplier_id": "betulla", "display_name": "BETULLA",
              "kind": "supplier", "order_write": {"sheet": "FIRST", "data_start_row": 2,
                                                  "order_column": "H"}},
-            # Imparata da zero: non la tocca nessuno.
+            # Learned from scratch, no shipped counterpart: untouched.
             {"id": "acero_v1", "supplier_id": "acero", "display_name": "ACERO",
              "kind": "supplier"},
         ]})
@@ -864,7 +864,7 @@ class LeVociImparateSuperateSiMettonoDaParteAllInizio(BancoPipeline):
         dopo = json.loads(imparato.read_text(encoding="utf-8"))
         self.assertEqual([voce["id"] for voce in dopo["adapters"]], ["acero_v1"])
         self.assertEqual([voce["id"] for voce in dopo["adapters_messi_da_parte"]], ["betulla_v1__locale"])
-        # La seconda volta: niente da spostare, niente da dire.
+        # Second call: nothing left to move, nothing to warn about.
         gestore._metti_da_parte_gli_adattatori_superati()
         self.assertEqual(
             len([v for v in gestore.stato().get("avvisi") or [] if v.get("code") == "ADATTATORE_MESSO_DA_PARTE"]),
@@ -873,15 +873,15 @@ class LeVociImparateSuperateSiMettonoDaParteAllInizio(BancoPipeline):
 
 
 class LaCausaDellaMancataCopiaSiDiceInCatena(BancoPipeline):
-    """I-1 della revisione avversariale del 13 agosto 2026.
+    """A supplier the registry declares can still end up with no order copy.
 
-    Un fornitore DICHIARATO dal registro puo' comunque restare senza copia:
-    l'intestazione della colonna d'ordine e' cambiata, il foglio e' sparito,
-    le righe dichiarate stanno fuori dal documento.  Quella famiglia di
-    avvisi moriva dentro il messaggio di `prepare_writer_config`, che il
-    server butta via quando la scrittura riesce: BETULLA con l'intestazione
-    cambiata spariva dalla configurazione senza una parola in pagina, e lo si
-    scopriva alla compilazione con una frase che non diceva la causa.
+    The order column's header changed, the sheet was renamed, or the
+    declared rows fall outside the document — that whole family of causes
+    must not die inside `prepare_writer_config`'s message, which the server
+    discards once writing succeeds: without a warning surfaced earlier, a
+    supplier with a changed header would silently drop out of the
+    configuration, discovered only at compilation time, with a message
+    that never named the cause.
     """
 
     def _registro_con_acero(self) -> Path:
@@ -948,7 +948,8 @@ class LaCausaDellaMancataCopiaSiDiceInCatena(BancoPipeline):
         self.assertEqual(esito["numeri"]["fornitoriSenzaCompilazione"], ["acero"])
 
     def test_l_avviso_entra_anche_nel_documento(self) -> None:
-        """Due minuti dopo nessuno guarda più la barra di avanzamento."""
+        """A warning that lives only in the job's transient state won't be
+        seen once the page is reopened later."""
 
         self._esegui_con(self._registro_con_acero(),
                          self._confronto(self._listino("ORDINI")))
@@ -966,7 +967,7 @@ class LaCausaDellaMancataCopiaSiDiceInCatena(BancoPipeline):
         self.assertNotIn("FORNITORE_NON_COMPILABILE", {voce["code"] for voce in esito["avvisi"]})
 
     def test_un_registro_rotto_lo_dice_una_volta_e_con_la_causa_giusta(self) -> None:
-        """«Il registro non dichiara» davanti a un JSON rotto è una bugia."""
+        """A broken registry JSON file must not be misdiagnosed as "the registry doesn't declare a rule"."""
 
         registro_rotto = self.radice / "adapters.json"
         registro_rotto.write_text("{ rotto", encoding="utf-8")
@@ -980,7 +981,7 @@ class LaCausaDellaMancataCopiaSiDiceInCatena(BancoPipeline):
 
 
 class LaFermataApreLaConfigurazioneGuidata(BancoPipeline):
-    """Uno schema nuovo si sistema dalla pagina, senza file o comandi."""
+    """A new/unknown schema gets resolved from the page, without editing files or running commands."""
 
     def _fermata(self) -> dict:
         esecutore = EsecutoreFinto(profili=[
@@ -1107,14 +1108,14 @@ class LoStatoDopoIlRicalcolo(BancoPipeline):
         stato = json.loads(self.stato.read_bytes())
         self.assertEqual(stato["products"], [])
         self.assertIn("SCELTE_NON_PIU_VALIDE", {avviso["code"] for avviso in esito["avvisi"]})
-        # E non solo nello stato del job: la pagina lo rilegge dal documento.
+        # Not just in the job's transient state: the page rereads it from the document.
         confronto = json.loads(self.review.read_bytes())
         self.assertIn(
             "SCELTE_NON_PIU_VALIDE",
             {avviso["code"] for avviso in confronto.get("warnings") or []},
         )
 
-    # -- la conferma vale per l'articolo che l'utente ha guardato -----------
+    # -- confirmation is scoped to the exact item the user looked at --------
 
     OFFERTA_DI_PRIMA = {
         "supplierId": "betulla",
@@ -1126,7 +1127,7 @@ class LoStatoDopoIlRicalcolo(BancoPipeline):
     }
 
     def _stato_confermato(self, offerta: dict) -> None:
-        """Lo stato come lo lascia `save_state` dopo una conferma dell'utente."""
+        """The state as `save_state` leaves it after a user confirmation."""
 
         self._scrivi(self.stato, {
             "schemaVersion": 1,
@@ -1141,9 +1142,9 @@ class LoStatoDopoIlRicalcolo(BancoPipeline):
         })
 
     def _confronto_con(self, offerta: dict) -> dict:
-        # Stesso prodotto della run di prima — stesso codice a barre — con
-        # un'offerta che puo' essere cambiata: e' il caso di cui parlano queste
-        # prove.  Il prodotto sostituito ha una prova sua.
+        # Same product as the previous run (same barcode) with an offer
+        # that may have changed: the case these tests cover. A replaced
+        # product has its own separate test.
         return {
             "run": {"id": "nuova"}, "files": [], "suppliers": [{"id": "betulla", "name": "BETULLA"}],
             "products": [{"id": "product:1", "name": "Uno", "ean": "8000000000001", "offers": [offerta]}],
@@ -1151,11 +1152,12 @@ class LoStatoDopoIlRicalcolo(BancoPipeline):
         }
 
     def test_una_conferma_non_copre_un_articolo_diverso_della_settimana_dopo(self) -> None:
-        """Il fornitore ha ancora un'offerta, ma è un'altra riga del listino.
+        """The supplier still has an offer, but it's a different row of the price list.
 
-        Niente veniva azzerato — l'offerta c'è — e la casella «confermo che è lo
-        stesso articolo» restava spuntata su un articolo che l'utente non aveva
-        mai visto. La compilazione passava senza una parola.
+        Nothing would get reset — the offer is still there — and the "È lo
+        stesso articolo?" (is this the same item?) checkbox would stay
+        checked on an item the user never saw. Compilation would proceed
+        without a word.
         """
 
         self._stato_confermato(self.OFFERTA_DI_PRIMA)
@@ -1171,8 +1173,8 @@ class LoStatoDopoIlRicalcolo(BancoPipeline):
         stato = json.loads(self.stato.read_bytes())
         self.assertFalse(stato["products"][0]["confirmed"])
         self.assertNotIn("confirmedArticle", stato["products"][0])
-        # La quantità NON si azzera: il prodotto va ancora ordinato, è la
-        # conferma che va rifatta.
+        # The quantity is NOT reset: the product still needs to be ordered,
+        # it's the confirmation that must be redone.
         self.assertEqual(stato["products"][0]["quantity"], 4)
         self.assertIn("CONFERME_SCADUTE", {avviso["code"] for avviso in esito["avvisi"]})
         confronto = json.loads(self.review.read_bytes())
@@ -1184,7 +1186,7 @@ class LoStatoDopoIlRicalcolo(BancoPipeline):
         self.assertIn("riconferma", avviso["message"])
 
     def test_lo_stesso_articolo_non_fa_rifare_la_conferma(self) -> None:
-        """Rifare la domanda a ogni ricalcolo insegna a spuntare senza leggere."""
+        """Re-asking on every recompute would just train the user to check the box without reading."""
 
         self._stato_confermato(self.OFFERTA_DI_PRIMA)
 
@@ -1195,10 +1197,11 @@ class LoStatoDopoIlRicalcolo(BancoPipeline):
         self.assertNotIn("CONFERME_SCADUTE", {avviso["code"] for avviso in esito["avvisi"]})
 
     def test_un_prezzo_nuovo_sullo_stesso_articolo_non_fa_scadere_niente(self) -> None:
-        """L'impronta è l'identità dell'articolo, non le sue condizioni.
+        """The item's fingerprint is its identity, not its current price or quantity.
 
-        I listini cambiano prezzo ogni settimana: se bastasse quello, la domanda
-        tornerebbe su ogni riga e nessuno la leggerebbe più.
+        Price lists change price every week: if that alone invalidated a
+        confirmation, the question would come back on every row and nobody
+        would read it anymore.
         """
 
         self._stato_confermato(self.OFFERTA_DI_PRIMA)
@@ -1214,7 +1217,7 @@ class LoStatoDopoIlRicalcolo(BancoPipeline):
         self.assertTrue(stato["products"][0]["confirmed"])
 
     def test_una_conferma_che_non_dice_su_cosa_non_e_una_conferma(self) -> None:
-        """Stato salvato prima di questa regola: si fallisce chiuso."""
+        """State saved before this rule existed: fail closed rather than trust it."""
 
         self._scrivi(self.stato, {
             "schemaVersion": 1,
@@ -1230,18 +1233,17 @@ class LoStatoDopoIlRicalcolo(BancoPipeline):
         self.assertFalse(stato["products"][0]["confirmed"])
         self.assertIn("CONFERME_SCADUTE", {avviso["code"] for avviso in esito["avvisi"]})
 
-    # -- le quantita' del gestionale seguono il gestionale -------------------
+    # -- quantities sourced from the management-software export follow that export --
     #
-    # ⚠ Il difetto del 15 agosto 2026, con le parole di chi lo ha subito:
-    # «ordine2 non veniva usato davvero: nonostante alcuni prodotti avessero
-    # quantita' diverse, mostrava tutti 0».  Il confronto nuovo era giusto; a
-    # coprirlo era la decisione salvata sull'elenco di prima.
+    # Without this, a re-uploaded reorder list can go unused: despite
+    # products having different quantities, every one shows 0, because a
+    # decision saved from the previous list masks the new comparison.
 
     GESTIONALE_DI_PRIMA = [{"role": "master", "name": "ordine.xlsx", "sourceSha256": "a" * 64}]
     GESTIONALE_NUOVO = [{"role": "master", "name": "ordine2.xlsx", "sourceSha256": "b" * 64}]
 
     def _elenco_di_prima(self, documenti: list[dict], *, ean: str = "8000000000001") -> None:
-        """Il confronto vivo: quello che c'era prima di questo ricalcolo."""
+        """The live comparison: what was there before this recompute."""
 
         self._scrivi(self.review, {
             **CONFRONTO_PRECEDENTE,
@@ -1280,7 +1282,7 @@ class LoStatoDopoIlRicalcolo(BancoPipeline):
         }
 
     def test_un_elenco_nuovo_riporta_le_sue_quantita(self) -> None:
-        """Il gestionale è un altro documento: i colli sono i suoi."""
+        """A new reorder list is a different document: its quantities are its own."""
 
         self._elenco_di_prima(self.GESTIONALE_DI_PRIMA)
         self._decisione(quantity=0)
@@ -1291,17 +1293,17 @@ class LoStatoDopoIlRicalcolo(BancoPipeline):
 
         stato = json.loads(self.stato.read_bytes())
         self.assertEqual(stato["products"][0]["quantity"], 3)
-        # ⚠ E NESSUN avviso: che la quantità venga dall'elenco è la regola
-        # normale, non una notizia. «Non riempire tutto di notifiche, popup, e
-        # roba da paranoici logorroici» (15 agosto 2026).
+        # And no warning: a quantity sourced from the reorder list is the
+        # normal case, not something worth flagging.
         self.assertNotIn("QUANTITA_RIPRESE_DAL_GESTIONALE", {voce["code"] for voce in esito["avvisi"]})
 
     def test_le_quantita_le_decide_il_gestionale_anche_a_elenco_uguale(self) -> None:
-        """«La quantità deve prenderla dal gestionale e stop» (15 agosto 2026).
+        """A quantity sourced from the reorder list is re-read from it on every recompute.
 
-        Nessuna condizione, nemmeno «l'elenco è cambiato»: quello che viene
-        dall'elenco si rilegge dall'elenco a ogni ricalcolo. ⚠ Conseguenza
-        voluta: «Azzera le quantità predefinite» vale fino al ricalcolo dopo.
+        No exception even when the list itself is unchanged: it's re-read
+        unconditionally. As a consequence, the "Azzera le quantità proposte
+        dal gestionale" (reset suggested quantities) button only holds until
+        the next recompute.
         """
 
         self._elenco_di_prima(self.GESTIONALE_DI_PRIMA)
@@ -1314,11 +1316,11 @@ class LoStatoDopoIlRicalcolo(BancoPipeline):
         stato = json.loads(self.stato.read_bytes())
         self.assertEqual(stato["products"][0]["quantity"], 3)
         self.assertNotIn("QUANTITA_RIPRESE_DAL_GESTIONALE", {voce["code"] for voce in esito["avvisi"]})
-        # Il numero non si perde: resta nel riepilogo della run, per chi lo cerca.
+        # The count isn't lost: it stays in the run summary for anyone who looks.
         self.assertEqual(esito["numeri"].get("quantitaRiprese"), 1)
 
     def test_le_quantita_scritte_da_te_non_le_tocca_nessuno(self) -> None:
-        """`utente` vuol dire che quel numero l'ha scritto lui: è suo."""
+        """`quantitySource: "utente"` means the user typed that number: it's theirs."""
 
         self._elenco_di_prima(self.GESTIONALE_DI_PRIMA)
         self._decisione(quantity=7, quantitySource="utente")
@@ -1331,8 +1333,9 @@ class LoStatoDopoIlRicalcolo(BancoPipeline):
         self.assertEqual(stato["products"][0]["quantity"], 7)
 
     def test_la_stessa_riga_con_un_altro_articolo_perde_le_sue_decisioni(self) -> None:
-        """Gli identificativi sono numeri di riga: con un elenco nuovo la riga 1
-        e' un altro prodotto, e la scelta del fornitore non parla di lui."""
+        """Product ids are row numbers: with a new reorder list, row 1 is a
+        different product, so a saved supplier choice keyed to that id
+        would refer to the wrong item."""
 
         self._elenco_di_prima(self.GESTIONALE_DI_PRIMA)
         self._decisione(quantity=4, confirmed=True)
@@ -1347,7 +1350,7 @@ class LoStatoDopoIlRicalcolo(BancoPipeline):
         self.assertEqual(stato["products"], [])
         avviso = next(voce for voce in esito["avvisi"] if voce["code"] == "DECISIONI_SCOLLEGATE")
         self.assertIn("un articolo diverso da prima", avviso["message"])
-        # E la pagina lo rilegge dal documento, non solo dallo stato del job.
+        # And the page rereads it from the document, not just from the job's transient state.
         confronto = json.loads(self.review.read_bytes())
         self.assertIn(
             "DECISIONI_SCOLLEGATE",
@@ -1355,11 +1358,11 @@ class LoStatoDopoIlRicalcolo(BancoPipeline):
         )
 
     def test_un_prodotto_aggiunto_a_mano_non_perde_la_sua_quantita(self) -> None:
-        """I prodotti aggiunti a mano arrivano dallo stato, non dal confronto.
+        """Manually added products come from saved state, not from the comparison document.
 
-        Cercarli solo fra i prodotti del confronto li dichiarava «spariti» a
-        ogni ricalcolo: la quantita' scritta su di loro tornava a zero, con la
-        spiegazione sbagliata («il listino nuovo non ha piu' l'offerta»).
+        Looking for them only among the comparison's own products would mark
+        them "gone" on every recompute: their quantity would reset to zero,
+        with the wrong explanation ("this offer is missing from the new price list").
         """
 
         self._scrivi(self.stato, {
@@ -1382,14 +1385,13 @@ class LoStatoDopoIlRicalcolo(BancoPipeline):
         self.assertEqual(stato["products"][0]["quantity"], 2)
         self.assertNotIn("SCELTE_NON_PIU_VALIDE", {voce["code"] for voce in esito["avvisi"]})
 
-    # -- il fornitore salvato non regge piu': due casi, non uno --------------
+    # -- an invalid saved supplier choice: two distinct cases ----------------
     #
-    # ⚠ Fino al 16 agosto 2026 erano lo stesso caso e finivano tutti e due a
-    # zero.  La domanda giusta non e' «il fornitore scelto c'e' ancora», e'
-    # «qualcuno puo' servirlo»: se qualcuno puo', la quantita' torna a zero
-    # perche' su quale offerta metterla e' una scelta dell'utente; se non puo'
-    # nessuno, non c'e' niente da scegliere e azzerare butterebbe via l'unica
-    # cosa nota di quella riga — quanti ne servono.
+    # The right question isn't "is the chosen supplier still there", it's
+    # "can anyone still supply this": if someone can, the quantity resets
+    # to zero because picking which offer is the user's decision; if nobody
+    # can, there's nothing to choose and resetting would discard the only
+    # thing known about that row — how many units are needed.
 
     def _confronto_con_offerta(self, *offerte: dict) -> dict:
         return {
@@ -1399,7 +1401,7 @@ class LoStatoDopoIlRicalcolo(BancoPipeline):
         }
 
     def test_con_un_altro_fornitore_disponibile_la_quantita_torna_a_zero(self) -> None:
-        """Comportamento invariato: qui una scelta c'è, e la fa l'utente."""
+        """Unchanged behavior: here a choice exists, and the user makes it."""
 
         esecutore = EsecutoreFinto(confronto=self._confronto_con_offerta(
             {"supplierId": "betulla", "available": False},
@@ -1415,11 +1417,11 @@ class LoStatoDopoIlRicalcolo(BancoPipeline):
         self.assertIn("SCELTE_NON_PIU_VALIDE", {voce["code"] for voce in esito["avvisi"]})
 
     def test_se_nessuno_ce_l_ha_la_quantita_resta_e_il_fornitore_si_svuota(self) -> None:
-        """La difesa nuova: e' un prodotto da reperire, non un errore.
+        """The intended behavior: this is a product to be sourced, not an error.
 
-        Se questa prova torna a leggere 0, al ricalcolo successivo il prodotto
-        esce dall'elenco «Prodotti da reperire» — ci entra solo chi ha una
-        quantita' > 0 — e sparisce senza che niente lo dica.
+        If this test regresses to reading 0, the next recompute drops the
+        product from the "to be sourced" list — only items with a
+        quantity > 0 appear there — and it disappears with nothing to say so.
         """
 
         esecutore = EsecutoreFinto(confronto=self._confronto_con_offerta(
@@ -1432,17 +1434,17 @@ class LoStatoDopoIlRicalcolo(BancoPipeline):
         self.assertEqual(stato["products"][0]["quantity"], 4)
         self.assertEqual(stato["products"][0]["selectedSupplierId"], "")
         self.assertFalse(stato["products"][0]["confirmed"])
-        # ⚠ E nessun avviso: non e' stato perso niente. «SCELTE_NON_PIU_VALIDE»
-        # direbbe che la quantita' e' tornata a zero, e sarebbe falso.
+        # No warning here either: nothing was lost. SCELTE_NON_PIU_VALIDE
+        # would claim the quantity was reset, which would be false.
         self.assertNotIn("SCELTE_NON_PIU_VALIDE", {voce["code"] for voce in esito["avvisi"]})
 
     def test_il_fornitore_svuotato_finisce_davvero_sul_disco(self) -> None:
-        """Tenere la quantita' non deve diventare «non riscrivere niente».
+        """Keeping the quantity must not mean skipping the write entirely.
 
-        Lo stato si riscrive solo se qualcosa e' cambiato, e questo caso non
-        alza nessuno dei contatori che producono un avviso: senza una ragione
-        propria per riscriverlo, il fornitore sparito resterebbe sul disco e la
-        compilazione seguente ordinerebbe da chi non ce l'ha.
+        State is only rewritten when something changed, and this case
+        raises none of the counters that produce a warning: without its own
+        reason to rewrite, the cleared supplier would stay on disk and the
+        next compilation would order from a supplier unable to fill it.
         """
 
         self._scrivi(self.stato, {
@@ -1468,8 +1470,8 @@ class LoStatoDopoIlRicalcolo(BancoPipeline):
         self.assertNotIn("confirmedArticle", salvato)
 
     def test_una_decisione_gia_vuota_non_viene_toccata(self) -> None:
-        """Niente quantita' e nessun fornitore: non c'e' niente da ripulire, e
-        la decisione dev'esserci ancora tale e quale."""
+        """No quantity and no supplier: nothing to clean up, and the decision
+        must come back exactly as it was."""
 
         decisione = {"id": "product:1", "quantity": 0, "selectedSupplierId": ""}
         self._scrivi(self.stato, {
@@ -1484,7 +1486,7 @@ class LoStatoDopoIlRicalcolo(BancoPipeline):
         self.assertNotIn("SCELTE_NON_PIU_VALIDE", {voce["code"] for voce in esito["avvisi"]})
 
     def test_lo_stato_segue_l_identificativo_della_run_nuova(self) -> None:
-        """`PUT /api/state` rifiuta uno snapshot di un'altra run."""
+        """`PUT /api/state` rejects a state snapshot tagged with another run's id."""
 
         esecutore = EsecutoreFinto(confronto={
             "run": {"id": "nuova"}, "files": [], "suppliers": [{"id": "betulla"}],
@@ -1499,15 +1501,14 @@ class LoStatoDopoIlRicalcolo(BancoPipeline):
 
 class UnLavoroPerVolta(BancoPipeline):
     def test_due_avvii_insieme_non_sono_ammessi(self) -> None:
-        """⚠ Il doppio deve accettare `timeout_secondi`, e non e' un dettaglio.
+        """The test's fake executor must accept `timeout_secondi` like the real one, or this test is a false positive.
 
-        Fino al 20 agosto la sua firma era rimasta indietro: `_esegui` passa il
-        tetto **per nome**, il doppio sollevava `TypeError` prima ancora di
-        cominciare, la run moriva in millisecondi e questa prova passava solo
-        perche' il filo principale vinceva la corsa verso il secondo `avvia()`.
-        Verde oggi, rossa a caso domani, e nel frattempo «un lavoro per volta»
-        non era piu' coperto da niente. Il `partito` qui sotto lo dichiara: il
-        secondo avvio si prova **mentre** il primo comando sta girando.
+        `_esegui` passes the timeout by keyword; a fake with a stale
+        signature raises `TypeError` before it even starts, so the run dies
+        in milliseconds and the second `avvia()` could win the race by
+        accident even without the "one job at a time" guard working. The
+        `partito` event below makes the intent explicit: the second start
+        is attempted while the first command is still running.
         """
 
         blocco = threading.Event()
@@ -1540,23 +1541,23 @@ class UnLavoroPerVolta(BancoPipeline):
             lucchetto.release()
 
     def test_il_lucchetto_torna_libero_se_l_avvio_non_riesce(self) -> None:
-        """⚠ Il ripiego copriva la sola creazione della cartella.
+        """The lock must be released even when the background thread itself fails to start.
 
-        Fra `acquire()` e la partenza del filo ci sono altre tre cose, e
-        qualunque di loro puo' fallire — qui il filo che non parte, che e' il
-        caso vero su una macchina a corto di risorse. Fino al 22 agosto 2026 un
-        guasto li' lasciava `lucchetto_lavori` in mano a nessuno: da quel
-        momento ogni «Ricalcola» rispondeva 409, `POST /api/spegni` si
-        rifiutava di spegnere, e all'utente restava chiudere la finestra a
-        forza — il programma inchiodato dal guasto che doveva costare una riga
-        d'errore.
+        Between `acquire()` and the thread actually starting there are a
+        few more steps, and any of them can fail — here, the thread
+        creation itself, which is a real failure mode on a machine that's
+        low on resources. Without this, a failure there would leave
+        `lucchetto_lavori` held by nobody: every later "Ricalcola" would
+        answer 409, `POST /api/spegni` would refuse to shut down, and the
+        only way out would be force-closing the window — the program
+        hanging over a failure that should have cost one error line.
         """
 
         gestore = self.gestore(EsecutoreFinto())
         originale = pipeline_jobs.threading.Thread
 
         class FiloCheNonParte(originale):
-            def start(self):  # noqa: D102 - «can't start new thread», succede
+            def start(self):  # noqa: D102 - simulates "can't start new thread"
                 raise RuntimeError("can't start new thread")
 
         pipeline_jobs.threading.Thread = FiloCheNonParte
@@ -1565,23 +1566,23 @@ class UnLavoroPerVolta(BancoPipeline):
             gestore.avvia()
         pipeline_jobs.threading.Thread = originale
 
-        # Il lucchetto e' libero: si vede da fuori, provando a prenderlo.
+        # The lock is free: verified from outside by trying to acquire it.
         self.assertTrue(gestore.lucchetto_lavori.acquire(blocking=False),
                         "il lucchetto dei lavori e' rimasto in mano a nessuno")
         gestore.lucchetto_lavori.release()
-        # E il programma riparte davvero, che e' la cosa che l'utente vede.
+        # And the pipeline actually restarts, which is what the user sees.
         gestore.avvia()
         esito = gestore.attendi(timeout=30)
         self.assertEqual(esito["stato"], pipeline_jobs.COMPLETATO, esito.get("messaggio"))
 
     def test_il_lucchetto_torna_libero_anche_se_l_audit_esplode(self) -> None:
-        """⚠ Il rilascio non deve dipendere da nient'altro.
+        """The lock release must not depend on anything else succeeding first.
 
-        `_scrivi_audit_esecuzione` intercetta il solo `OSError`: qualunque
-        altra eccezione — un `TypeError` di `json.dumps`, un `RecursionError`
-        su un `deepcopy` — lasciava `lucchetto_lavori` in mano per sempre, e da
-        li' 409 a ogni «Ricalcola», niente spegnimento e niente aggiornamento
-        del codice. Trovato dalla verifica avversariale del 20 agosto 2026.
+        `_scrivi_audit_esecuzione` only catches `OSError`: any other
+        exception — a `TypeError` from `json.dumps`, a `RecursionError`
+        from a `deepcopy` — would leave `lucchetto_lavori` held forever,
+        and from there every "Ricalcola" gets a 409, with no shutdown and
+        no code update possible.
         """
 
         lucchetto = threading.Lock()
@@ -1598,12 +1599,13 @@ class UnLavoroPerVolta(BancoPipeline):
 
         self.assertTrue(lucchetto.acquire(blocking=False), "il lucchetto è rimasto in mano")
         lucchetto.release()
-        # Lo stato della run e' gia' definitivo prima dell'audit: se un giorno
-        # qualcuno lo spostasse dopo, la pagina resterebbe con una barra che non
-        # avanza piu' e `avvia()` risponderebbe 409 col lucchetto libero.
+        # The run's final status is already set before the audit write: if
+        # that ordering were ever reversed, the page would be left with a
+        # progress bar that never advances while `avvia()` answers 409 with
+        # the lock actually free.
         self.assertEqual(esito["stato"], pipeline_jobs.COMPLETATO, esito.get("messaggio"))
-        # E si dice, invece di uscire come traceback grezzo da un filo: in
-        # negozio quello non lo legge nessuno.
+        # And it's reported as a message, not a raw traceback from a
+        # background thread that nobody at the store would ever read.
         self.assertIn("[AVVISO] audit della run non scritto", detto)
         self.assertIn("TypeError", detto)
 
@@ -1640,19 +1642,18 @@ class LaRiconfigurazioneDellaCompilazione(BancoPipeline):
         self.assertEqual(len(json.loads(self.review.read_bytes())["products"]), 2)
 
     def test_la_riconfigurazione_arriva_prima_che_il_confronto_nuovo_sia_vivo(self) -> None:
-        """L'ordine dentro l'attivazione e' una difesa, non un dettaglio.
+        """The ordering inside activation is a safety property, not an implementation detail.
 
-        Fra la sostituzione del confronto vivo e la riconfigurazione della
-        scrittura c'e' una finestra, e il processo puo' morirci dentro: il
-        computer si spegne, la finestra si chiude.  Se la sostituzione viene
-        prima, quello che resta e' il confronto di **adesso** con la
-        configurazione della **settimana scorsa** — cioe' le quantita' di oggi
-        scritte nelle righe del listino di sette giorni fa, in silenzio.  Se
-        viene prima la riconfigurazione, quello che resta e' il confronto di
-        prima, che non ha mai fatto male a nessuno.
+        Between replacing the live comparison and reconfiguring the order
+        writer there's a window, and the process can die inside it (power
+        loss, the window closed). If the comparison is replaced first, what
+        survives is today's comparison paired with last week's writer
+        configuration — today's quantities silently written into last
+        week's price-list rows. If the writer is reconfigured first, what
+        survives is the previous comparison, which never hurt anyone.
 
-        La prova guarda il file vivo **nel momento** in cui la riconfigurazione
-        viene chiamata: e' l'unico modo di inchiodare un ordine.
+        This test inspects the live file at the exact moment reconfiguration
+        is called, since that's the only way to pin down the ordering.
         """
 
         visto_al_momento: list[str] = []
@@ -1663,19 +1664,20 @@ class LaRiconfigurazioneDellaCompilazione(BancoPipeline):
 
         esito = self.esegui(EsecutoreFinto(), su_confronto_attivato=riconfigura)
         self.assertEqual(esito["stato"], pipeline_jobs.COMPLETATO, esito.get("messaggio"))
-        # Quando la compilazione si riconfigura, il confronto vivo e' ancora
-        # quello di prima.
+        # While the writer reconfigures, the live comparison is still the previous one.
         self.assertEqual(visto_al_momento, ["vecchia"])
-        # E alla fine il confronto nuovo c'e' lo stesso.
+        # And the new comparison still lands afterward.
         vivo = json.loads(self.review.read_bytes())
         self.assertEqual(vivo["run"]["id"], esito["runId"])
 
     def test_l_avviso_della_riconfigurazione_fallita_entra_nel_documento(self) -> None:
-        """Un avviso che vive solo nello stato del job e' un avviso che nessuno legge.
+        """A warning that lives only in the job's transient state won't be
+        seen once the page is reopened later.
 
-        Nasceva dopo la fotografia degli avvisi, quindi in `review_data.json`
-        non ci arrivava mai: due minuti dopo, nella pagina, non restava traccia
-        del fatto che la compilazione andava ricontrollata.
+        This one is raised after the writer reconfiguration step, so it
+        must be included in the warnings snapshot written to
+        `review_data.json`, or the page would keep no trace that
+        compilation needs to be re-checked.
         """
 
         def rompi(_review: dict) -> None:
@@ -1689,11 +1691,12 @@ class LaRiconfigurazioneDellaCompilazione(BancoPipeline):
 
 class IDocumentiDoppi(BancoPipeline):
     def test_di_due_listini_dello_stesso_fornitore_si_usa_il_piu_recente(self) -> None:
-        """La cartella dei caricamenti si accumula settimana dopo settimana.
+        """The uploads folder accumulates files week after week.
 
-        Due listini BETULLA farebbero fallire il parser con «Fornitore duplicato»,
-        che non dice a nessuno che cosa fare.  Si tiene il piu' recente e **si
-        dice** quale e' rimasto fuori: uno scarto silenzioso e' peggio.
+        Two price lists for the same supplier would otherwise fail the
+        parser with "duplicate supplier", which tells nobody what to do.
+        The most recent one is kept, and the one left out is named: a
+        silent discard would be worse.
         """
 
         esecutore = EsecutoreFinto(profili=[
@@ -1710,14 +1713,15 @@ class IDocumentiDoppi(BancoPipeline):
         self.assertIn("betulla-vecchio.xlsx", avvisi[0]["message"])
 
     def test_l_avviso_dice_chi_e_stato_tenuto_chi_no_e_in_base_a_che_cosa(self) -> None:
-        """Il caso vero: il listino scaduto e' quello copiato per ultimo.
+        """Real-world case: the expired price list is the one copied over most recently.
 
-        La scelta guarda la data di modifica del **file**, che con la validita'
-        del **listino** non c'entra niente: un BETULLA scaduto ricopiato oggi
-        vince su quello valido di ieri.  Il criterio resta (e' l'unico segnale
-        che c'e' su tutti i fornitori), ma l'avviso deve dire tre cose, se no
-        chi legge capisce «il listino piu' recente» e si fida: chi e' stato
-        tenuto, chi e' rimasto fuori, e su che cosa e' stata fatta la scelta.
+        The selection looks at the file's modification time, which has
+        nothing to do with the price list's own validity: an expired
+        BETULLA re-copied today wins over yesterday's valid one. That
+        criterion stays (it's the only signal available across every
+        supplier), but the warning must say three things, or the reader
+        assumes "most recent price list" and trusts it: who was kept, who
+        was left out, and what the choice was based on.
         """
 
         esecutore = EsecutoreFinto(profili=[
@@ -1732,19 +1736,20 @@ class IDocumentiDoppi(BancoPipeline):
         avviso = avvisi[0]
         self.assertEqual(avviso["tenuto"], "betulla-scaduto.xlsx")
         self.assertEqual(avviso["lasciatoFuori"], "betulla-valido.xlsx")
-        # Le due cose che il messaggio non diceva: il nome del vincitore...
+        # The two things the old message didn't say: the winner's name...
         self.assertIn("betulla-scaduto.xlsx", avviso["message"])
         self.assertIn("betulla-valido.xlsx", avviso["message"])
-        # ...e che la scelta guarda il file, non la validita' del listino.
+        # ...and that the choice looks at the file, not the price list's own validity.
         self.assertIn("data di modifica", avviso["message"])
         self.assertIn("non sulla validità", avviso["message"])
 
     def test_con_tre_documenti_l_avviso_nomina_il_vincitore_finale(self) -> None:
-        """Chi vinceva a meta' giro non e' detto che vinca alla fine.
+        """Whoever wins mid-comparison isn't necessarily the final winner.
 
-        Con tre listini dello stesso fornitore, l'avviso del primo scartato
-        nominerebbe il vincitore intermedio: un nome vero, di un file vero, che
-        pero' nel confronto non e' entrato.
+        With three price lists for the same supplier, a warning about the
+        first one discarded could name the intermediate winner instead: a
+        real name, of a real file, that never actually made it into the
+        comparison.
         """
 
         esecutore = EsecutoreFinto(profili=[
@@ -1767,11 +1772,11 @@ class IDocumentiDoppi(BancoPipeline):
         )
 
     def test_a_parita_di_data_l_avviso_non_attribuisce_la_scelta_alla_data(self) -> None:
-        """Una cartella copiata con robocopy conserva i tempi: capita davvero.
+        """A folder copied with a tool that preserves timestamps produces this case for real.
 
-        A parita' di `modified_at` la data non ha deciso niente — vince
-        l'ultimo in ordine di elenco — e l'avviso lo deve dire, invece di
-        attribuire la scelta a un criterio che non l'ha fatta.
+        With an identical `modified_at`, the date decided nothing — the
+        last one in listing order wins — and the warning must say so,
+        instead of crediting a criterion that didn't actually decide.
         """
 
         stesso_momento = "2026-08-12T10:00:00+00:00"
@@ -1789,12 +1794,12 @@ class IDocumentiDoppi(BancoPipeline):
 
 
 class LaVoltaPrima(BancoPipeline):
-    """Con che cosa si confronta la run di oggi.
+    """What today's run is compared against.
 
-    Il confronto con «la volta prima» e' quello che fa uscire
-    `FORNITORE_SPARITO`, ed e' l'unico avviso che si accorge di un listino che
-    non c'e' piu'.  Se si aggancia alla cartella sbagliata non avvisa e basta:
-    un fornitore intero esce dal confronto senza una parola.
+    The comparison against "the previous run" is what produces
+    `FORNITORE_SPARITO`, the only warning that notices a price list is
+    gone. Picking the wrong folder to compare against just means it warns
+    about nothing: an entire supplier drops out of the comparison silently.
     """
 
     AUDIT_CON_NOCE = {
@@ -1816,11 +1821,11 @@ class LaVoltaPrima(BancoPipeline):
         return Path(esito["cartella"]).name
 
     def _cartella_intrusa(self, verbale: dict | None) -> Path:
-        """Una cartella che sembra una run e che il disco dice piu' recente.
+        """A folder that looks like a run and that the filesystem reports as more recent.
 
-        L'ora del file si sposta a mano: cosi' la prova non dipende da quanto
-        ci mette la macchina, e sotto la regola vecchia questa cartella vince
-        di sicuro.
+        The file's timestamp is set manually, so the test doesn't depend on
+        how long the machine takes, and under the old selection rule this
+        folder would win for certain.
         """
 
         cartella = self.configurazione().esecuzioni_dir / "2026-08-13_2359"
@@ -1836,13 +1841,12 @@ class LaVoltaPrima(BancoPipeline):
         return self.esegui(EsecutoreFinto(audit=self.AUDIT_SENZA_NOCE))
 
     def _il_confronto_vivo_non_dichiara_chi_lo_ha_attivato(self) -> None:
-        """Il caso del ripiego: un confronto attivato prima che `pipelineRunId` esistesse.
+        """Simulates a comparison activated before `pipelineRunId` existed, forcing the fallback path.
 
-        ⚠ Serve ai collaudi della SCANSIONE: senza questa riga passerebbero
-        tutti dal percorso veloce (il confronto vivo dichiara chi l'ha
-        attivato) e i cancelli su `COMPLETATO` e `iniziatoIl` resterebbero
-        senza un collaudo che li tenga fermi — la stessa trappola delle
-        fixture a un ramo solo della 6a.
+        Without this, every test below would take the fast path (the live
+        comparison already names which run activated it) and the guards on
+        `COMPLETATO` and `iniziatoIl` would have no test actually exercising
+        them — a fixture that only ever covers one branch.
         """
 
         percorso = self.configurazione().review_path
@@ -1852,12 +1856,12 @@ class LaVoltaPrima(BancoPipeline):
         self._scrivi(percorso, confronto)
 
     def test_una_run_uccisa_a_meta_non_e_la_volta_prima(self) -> None:
-        """`dati/audit.json` a meta' catena, `esecuzione.json` solo alla fine.
+        """`dati/audit.json` is written mid-pipeline; `esecuzione.json` only at the end.
 
-        Una run uccisa in mezzo lascia il primo e non il secondo.  Prendendola
-        come termine di paragone si confronta oggi con un confronto che non e'
-        mai stato attivato, e NOCE — che non c'era nemmeno li' — esce senza
-        che nessuno lo dica.
+        A run killed midway leaves the first file but not the second. Using
+        it as the comparison baseline would compare today against a
+        comparison that was never actually activated, and a supplier
+        that was never even in it would drop out silently.
         """
 
         completa = self._run_completa_con_noce()
@@ -1871,7 +1875,7 @@ class LaVoltaPrima(BancoPipeline):
         self.assertIn("FORNITORE_SPARITO", {avviso["code"] for avviso in esito["avvisi"]})
 
     def test_una_run_finita_male_non_e_la_volta_prima(self) -> None:
-        """Una run che si è fermata non ha aggiornato niente: non è «la volta prima»."""
+        """A run that stopped with an error never updated the live comparison: it isn't a valid baseline."""
 
         completa = self._run_completa_con_noce()
         self._il_confronto_vivo_non_dichiara_chi_lo_ha_attivato()
@@ -1886,13 +1890,13 @@ class LaVoltaPrima(BancoPipeline):
         self.assertIn("FORNITORE_SPARITO", {avviso["code"] for avviso in esito["avvisi"]})
 
     def test_un_verbale_senza_l_ora_di_inizio_non_e_la_volta_prima(self) -> None:
-        """Il ramo che ha preso il posto del ripiego sull'ora del file.
+        """Replaces the old fallback to the folder's file-modification time.
 
-        Prima, un verbale che non diceva quando la run fosse cominciata faceva
-        ricadere la scelta sull'`st_mtime` della cartella — cioe' sull'ultima
-        volta che qualcuno l'ha toccata, che una copia o un backup spostano in
-        avanti quanto vogliono.  Adesso una run che non sa dire quando e'
-        cominciata non e' un termine di paragone: si salta.
+        Before, a run log that didn't say when the run started fell back
+        to the folder's `st_mtime` — the last time anyone touched it, which
+        a copy or a backup operation can push arbitrarily far forward. Now
+        a run that can't say when it started is simply not a valid
+        baseline and is skipped.
         """
 
         completa = self._run_completa_con_noce()
@@ -1905,7 +1909,7 @@ class LaVoltaPrima(BancoPipeline):
         self.assertIn("FORNITORE_SPARITO", {avviso["code"] for avviso in esito["avvisi"]})
 
     def test_la_run_completa_piu_recente_resta_quella_giusta(self) -> None:
-        """La regola nuova non deve smettere di trovare la volta prima vera."""
+        """The new selection rule must still find the real previous run."""
 
         self._run_completa_con_noce()
         seconda = self._run_completa_con_noce()
@@ -1916,22 +1920,24 @@ class LaVoltaPrima(BancoPipeline):
         self.assertIn("FORNITORE_SPARITO", {avviso["code"] for avviso in esito["avvisi"]})
 
     def test_la_run_che_ha_attivato_e_la_volta_prima_anche_senza_verbale_completo(self) -> None:
-        """Il rilievo IMPORTANTE 2 della revisione avversariale del 13 agosto 2026.
+        """A run that activated the live comparison is the baseline even with an incomplete run log.
 
-        Una run che muore un attimo dopo `os.replace` ha attivato il suo
-        confronto, ma il verbale resta a meta'.  Pretendere `COMPLETATO` anche
-        da lei la faceva sparire dal paragone: il confronto degradava a «prima
-        esecuzione» e `FORNITORE_SPARITO` taceva di nuovo — lo stesso danno che
-        la correzione dichiarava di chiudere, raggiunto dall'altro lato.  Il
-        confronto vivo dichiara chi l'ha attivato (`run.pipelineRunId`), e
-        quella cartella E' la volta prima, qualunque cosa dica il suo verbale.
+        A run that dies right after `os.replace` has already activated its
+        comparison, but its run log stays half-written. Requiring
+        `COMPLETATO` from it would make it disappear from the comparison
+        entirely: the baseline would degrade to "first run" and
+        `FORNITORE_SPARITO` would go silent again — the same failure mode
+        reached from the other side. The live comparison itself declares
+        which run activated it (`run.pipelineRunId`), and that folder is
+        the baseline, whatever its own run log says.
         """
 
         self._run_completa_con_noce()
         attivata = self._run_completa_con_noce()
         cartella = self.configurazione().esecuzioni_dir / attivata
-        # Il verbale torna com'era un attimo prima della morte: la run e' viva
-        # a meta', ma il confronto che ha attivato e' quello sul disco.
+        # Roll the run log back to how it looked right before the process
+        # died: the run is half-written, but the comparison it activated
+        # is the one on disk.
         self._scrivi(cartella / pipeline_jobs.NOME_AUDIT_ESECUZIONE, {
             "stato": pipeline_jobs.IN_CORSO,
             "iniziatoIl": "2026-08-13T11:59:00+00:00",
@@ -1943,13 +1949,14 @@ class LaVoltaPrima(BancoPipeline):
         self.assertIn("FORNITORE_SPARITO", {avviso["code"] for avviso in esito["avvisi"]})
 
     def test_un_verbale_con_l_ora_senza_fuso_non_e_la_volta_prima(self) -> None:
-        """Un `iniziatoIl` nudo si misura con l'ora locale.
+        """A naive (timezone-less) `iniziatoIl` timestamp compares unpredictably against local time.
 
-        Mischiato ai verbali veri — che il fuso ce l'hanno sempre, lo scrive
-        `avvia()` — un'ora nuda puo' invertire l'ordine delle run di ore
-        intere.  Il programma non la produce; una cartella copiata da un'altra
-        macchina o scritta a mano si'.  Chi non sa dire QUANDO con il fuso non
-        e' un termine di paragone: si salta.
+        Mixed in with real run logs — which always carry a timezone,
+        written by `avvia()` — a naive timestamp can invert the ordering of
+        runs by hours. The pipeline itself never produces one; a folder
+        copied from another machine or edited by hand can. A run whose
+        start time carries no timezone is not a valid baseline and is
+        skipped.
         """
 
         completa = self._run_completa_con_noce()
@@ -1966,16 +1973,16 @@ class LaVoltaPrima(BancoPipeline):
 
 
 class EsecutoreCheEsplode(EsecutoreFinto):
-    """Un comando che solleva un'eccezione qualunque, non una `Fermata`.
+    """A command that raises an arbitrary exception, not a declared `Fermata`.
 
-    E' il ramo che il 14 agosto 2026 e' arrivato in pagina come
-    `AttributeError: module 'registro' has no attribute 'nome_del_fornitore'`,
-    e fino a quel giorno non aveva un solo test.
+    This is the branch that once reached the page as a raw
+    `AttributeError: module 'registro' has no attribute 'nome_del_fornitore'`.
 
-    Con `fotografia_da_installare` fa anche l'altra meta' di quel giorno: il
-    codice sul disco che cambia **mentre** la catena cammina.  Senza, la prova
-    del ramo «guasto a run avviata» sarebbe fasulla — la guardia d'ingresso
-    avrebbe gia' fermato tutto e il test passerebbe per un altro motivo.
+    With `fotografia_da_installare` it also covers the on-disk code
+    changing while the pipeline is running. Without that, a test for
+    "failure after the run already started" would be a false positive —
+    the entry guard would already have stopped everything and the test
+    would pass for the wrong reason.
     """
 
     def __init__(self, dove: str, fotografia_da_installare: dict | None = None, **impostazioni) -> None:
@@ -1992,13 +1999,13 @@ class EsecutoreCheEsplode(EsecutoreFinto):
 
 
 class IlCodiceCambiatoSottoIlProgramma(BancoPipeline):
-    """Il programma aggiornato mentre gira si dichiara, e dice cosa fare.
+    """Code updated while the server is running must announce itself and say what to do.
 
-    Il difetto vero del 14 agosto non e' stato l'`AttributeError`: e' stato che
-    l'utente si e' trovato davanti una riga di Python in inglese **senza una
-    sola cosa da fare** per uscirne dal browser.  Queste prove fissano le due
-    cose che lo rendono risolvibile da solo: la run non parte, e la frase dice
-    di chiudere e riaprire.
+    The underlying problem wasn't the raw `AttributeError`: it was that the
+    user was shown a line of Python with nothing actionable to do about it
+    from the browser. These tests pin down the two things that make it
+    self-resolvable: the run refuses to start, and the message says to
+    close and reopen the app.
     """
 
     def _fissa_la_fotografia(self, fotografia: dict) -> None:
@@ -2013,12 +2020,12 @@ class IlCodiceCambiatoSottoIlProgramma(BancoPipeline):
         self._fissa_la_fotografia(fotografia)
 
     def finge_il_codice_fermo(self) -> None:
-        """La fotografia si riscatta adesso: nessuno ha toccato niente.
+        """Recomputes the code snapshot right now: nobody has touched anything.
 
-        Serve perche' questi test devono dire qualcosa sul programma, non
-        sull'ora in cui gira la suite: senza, basterebbe una modifica a un
-        `.py` durante la passata per farli diventare rossi per il motivo
-        sbagliato.
+        These tests need to say something about the pipeline's behavior,
+        not about whatever moment the suite happens to run at: without
+        this, any `.py` edit made while the suite is running would turn
+        them red for the wrong reason.
         """
 
         self._fissa_la_fotografia(pipeline_jobs.versione_del_codice.fotografia())
@@ -2051,14 +2058,13 @@ class IlCodiceCambiatoSottoIlProgramma(BancoPipeline):
         self.assertEqual(json.loads(self.review.read_bytes()), CONFRONTO_PRECEDENTE)
 
     def test_un_guasto_a_run_avviata_dice_lo_stesso_rimedio(self) -> None:
-        """Il codice cambia **mentre** la catena cammina: stesso rimedio.
+        """The code changes while the pipeline is already running: same remedy applies.
 
-        ⚠ La prima versione di questo test era fasulla, e l'ha detto una
-        controprova rimasta verde: fingeva il codice cambiato **prima**
-        dell'avvio, quindi a fermare la run era la guardia d'ingresso e il ramo
-        del guasto non veniva mai attraversato.  Qui la run parte con il disco
-        fermo, il disco cambia dentro la fase della costruzione, e solo allora
-        il passo esplode — come il 14 agosto.
+        An earlier version of this test was a false positive: it faked the
+        code change before the run started, so the entry guard stopped the
+        run and the failure branch was never actually exercised. Here the
+        run starts with a stable snapshot, the code changes mid-run during
+        the build step, and only then does the step fail.
         """
 
         self.finge_il_codice_fermo()
@@ -2072,7 +2078,7 @@ class IlCodiceCambiatoSottoIlProgramma(BancoPipeline):
         self.assertIn("AttributeError", esito["fermata"]["dettaglio"])
 
     def test_un_guasto_vero_resta_un_guasto_e_non_manda_a_riavviare(self) -> None:
-        """Senza questo, ogni difetto del programma diventerebbe «riavvia»."""
+        """Without this distinction, every real bug would be reported as "please restart"."""
 
         self.finge_il_codice_fermo()
 
@@ -2090,7 +2096,7 @@ class IlCodiceCambiatoSottoIlProgramma(BancoPipeline):
         self.assertIn("chiudi e riapri", esito["fermata"]["message"])
 
     def test_la_frase_tecnica_non_si_butta(self) -> None:
-        """Serve a chi deve capire, ma sta di lato: non è la risposta."""
+        """The technical detail is kept for whoever needs to diagnose it, but stays secondary to the user-facing message."""
 
         self.finge_il_codice_fermo()
 
@@ -2100,7 +2106,7 @@ class IlCodiceCambiatoSottoIlProgramma(BancoPipeline):
         self.assertIn("nome_del_fornitore", esito["fermata"]["dettaglio"])
 
     def test_con_il_codice_fermo_la_run_buona_passa(self) -> None:
-        """La guardia non deve costare una run buona alla settimana."""
+        """The guard must not cost a healthy run its weekly recompute."""
 
         self.finge_il_codice_fermo()
 
@@ -2110,12 +2116,12 @@ class IlCodiceCambiatoSottoIlProgramma(BancoPipeline):
 
 
 class LeUguaglianzeArrivanoAllaLettura(BancoPipeline):
-    """I codici dichiarati uguali devono arrivare al passo che legge i listini.
+    """Barcodes declared equivalent must reach the step that reads the price lists.
 
-    È l'anello dove un difetto non si vedrebbe: la dichiarazione resta scritta
-    nel magazzino, la pagina continua a mostrarla, e la run la ignora in
-    silenzio — cioè il prodotto abbinato a mano torna senza quel fornitore e
-    nessuno sa perché.
+    This is the link where a regression would stay invisible: the
+    declaration keeps showing on the page, but the run silently ignores
+    it — the manually matched product comes back without that supplier and
+    nobody knows why.
     """
 
     CLASSI = [["4009428623194", "8729721830575"]]
@@ -2136,8 +2142,8 @@ class LeUguaglianzeArrivanoAllaLettura(BancoPipeline):
         )
 
     def test_senza_dichiarazioni_non_si_chiede_niente(self) -> None:
-        """Chiedere un file che non c'è fermerebbe la run: una run senza
-        dichiarazioni è il caso normale."""
+        """Requesting a file that doesn't exist would stop the run: a run with
+        no declared equivalences is the normal case."""
 
         self.assertNotIn("--equivalenze", self.argomenti_della_lettura())
         self.assertNotIn("--equivalenze", self.argomenti_della_lettura(uguaglianze_dichiarate=lambda: []))
@@ -2148,9 +2154,9 @@ class LeUguaglianzeArrivanoAllaLettura(BancoPipeline):
         self.assertNotIn("--equivalenze", argomenti)
 
     def test_un_magazzino_che_non_si_legge_non_ferma_il_ricalcolo(self) -> None:
-        """Le uguaglianze sono una memoria in più: perderle costa un abbinamento,
-        fermare la run costa la settimana. Ma si dice nei numeri, invece di
-        lasciare credere che non ce ne fossero."""
+        """Declared equivalences are extra memory: losing them costs one match,
+        stopping the run costs the whole week. It's reported in the run's
+        numbers instead of silently pretending there were none."""
 
         def esplode() -> list[list[str]]:
             raise RuntimeError("il file delle conferme non si apre")
@@ -2170,24 +2176,24 @@ class LeUguaglianzeArrivanoAllaLettura(BancoPipeline):
 
 
 class LaFaseCheCostaDueMinutiDiceQuantiCasiHaDavanti(BancoPipeline):
-    """Rilievo [3] dell'onda 5, meta' servizio.
+    """The AI evaluation step reports how many cases it has ahead of it while it runs.
 
-    L'avanzamento e' «fasi completate diviso nove», tutte pesate uguali.
-    `VALUTAZIONE_AI` e' la sesta e per dichiarazione del codice stesso costa due
-    minuti: la barra sale a scatti fino al 55,6 % e poi resta immobile per il
-    tempo piu' lungo dell'intero ricalcolo. La riga della fase diceva «in corso»
-    e basta, perche' il dettaglio veniva scritto solo alla fine.
+    Progress is "completed phases divided by nine", all weighted equally.
+    `VALUTAZIONE_AI` is the sixth phase and, by the code's own accounting,
+    the longest: the progress bar climbs in steps up to 55.6% and then sits
+    still for the longest stretch of the whole run, so the phase row must
+    say something more than "in progress" while it's running.
 
-    ⚠ Adesso il dettaglio si scrive anche all'inizio, e questa prova lo guarda
-    MENTRE la fase gira: a fase finita quel testo viene sostituito da quello
-    dell'esito, quindi guardarlo dopo non proverebbe niente.
+    The detail is now written at the start too, and this test checks it
+    while the phase is still running: once the phase finishes, that text
+    is replaced by the outcome, so checking it afterward would prove nothing.
     """
 
     def test_mentre_gira_la_riga_della_fase_dice_quanti_casi(self) -> None:
         visto: dict = {}
 
         class EsecutoreCheGuarda(EsecutoreFinto):
-            """Fotografa lo stato del ricalcolo mentre la fase AI sta girando."""
+            """Captures the run's state while the AI evaluation phase is in progress."""
 
             guarda = None
 
@@ -2201,8 +2207,8 @@ class LaFaseCheCostaDueMinutiDiceQuantiCasiHaDavanti(BancoPipeline):
                 {"gestionale_source_row": 2, "supplier": "betulla"},
                 {"gestionale_source_row": 3, "supplier": "betulla"},
             ],
-            # Il rapporto deve dichiarare gli stessi casi della shortlist,
-            # altrimenti l'attivazione si ferma prima — ed e' giusto cosi'.
+            # The report must declare the same case count as the shortlist,
+            # or activation stops earlier — which is the correct behavior.
             rapporto={
                 "casi_ricevuti": 2, "casi_valutabili": 2, "casi_decisi": 1,
                 "chiamate": 2, "costo_usd": 0.0004, "model": "openai/gpt-5.6-luna",
@@ -2242,8 +2248,8 @@ class LaFaseCheCostaDueMinutiDiceQuantiCasiHaDavanti(BancoPipeline):
         self.assertEqual(durante.get("dettaglio"), "1 caso da valutare")
 
     def test_a_fase_finita_il_dettaglio_diventa_quello_dell_esito(self) -> None:
-        """Il dettaglio d'avvio non deve restare li' a dire quanti casi c'erano
-        quando la fase e' finita: quello che serve allora e' com'e' andata."""
+        """The startup detail must not linger once the phase is done: what's
+        useful then is the outcome, not the original case count."""
 
         esito = self.esegui(EsecutoreFinto())
 
@@ -2254,21 +2260,21 @@ class LaFaseCheCostaDueMinutiDiceQuantiCasiHaDavanti(BancoPipeline):
 
 
 class LAttivazioneNonSiIncrociaColSalvataggio(BancoPipeline):
-    """L'unico tratto in cui la catena scrive dati che le rotte stanno servendo.
+    """The one stretch where the pipeline writes files that the HTTP routes also serve.
 
-    `_ripulisci_stato` riscrive `state.json` e subito dopo `review_data.json`
-    diventa quello nuovo.  Un salvataggio della pagina arrivato in mezzo
-    scriveva lo stesso file dallo stesso temporaneo, e quello che restava sul
-    disco non era ne' lo stato dell'utente ne' quello della catena.  Da qui il
-    lucchetto condiviso: e' lo stesso `ReviewStore.lock` delle rotte, passato
-    al costruttore.
+    `_ripulisci_stato` rewrites `state.json`, and right after that
+    `review_data.json` becomes the new comparison. A page save landing in
+    between would write the same file from the same temp file, and what
+    survived on disk would be neither the user's state nor the pipeline's.
+    Hence the shared lock: it's the same `ReviewStore.lock` the HTTP routes
+    use, passed into the constructor.
     """
 
     @staticmethod
     def _libero(lucchetto: threading.RLock) -> bool:
-        """Se un ALTRO filo riesce a prenderlo. Da qui no: un `RLock` si
-
-        riprende quante volte si vuole, e la risposta sarebbe sempre si'."""
+        """Whether a different thread can acquire the lock, not this one: an
+        `RLock` can be reacquired by its own holder any number of times,
+        which would always answer yes."""
 
         esito: list[bool] = []
 
@@ -2301,10 +2307,9 @@ class LAttivazioneNonSiIncrociaColSalvataggio(BancoPipeline):
         self.assertEqual(visto, [False], "la ripulitura dello stato gira senza lucchetto")
 
     def test_anche_la_sostituzione_del_confronto_vivo(self) -> None:
-        """L'altro capo della sezione: il momento in cui il confronto nuovo
-
-        diventa quello vivo. Fra i due estremi lo stato e il confronto non
-        sono d'accordo, ed e' li' che una rotta non deve poter guardare."""
+        """The other end of the section: the moment the new comparison becomes
+        the live one. Between the two ends, state and comparison disagree,
+        and that's exactly the window a route must not be able to observe."""
 
         lucchetto = threading.RLock()
         gestore = self.gestore(EsecutoreFinto(), lucchetto_dati=lucchetto)
@@ -2312,9 +2317,9 @@ class LAttivazioneNonSiIncrociaColSalvataggio(BancoPipeline):
         replace_vero = os.replace
 
         def annota(sorgente, destinazione):
-            # `resolve()` su tutt'e due: su macOS la cartella temporanea e'
-            # `/var/...` per il test e `/private/var/...` per la
-            # configurazione, e il confronto secco non prenderebbe mai.
+            # `resolve()` on both sides: on macOS the temp dir path is
+            # `/var/...` from the test and `/private/var/...` from the
+            # configuration, so a plain equality check would never match.
             if Path(destinazione).resolve() == self.review.resolve():
                 visto.append(self._libero(lucchetto))
             return replace_vero(sorgente, destinazione)
@@ -2340,12 +2345,12 @@ class LAttivazioneNonSiIncrociaColSalvataggio(BancoPipeline):
         self.assertTrue(self._libero(lucchetto))
 
     def test_una_pagina_che_salva_di_continuo_non_pianta_la_catena(self) -> None:
-        """La prova che il rilievo chiedeva: una run e un salvataggio insieme.
+        """A run and continuous page saves happening at the same time must not deadlock.
 
-        Un secondo lucchetto e' il modo classico di guadagnarsi un abbraccio
-        mortale, che qui si vedrebbe come programma piantato a ricalcolo
-        finito.  Il filo qui sotto fa quello che fa la pagina — prende e
-        rilascia — per tutta la durata della run.
+        A second lock is the classic way to earn a deadlock, which here
+        would look like the program hanging right after the run finishes.
+        The thread below does what the page does — acquire, release — for
+        the whole duration of the run.
         """
 
         lucchetto = threading.RLock()
@@ -2376,18 +2381,18 @@ class LAttivazioneNonSiIncrociaColSalvataggio(BancoPipeline):
 
 
 class LOrologioPuoTornareIndietro(BancoPipeline):
-    """Windows Time corregge l'ora quando vuole, e due volte l'anno c'e' l'ora legale.
+    """The wall clock can correct itself mid-run (NTP sync, daylight saving time).
 
-    Una correzione presa in mezzo a un ricalcolo scriveva nella pagina e
-    nell'audit della cartella una durata di un'ora sbagliata, o negativa — ed
-    e' il numero che poi si usa per dire «era lento».
+    A clock adjustment landing in the middle of a recompute could write a
+    negative or otherwise wrong phase duration to the page and to the
+    folder's audit file — the exact number relied on to judge "this was slow".
     """
 
     def test_le_durate_delle_fasi_non_seguono_l_ora_di_parete(self) -> None:
         vero = pipeline_jobs.datetime
 
         class OrologioCheTornaIndietro(vero):
-            """Ogni lettura arriva un secondo prima della precedente."""
+            """Every read returns a time one second earlier than the previous read."""
 
             letture = 0
 
@@ -2411,15 +2416,15 @@ class LOrologioPuoTornareIndietro(BancoPipeline):
             self.assertGreaterEqual(durata, 0, f"{nome} dice di essere durata {durata} secondi")
 
     def test_la_cartella_della_run_porta_ancora_l_ora_locale(self) -> None:
-        """L'unica `datetime.now()` che resta, e non e' una dimenticanza: il
+        """The one remaining `datetime.now()` call is intentional: the folder
+        name is a date meant for a person to read.
 
-        nome della cartella e' una data che una persona legge.
-
-        ⚠ Non basta controllarne la forma: `2026-08-20_1000` in UTC ha la
-        stessa forma di `2026-08-20_1200` in locale, e la prima versione di
-        questa prova restava verde sostituendo l'ora locale con quella UTC.
-        Qui l'orologio finto risponde due ore diverse alle due domande, e il
-        nome deve portare quella locale.
+        Checking only its format isn't enough: `2026-08-20_1000` in UTC has
+        the same shape as `2026-08-20_1200` in local time, so a version of
+        this test that only checked the format would stay green even if
+        local time were silently swapped for UTC. Here the fake clock
+        answers two different hours to the two kinds of calls, and the
+        folder name must carry the local one.
         """
 
         vero = pipeline_jobs.datetime
@@ -2443,10 +2448,10 @@ class LOrologioPuoTornareIndietro(BancoPipeline):
 
 
 class OgniPassoPortaIlSuoTetto(BancoPipeline):
-    """Il tetto lo mette l'orchestratore, e ogni fase ha il suo.
+    """The orchestrator sets a per-step timeout, and each phase has its own.
 
-    Con la tabella dei tetti in un posto solo e nessuno che la legge, il
-    programma tornerebbe ad aspettare per sempre senza che niente lo dica.
+    With the timeout table defined but nothing actually reading it, the
+    pipeline would go back to waiting forever with nothing to say so.
     """
 
     def test_gli_otto_comandi_ricevono_il_tetto_della_loro_fase(self) -> None:
@@ -2457,8 +2462,8 @@ class OgniPassoPortaIlSuoTetto(BancoPipeline):
         for script, tetto in esecutore.tetti.items():
             self.assertIsNotNone(tetto, script)
             self.assertGreater(tetto, 0, script)
-        # La fase AI dura 105 secondi misurati: e' l'unica che non entra nel
-        # tetto delle altre, ed e' l'unica dichiarata a parte.
+        # The AI phase measures 105s: it's the only one that doesn't fit
+        # the other phases' timeout, and the only one declared separately.
         self.assertEqual(
             esecutore.tetti["valuta_shortlist.py"], pipeline_jobs.TETTO_DELLE_FASI["VALUTAZIONE_AI"]
         )
@@ -2468,18 +2473,20 @@ class OgniPassoPortaIlSuoTetto(BancoPipeline):
 
 
 class UnApprendimentoNonRiuscitoNonButtaViaIlConfronto(BancoPipeline):
-    """Il difetto del 21 agosto 2026, e la sua contropartita.
+    """A failed schema-learning attempt must not discard an otherwise valid comparison.
 
-    Su un listino senza riga di intestazione la mappatura guidata dichiara le
-    colonne per NUMERO, `impara_adattatore` rifiuta di ricavarne un'impronta
-    per intestazioni, e la fermata `APPRENDIMENTO_SCHEMA_NON_RIUSCITO` buttava
-    via un confronto **gia' costruito e buono**. Riprovare non serviva —
-    la decisione a mano resta al suo posto e la run rifa' la stessa strada — e
-    ne' chiudere ne' riaprire il programma scioglievano niente.
+    On a price list with no header row, the guided mapping declares
+    columns by position, `impara_adattatore` refuses to derive a
+    header-based fingerprint from it, and the resulting
+    `APPRENDIMENTO_SCHEMA_NON_RIUSCITO` stop must not discard a comparison
+    that was already built and correct. Retrying doesn't help either way —
+    the manual decision stays in place and the run takes the same path
+    again — so neither closing nor reopening the app would resolve anything.
 
-    La contropartita e' l'altra meta' della prova: il ponte a mano si toglie
-    solo per chi e' stato imparato davvero, altrimenti la settimana dopo quel
-    listino non si aprirebbe piu'.
+    The other half of this test suite covers the flip side: the manual
+    mapping bridge is only removed for adapters that were actually
+    learned, otherwise that price list would stop opening the following
+    week.
     """
 
     def gestore_con_una_decisione(self) -> PipelineJobManager:
@@ -2500,7 +2507,7 @@ class UnApprendimentoNonRiuscitoNonButtaViaIlConfronto(BancoPipeline):
         }
 
     def con_esiti(self, gestore: PipelineJobManager, esiti: list[dict]) -> None:
-        """`impara_adattatore` risponde con i rapporti dichiarati, in ordine."""
+        """Makes `impara_adattatore` respond with the given reports, in order."""
 
         rimasti = list(esiti)
 
@@ -2529,7 +2536,7 @@ class UnApprendimentoNonRiuscitoNonButtaViaIlConfronto(BancoPipeline):
         self.assertEqual(detto["severity"], "warning")
 
     def test_il_ponte_a_mano_non_si_toglie_a_chi_non_e_stato_imparato(self) -> None:
-        """Toglierlo vorrebbe dire un listino che la settimana dopo non si apre."""
+        """Removing it would leave a price list unable to open the following week."""
 
         percorso = self.dati / pipeline_jobs.NOME_DECISIONI_MANUALI
         self._scrivi(percorso, {"decisions": [{"file_name": "offerte.xlsx", "state": "NUOVO_FORNITORE"}]})
@@ -2542,10 +2549,10 @@ class UnApprendimentoNonRiuscitoNonButtaViaIlConfronto(BancoPipeline):
         self.assertEqual([voce["file_name"] for voce in rimaste], ["offerte.xlsx"])
 
     def test_nemmeno_un_guasto_vero_butta_via_il_confronto(self) -> None:
-        """Il rifiuto pulito era gia' un avviso; il guasto usciva 1 e fermava tutto.
+        """A clean rejection was already handled as a warning; an actual crash exited 1 and stopped everything.
 
-        Succede su un PC vero: la cartella `app/data/` in sola lettura, il
-        registro tenuto aperto da un antivirus mentre lo si legge.
+        Real cause on a real machine: a read-only `app/data/` folder, or
+        the registry file locked open by antivirus software while being read.
         """
 
         gestore = self.gestore_con_una_decisione()
@@ -2563,7 +2570,7 @@ class UnApprendimentoNonRiuscitoNonButtaViaIlConfronto(BancoPipeline):
         self.assertIn("PermissionError", detto["message"])
 
     def test_un_documento_che_finisce_a_un_altro_fornitore_non_si_liquida_con_niente_da_fare(self) -> None:
-        """La settimana prossima quel listino verrà letto come il listino di un altro."""
+        """Next week that price list would be read as belonging to a different supplier."""
 
         gestore = self.gestore_con_una_decisione()
         motivo = ("Rifiutato: con l'adattatore appena scritto il documento risulta SCHEMA_NOTO "
@@ -2586,8 +2593,9 @@ class UnApprendimentoNonRiuscitoNonButtaViaIlConfronto(BancoPipeline):
 
         gestore._impara_schemi_confermati(self.corsa, "COSTRUZIONE")
 
-        # Rimasto senza voci, il ponte a mano sparisce del tutto: e' il modo in
-        # cui `_fase_riconoscimento` smette di dire «entra per decisione manuale».
+        # With no entries left, the manual bridge file disappears entirely:
+        # this is how `_fase_riconoscimento` stops reporting "covered by a
+        # manual decision".
         self.assertFalse(percorso.exists())
         codici = [voce.get("code") for voce in (gestore.stato().get("avvisi") or [])]
         self.assertNotIn("SCHEMA_NON_MEMORIZZATO", codici)
@@ -2595,14 +2603,12 @@ class UnApprendimentoNonRiuscitoNonButtaViaIlConfronto(BancoPipeline):
 
 
 class LeCartelleDiLavoroNonCresconoPerSempre(BancoPipeline):
-    """Ogni ricalcolo lascia una cartella datata, e nessuno le cancellava.
+    """Old run folders must be pruned automatically.
 
-    Misurate a 13 MB l'una sul confronto vero: con un ricalcolo a settimana
-    fanno circa settecento megabyte l'anno sul disco del negozio, molti di piu'
-    contando i tentativi. Il danno non e' lo spazio: e' che a disco pieno si
-    aprono in fila i guasti che questo file esiste per evitare.
-
-    Prove eseguite.
+    Measured at about 13 MB each on the real comparison: at one recompute
+    a week that's roughly 700 MB a year on the store PC, more counting
+    retries. The real cost isn't disk space, it's that a full disk opens
+    up exactly the failure modes this test file exists to prevent.
     """
 
     def cartelle(self) -> list[str]:
@@ -2623,25 +2629,25 @@ class LeCartelleDiLavoroNonCresconoPerSempre(BancoPipeline):
         self.assertEqual(esito["stato"], pipeline_jobs.COMPLETATO, esito.get("messaggio"))
 
         rimaste = self.cartelle()
-        # Le quattro piu' vecchie se ne sono andate…
+        # The oldest ones are gone...
         for sparita in ("2026-01-01_0900", "2026-02-01_0900", "2026-03-01_0900"):
             self.assertNotIn(sparita, rimaste)
-        # …e le piu' recenti sono ancora li', insieme a quella appena creata.
+        # ...and the most recent ones are still there, plus the one just created.
         self.assertIn("2026-07-01_0900", rimaste)
         self.assertIn(esito["runId"], rimaste)
         self.assertLessEqual(len(rimaste), pipeline_jobs.ESECUZIONI_DA_TENERE + 1)
 
     def test_la_cartella_del_confronto_vivo_non_si_tocca_mai(self) -> None:
-        """È quella che la pagina riapre per dire quali colonne ha letto.
+        """This is the folder the page reopens to explain which columns it read.
 
-        Il confronto vivo dichiara da quale run viene: se quella cartella
-        sparisce perche' e' vecchia, «Quali colonne legge» e la mappatura
-        guidata rispondono «la cartella di quel confronto non c'e' piu'» su un
-        confronto che si sta guardando in quel momento.
+        The live comparison declares which run it came from: if that
+        folder is pruned for being old, "Quali colonne leggo" (which columns
+        do I read) and the guided mapping would answer "that comparison's
+        folder is gone" for a comparison currently being viewed.
         """
 
-        # Il confronto vivo del banco viene da una run chiamata «vecchia», ed e'
-        # la piu' vecchia di tutte in ordine alfabetico.
+        # This test fixture's live comparison comes from a run named
+        # "vecchia", which alphabetically sorts as the oldest of all.
         self._scrivi(self.review, {**CONFRONTO_PRECEDENTE,
                                    "run": {"id": "vecchia", "status": "ready", "pipelineRunId": "vecchia"}})
         self.finte("vecchia", "2026-01-01_0900", "2026-02-01_0900", "2026-03-01_0900",
@@ -2654,7 +2660,7 @@ class LeCartelleDiLavoroNonCresconoPerSempre(BancoPipeline):
         self.assertIn("vecchia", self.cartelle())
 
     def test_una_cartella_che_non_si_cancella_non_ferma_il_ricalcolo(self) -> None:
-        """Fare spazio e' una comodita', non una precondizione per lavorare."""
+        """Freeing up disk space is a convenience, not a precondition for running."""
 
         self.finte("2026-01-01_0900", "2026-02-01_0900", "2026-03-01_0900", "2026-04-01_0900",
                    "2026-05-01_0900", "2026-06-01_0900", "2026-07-01_0900")
@@ -2676,17 +2682,16 @@ class LeCartelleDiLavoroNonCresconoPerSempre(BancoPipeline):
 
 
 class UnoStatoCheNonSiScriveNonFerma(BancoPipeline):
-    """⚠ Il guasto peggiore era il più silenzioso.
+    """A pipeline that can't persist its own status must still finish cleanly.
 
-    `pipeline_status.json` si riscrive a ogni fase. Se non si scrive — disco
-    pieno, cartella in sola lettura, antivirus sul temporaneo — l'eccezione
-    partiva da dentro il gestore d'errore di `_lavora`, che chiama di nuovo
-    `_segna_fase` e riprova la stessa scrittura fallita: la seconda eccezione
-    usciva prima che lo stato diventasse `ERRORE`. Il filo moriva, il lucchetto
-    si liberava, e in pagina restava una barra ferma su «in corso» che non
-    sarebbe avanzata mai più, col ricalcolo e i caricamenti spenti.
-
-    Prove eseguite.
+    `pipeline_status.json` is rewritten on every phase. If the write
+    fails (full disk, read-only folder, antivirus locking the temp file),
+    the failure must not originate a second exception inside `_lavora`'s
+    own error handler when it calls `_segna_fase` again to record
+    `ERRORE`: a retry of the same failing write would escape before the
+    status could ever become `ERRORE`, the background thread would die,
+    the lock would release, and the page would be left with a progress bar
+    stuck on "in progress" forever, with recompute and uploads both disabled.
     """
 
     def senza_scrittura(self):
@@ -2708,12 +2713,12 @@ class UnoStatoCheNonSiScriveNonFerma(BancoPipeline):
             esito = gestore.attendi(timeout=30)
 
         self.assertEqual(esito["stato"], pipeline_jobs.COMPLETATO, esito.get("messaggio"))
-        # E lo dice, una volta sola: una console piena della stessa riga non la
-        # legge nessuno.
+        # And reported once, not spammed: a console filled with the same
+        # line repeated isn't something anyone reads.
         self.assertEqual(console.getvalue().count("[AVVISO] Non riesco a scrivere"), 1)
 
     def test_una_run_che_fallisce_arriva_a_dirlo(self) -> None:
-        """È il caso che inchiodava la pagina: guasto vero + stato non scrivibile."""
+        """The combination that can hang the page: a real failure plus an unwritable status file."""
 
         self.senza_scrittura()
 
@@ -2727,7 +2732,7 @@ class UnoStatoCheNonSiScriveNonFerma(BancoPipeline):
 
         self.assertEqual(esito["stato"], pipeline_jobs.ERRORE)
         self.assertNotEqual(esito["stato"], pipeline_jobs.IN_CORSO)
-        # E il lucchetto e' tornato libero: si riprova senza chiudere niente.
+        # And the lock is released: the user can retry without closing anything.
         self.assertTrue(gestore.lucchetto_lavori.acquire(blocking=False))
         gestore.lucchetto_lavori.release()
 

@@ -1,27 +1,28 @@
 #!/usr/bin/env python3
-"""Due codici a barre dichiarati uguali, e che cosa succede alla catena.
+"""Two barcodes declared equivalent, and what that does to the pipeline.
 
-Il caso da cui nasce, misurato il 17 agosto 2026 sul confronto vero
-`2026-08-17_1746`. `LUXA SAPONE LIQ. EROG.250ML` sta nel gestionale col codice
-4009428623194, che **solo CIPRESSO** usa, a 1,28 €/pz. Lo stesso articolo sta su
-NOCE, LARICE e BETULLA sotto **8729721830575**, a 1,15, 1,1625 e 1,19.
+The case this is built on: `LUXA SAPONE LIQ. EROG.250ML` sits in the
+management software under one EAN, used only by one supplier, at 1.28 per
+piece. The same item sits with three other suppliers under a different EAN,
+at 1.15, 1.1625 and 1.19.
 
-Non è un difetto della selezione automatica: la shortlist di BETULLA aveva la riga
-giusta, **seconda**, a 0,572 contro lo 0,578 della variante sbagliata. La parola
-che decide è `ORIGINAL` contro `SETA`, e nel nome del gestionale non c'è —
-`EROG.` sta per erogatore. È indecidibile dal testo, quindi nessun punteggio e
-nessun modello lo risolveranno mai; una persona col listino davanti sì.
+This is not a defect in the automatic matching: one supplier's shortlist had
+the right row in second place, at a score of 0.572 against 0.578 for the
+wrong variant. The deciding word is "ORIGINAL" versus "SETA", and it is
+missing from the management software's name — "EROG." stands for dispenser.
+It cannot be decided from the text, so no scoring and no model will ever
+resolve it; a person looking at the price list can.
 
-Le due direzioni dell'errore non hanno lo stesso prezzo, e le prove sono scritte
-su questo:
+The two kinds of error do not cost the same, and the tests are built around
+that asymmetry:
 
-* **non dichiarare un'uguaglianza** costa un prodotto comprato più caro.
-* **dichiararne una sbagliata** costa un ordine sbagliato, presso **tutti** i
-  fornitori, **ogni settimana**, finché qualcuno non la toglie.
+* not declaring an equivalence costs one product bought at a higher price.
+* declaring a wrong one costs a wrong order, at every supplier, every week,
+  until someone removes it.
 
-Per questo la prova più importante qui dentro non è che l'uguaglianza funzioni:
-è che **senza uguaglianze dichiarate la catena faccia esattamente quello che
-faceva prima**, byte per byte.
+For this reason the most important test here is not that a declared
+equivalence works: it is that with no equivalences declared, the pipeline
+behaves exactly as it did before, byte for byte.
 """
 
 from __future__ import annotations
@@ -63,8 +64,9 @@ def riga(source_row: int, ean: str, descrizione: str, prezzo: str = "1.15",
     }
 
 
-# Il caso vero in miniatura: il gestionale con un codice, tre fornitori con
-# l'altro, e CIPRESSO che usa lo stesso del gestionale.
+# The real case in miniature: the management software with one code, three
+# suppliers with the other, and one supplier that uses the same code as the
+# management software.
 MASTER = [prodotto(330, EAN_GESTIONALE, "LUXA SAPONE LIQ. EROG.250ML")]
 FORNITORI = {
     "cipresso": [riga(900, EAN_GESTIONALE, "LUXA SAPONE LIQUIDO EROGATORE 250", "1.28")],
@@ -79,7 +81,7 @@ def stati(matching: list[dict[str, Any]]) -> dict[str, str]:
 
 
 class SenzaDichiarazioniNienteCambiaTests(unittest.TestCase):
-    """La prova che protegge i 933 abbinamenti che già funzionano."""
+    """Protects the matches that already work today."""
 
     def test_il_risultato_e_identico_a_quello_di_prima(self) -> None:
         senza_argomento = prepare_sources.build_matching(MASTER, FORNITORI)
@@ -112,8 +114,8 @@ class UnaDichiarazioneValeSuTuttiIFornitoriTests(unittest.TestCase):
         )
 
     def test_i_tre_fornitori_diventano_abbinamenti_per_codice_esatto(self) -> None:
-        """È il punto di tutto: a valle non serve nessun caso speciale, perché a
-        valle non si vede nessuna differenza."""
+        """The whole point: nothing downstream needs a special case, because
+        nothing downstream can tell the difference."""
 
         matching, _, _ = self.esegui()
 
@@ -125,9 +127,9 @@ class UnaDichiarazioneValeSuTuttiIFornitoriTests(unittest.TestCase):
         })
 
     def test_la_riga_dichiara_da_dove_viene(self) -> None:
-        """Chi guarda un ordine sbagliato deve poter risalire alla decisione
-        umana che l'ha prodotto: senza, una riga entrata per una dichiarazione è
-        indistinguibile da una trovata dal codice a barre."""
+        """Anyone reviewing a wrong order must be able to trace it back to the
+        human decision that produced it: without this, a row matched through a
+        declared equivalence is indistinguishable from one found by barcode."""
 
         matching, _, _ = self.esegui()
         noce = matching[0]["suppliers"]["noce"]
@@ -136,8 +138,8 @@ class UnaDichiarazioneValeSuTuttiIFornitoriTests(unittest.TestCase):
         self.assertNotIn("via_uguaglianza", matching[0]["suppliers"]["cipresso"])
 
     def test_i_tre_escono_dalla_coda_dell_ai(self) -> None:
-        """Non è solo un prodotto abbinato: sono tre domande in meno al modello,
-        e tre rischi in meno di una risposta sbagliata."""
+        """Not just a matched product: three fewer questions for the model, and
+        three fewer risks of a wrong answer."""
 
         _, coda_senza, _ = prepare_sources.build_matching(MASTER, FORNITORI)
         _, coda_con, _ = self.esegui()
@@ -146,9 +148,8 @@ class UnaDichiarazioneValeSuTuttiIFornitoriTests(unittest.TestCase):
         self.assertEqual(coda_con, [])
 
     def test_il_guadagno_si_conta(self) -> None:
-        """Un guadagno che non si conta non è una scelta più di uno scarto che
-        non si conta: è il solo posto da cui si vede se quelle dichiarazioni
-        stanno ancora servendo."""
+        """An uncounted gain is as much a choice as an uncounted loss: this is
+        the only place that shows whether these declarations still pay off."""
 
         _, _, audit = self.esegui()
 
@@ -157,7 +158,7 @@ class UnaDichiarazioneValeSuTuttiIFornitoriTests(unittest.TestCase):
         self.assertEqual(audit["exact_unique_usable"]["noce"], 1)
 
     def test_la_catena_di_dichiarazioni_arriva_fino_in_fondo(self) -> None:
-        """A≡B e B≡C: cercando A si trova la riga che porta C."""
+        """A≡B and B≡C: searching for A finds the row carrying C."""
 
         fornitori = {"noce": [riga(4794, "999", "LUXA SAPONE EROGATORE ORIGINAL ML.250")]}
         matching, _, _ = prepare_sources.build_matching(
@@ -167,9 +168,10 @@ class UnaDichiarazioneValeSuTuttiIFornitoriTests(unittest.TestCase):
         self.assertEqual(stati(matching)["noce"], "EAN_ESATTO")
 
     def test_un_codice_scritto_in_un_altro_modo_si_ritrova_lo_stesso(self) -> None:
-        """Il gestionale scrive gli EAN a mano e i fogli li rileggono come
-        numeri: senza la riduzione a cifre, la dichiarazione di lunedì non
-        varrebbe martedì e nessuno saprebbe perché."""
+        """The management software's EANs are typed by hand, and spreadsheets
+        read them back as numbers: without normalizing to digits, a
+        declaration made one day would silently stop matching the next, with
+        no visible reason."""
 
         fornitori = {"noce": [riga(4794, f" {EAN_FORNITORI} ", "LUXA ORIGINAL")]}
         matching, _, _ = prepare_sources.build_matching(
@@ -179,14 +181,13 @@ class UnaDichiarazioneValeSuTuttiIFornitoriTests(unittest.TestCase):
         self.assertEqual(stati(matching)["noce"], "EAN_ESATTO")
 
     def test_lo_stesso_codice_ripetuto_non_duplica_la_riga(self) -> None:
-        """La riga deve restare una: contarla due volte la farebbe diventare
-        `EAN_AMBIGUO`, cioè una domanda all'AI al posto di un abbinamento.
+        """The row must stay one: counting it twice would turn the match into
+        `EAN_AMBIGUO`, an AI question instead of a match.
 
-        ⚠ A garantirlo è `mappa_delle_uguaglianze`, che toglie i codici ripetuti
-        e il codice del prodotto stesso — e una riga di listino ha un solo EAN.
-        La guardia contro i doppioni che stava in `build_matching` è stata tolta
-        proprio perché una controprova l'ha trovata **inerte**: questa prova
-        controlla la proprietà, non la riga di codice che la produceva.
+        `mappa_delle_uguaglianze` guarantees this by dropping repeated codes
+        and the product's own code — a price-list row has exactly one EAN.
+        This test checks the property itself, not the line of code that
+        happens to produce it, so it still holds if the implementation moves.
         """
 
         fornitori = {"noce": [riga(4794, EAN_FORNITORI, "LUXA ORIGINAL")]}
@@ -202,8 +203,8 @@ class UnaDichiarazioneValeSuTuttiIFornitoriTests(unittest.TestCase):
         self.assertEqual(stati(matching)["noce"], "EAN_ESATTO")
         self.assertEqual(len(matching[0]["suppliers"]["noce"]["candidates"]), 1)
         atteso = {EAN_GESTIONALE: [EAN_FORNITORI], EAN_FORNITORI: [EAN_GESTIONALE]}
-        # Il codice ripetuto dentro il gruppo, e la stessa coppia dichiarata due
-        # volte in due gruppi: sono i due modi in cui un doppione può arrivare.
+        # A repeated code inside one group, and the same pair declared twice
+        # across two groups: the two ways a duplicate can show up.
         self.assertEqual(
             prepare_sources.mappa_delle_uguaglianze([[EAN_GESTIONALE, EAN_FORNITORI, EAN_GESTIONALE]]),
             atteso,
@@ -216,8 +217,8 @@ class UnaDichiarazioneValeSuTuttiIFornitoriTests(unittest.TestCase):
         )
 
     def test_due_righe_diverse_restano_una_domanda_da_fare(self) -> None:
-        """Il ripiego giusto: se la dichiarazione porta due righe utilizzabili
-        presso lo stesso fornitore, la catena non sceglie da sola — chiede."""
+        """The right fallback: if the declaration brings two usable rows for the
+        same supplier, the pipeline does not choose on its own — it asks."""
 
         fornitori = {"noce": [
             riga(4794, EAN_FORNITORI, "LUXA SAPONE EROGATORE ORIGINAL ML.250"),
@@ -232,7 +233,7 @@ class UnaDichiarazioneValeSuTuttiIFornitoriTests(unittest.TestCase):
 
 
 class IlFileDelleUguaglianzeTests(unittest.TestCase):
-    """Come la dichiarazione arriva dallo SQLite del servizio fino allo script."""
+    """How a declaration travels from the service's SQLite store to the script."""
 
     def scrivi(self, contenuto: Any) -> Path:
         cartella = tempfile.TemporaryDirectory()
@@ -242,13 +243,13 @@ class IlFileDelleUguaglianzeTests(unittest.TestCase):
         return percorso
 
     def test_non_chiederlo_e_legittimo(self) -> None:
-        """Vuol dire che per questa run non ce ne sono, ed è il caso normale."""
+        """Means this run has none, which is the normal case."""
 
         self.assertEqual(leggi_uguaglianze(None), [])
 
     def test_chiederlo_e_non_trovarlo_no(self) -> None:
-        """Sono dichiarazioni umane: farle sparire in silenzio riporterebbe i
-        prodotti abbinati a mano allo stato di prima senza che niente lo dica."""
+        """These are human declarations: silently dropping them would revert
+        manually matched products to their prior state with no visible sign."""
 
         with self.assertRaises(ValueError) as errore:
             leggi_uguaglianze(Path("questo-file-non-esiste.json"))
@@ -256,7 +257,7 @@ class IlFileDelleUguaglianzeTests(unittest.TestCase):
         self.assertIn("abbinati a mano", str(errore.exception))
 
     def test_si_legge_con_la_chiave_e_senza(self) -> None:
-        """Un file scritto a mano per una prova non deve sbagliare per una chiave."""
+        """A hand-written test file must not fail over a missing wrapper key."""
 
         con_chiave = self.scrivi({"classi": [[EAN_GESTIONALE, EAN_FORNITORI]]})
         senza = self.scrivi([[EAN_GESTIONALE, EAN_FORNITORI]])
@@ -272,7 +273,7 @@ class IlFileDelleUguaglianzeTests(unittest.TestCase):
 
 
 class LoScriptAccettaLIngressoTests(unittest.TestCase):
-    """L'argomento esiste davvero sulla riga di comando, non solo nel codice."""
+    """The argument really exists on the command line, not just in the code."""
 
     def test_equivalenze_e_un_argomento_dichiarato(self) -> None:
         esito = subprocess.run(

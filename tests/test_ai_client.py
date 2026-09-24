@@ -1,15 +1,15 @@
-"""Il client AI provato senza toccare la rete, un caso alla volta.
+"""Tests the AI client without touching the network, one case at a time.
 
-Il trasporto HTTP e' iniettato dal costruttore: qui dentro e' sempre un copione
-di risposte scritte a mano. Nessun test apre una presa di rete, nessuno legge
-`app/data/secrets.json`: la chiave la passano i test, ed e' finta.
+The HTTP transport is injected through the constructor: every test replays a
+hand-written script of responses. No test opens a socket or reads
+`app/data/secrets.json`; the key the tests pass is fake.
 
-Il test che conta piu' di tutti e' `test_02_finish_reason_length_e_troncata`.
-L'11 agosto 2026, con `max_tokens` a 400, 11 risposte su 30 tornavano con
-`finish_reason: "length"`, `content` vuoto e nessun errore HTTP: il modello
-aveva speso tutto il tetto a ragionare. Letta come «nessun candidato va bene»,
-quella risposta fa sparire un prodotto dal confronto senza dire niente. Se quel
-test sparisce, il difetto torna.
+`test_02_finish_reason_length_e_troncata` is the test that matters most.
+Measured with `max_tokens` at 400: 11 responses out of 30 came back with
+`finish_reason: "length"`, empty `content`, and no HTTP error — the model had
+spent the whole budget reasoning. Read as "no candidate is good enough", that
+response silently drops a product from the comparison. If this test
+disappears, the defect comes back.
 """
 
 from __future__ import annotations
@@ -38,8 +38,8 @@ from ai_client import Candidato, CasoValutazione, ClientAI  # noqa: E402
 
 CHIAVE_FINTA = "chiave-di-prova-non-vera"
 
-# Le sette chiavi di references/ai-decision-format.md, quelle che
-# scripts/merge_match_decisions.py si aspetta di leggere.
+# The seven keys from `references/ai-decision-format.md`, the ones
+# `scripts/merge_match_decisions.py` expects to read.
 CHIAVI_DECISIONE = {
     "gestionale_source_row",
     "supplier",
@@ -86,7 +86,7 @@ def risposta(
     token_ingresso: int = 210,
     token_uscita: int = 48,
 ) -> tuple[int, dict]:
-    """Una risposta 200 come quelle vere di OpenRouter."""
+    """A 200 response shaped like a real OpenRouter one."""
 
     return 200, {
         "id": "gen-prova",
@@ -119,7 +119,7 @@ def decisione_del_modello(
 
 
 class TrasportoFinto:
-    """Risponde da un copione e conta le chiamate. Non tocca la rete."""
+    """Replays a scripted list of responses and counts calls. Never touches the network."""
 
     def __init__(self, copione) -> None:
         self.copione = list(copione)
@@ -142,7 +142,7 @@ class TrasportoFinto:
 
 
 class ProvaClientAI(unittest.TestCase):
-    """I diciotto casi obbligatori del contratto, piu' qualche presidio."""
+    """The eighteen required cases of the contract, plus a few extra safeguards."""
 
     # ------------------------------------------------------------------ 1
     def test_01_risposta_valida_da_una_decisione_nel_formato_del_consumatore(self):
@@ -168,7 +168,7 @@ class ProvaClientAI(unittest.TestCase):
 
     # ------------------------------------------------------------------ 2
     def test_02_finish_reason_length_e_troncata(self):
-        """La trappola misurata: tetto dei token finito a ragionare, non un rifiuto."""
+        """The measured trap: the token budget runs out on reasoning, not a rejection."""
 
         troncata = risposta("", finish_reason="length", token_uscita=400)
         trasporto = TrasportoFinto([troncata, troncata])
@@ -178,7 +178,7 @@ class ProvaClientAI(unittest.TestCase):
 
         self.assertEqual(esito.stato, "TRONCATA")
         self.assertIsNone(esito.decisione)
-        # E soprattutto: non e' diventata un rifiuto.
+        # And, above all, it did not turn into a rejection.
         self.assertNotIn("REJECT", json.dumps(asdict(esito), ensure_ascii=False))
         self.assertEqual(trasporto.quante, 2, "una troncatura si ritenta una volta")
 
@@ -437,9 +437,9 @@ class ProvaClientAI(unittest.TestCase):
     # ------------------------------------------------------------------ 18
     def test_18_la_chiave_non_esce_mai_dal_client(self):
         segreta = "chiave-segretissima-di-daniele-0123456789"
-        # Il 401 riecheggia l'header, e lo fa proprio a cavallo dei 300 caratteri
-        # a cui il messaggio viene accorciato: se si accorciasse prima di
-        # nascondere la chiave, ne resterebbe fuori il primo pezzo.
+        # The 401 echoes the header, straddling the 300-character point where the
+        # message gets truncated: if truncation happened before the key is
+        # masked, the first part of it would leak.
         riempimento = "controlla le credenziali del servizio; " * 6
         corpo = {
             "error": {
@@ -457,8 +457,8 @@ class ProvaClientAI(unittest.TestCase):
         tutto = json.dumps(asdict(esito), ensure_ascii=False) + repr(esito)
         self.assertNotIn(segreta, tutto)
         self.assertNotIn(segreta, esito.dettaglio)
-        # Nemmeno un pezzo di chiave: accorciare prima di nascondere ne lascerebbe
-        # fuori l'inizio, e mezza chiave è comunque una chiave uscita.
+        # Not even a fragment of the key: truncating before masking would leave
+        # its start exposed, and half a key is still a leaked key.
         pezzi = {segreta[i:i + 12] for i in range(len(segreta) - 11)}
         self.assertEqual(sorted(pezzo for pezzo in pezzi if pezzo in tutto), [])
         self.assertIn(ai_client.NASCOSTO, esito.dettaglio)
@@ -467,7 +467,7 @@ class ProvaClientAI(unittest.TestCase):
     # -------------------------------------------------------- presidi in più
 
     def test_19_la_chiave_sta_nel_campo_annidato_di_secrets(self):
-        """Cercarla al primo livello dà None e poi 401: trappola già pagata."""
+        """Looking for it at the top level gives None and then a 401: a known trap."""
 
         cartella = Path(tempfile.mkdtemp(prefix="prova_secrets_"))
         self.addCleanup(_ripulisci, cartella)
@@ -497,7 +497,7 @@ class ProvaClientAI(unittest.TestCase):
             import os
 
             os.environ.pop("OPENROUTER_MODEL", None)
-            # Il file può non esistere: è il caso normale oggi, non un errore.
+            # The file can be missing: that is the common case, not an error.
             predefinita = ai_client.carica_configurazione(mancante)
             self.assertEqual(predefinita, dict(ai_client.CONFIGURAZIONE_PREDEFINITA))
 
@@ -526,7 +526,7 @@ class ProvaClientAI(unittest.TestCase):
         self.assertEqual(trasporto.quante, 0, "i casi si controllano prima di partire")
 
     def test_22_il_modello_vede_solo_descrizione_riga_e_punteggio(self):
-        """Mai l'EAN (è la verità del banco di prova) e mai il prezzo."""
+        """Never the EAN (the test's ground truth) and never the price."""
 
         testo = ai_client.caso_come_testo(caso())
 
@@ -540,7 +540,7 @@ class ProvaClientAI(unittest.TestCase):
         )
 
     def test_23_il_prompt_v1_e_quello_misurato_alla_lettera(self):
-        """Il prompt si cambia misurando (5b), non riscrivendolo a occhio."""
+        """The prompt changes by measurement, not by rewriting it on a hunch."""
 
         atteso = (
             "Sei un buyer esperto di prodotti per la casa e la persona.\n"
@@ -564,10 +564,10 @@ class ProvaClientAI(unittest.TestCase):
 
         self.assertEqual(ai_client.leggi_prompt("v1"), atteso)
 
-        # Il prompt che parte davvero e' quello della versione configurata, e il
-        # predefinito non e' piu' v1: la 5b l'ha misurato e sostituito. Qui si
-        # verifica che il client mandi il file della versione che dichiara, non
-        # un testo scritto dentro il codice.
+        # The prompt actually sent is the one for the configured version, and
+        # the default is now a newer, measured one. This checks that the
+        # client sends the file for the version it declares, not a string
+        # baked into the code.
         trasporto = TrasportoFinto([risposta(decisione_del_modello())])
         client = ClientAI(configurazione(versione_prompt="v1"), trasporto=trasporto, chiave=CHIAVE_FINTA)
         client.valuta_candidati(caso())
@@ -578,8 +578,7 @@ class ProvaClientAI(unittest.TestCase):
 
 
     def test_24_prova_connessione_chiama_davvero_e_non_usa_la_memoria(self):
-        """Serve a scoprire una chiave o un model id sbagliati: se leggesse dalla
-        memoria non proverebbe niente."""
+        """Confirms a bad key or model id right away: reading from memory would prove nothing."""
 
         trasporto = TrasportoFinto(
             [risposta(decisione_del_modello(source_row=1)), risposta(decisione_del_modello(source_row=1))]
@@ -598,18 +597,14 @@ class ProvaClientAI(unittest.TestCase):
         self.assertEqual(senza_chiave.prova_connessione().stato, "SENZA_CHIAVE")
 
 
-# ============================================================================
-# I presidi delle correzioni della Fase 5a.
-#
-# Le tre revisioni della 5a hanno trovato ventinove difetti con la suite verde:
-# la suite verde, da sola, non li vedeva. Quello che segue difende le
-# correzioni, una per una, perche' la riscrittura che le togliesse debba far
-# diventare rosso qualcosa.
-# ============================================================================
+# Guards for a round of review that found twenty-nine defects with the suite
+# green: the green suite, on its own, did not see them. What follows defends
+# each correction individually, so a rewrite that removed one turns something
+# red.
 
 
 def _scrivi_memoria(percorso: Path, voci: dict) -> None:
-    """Un file di memoria scritto a mano, come se lo avesse lasciato una run."""
+    """A memory file written by hand, as if a run had left it there."""
 
     percorso.write_bytes(
         json.dumps({"versione": 1, "voci": voci}, ensure_ascii=False, indent=2).encode("utf-8")
@@ -621,12 +616,13 @@ def _voci_sul_disco(percorso: Path) -> dict:
 
 
 def chiave_di(caso_dato: CasoValutazione, *, versione_prompt: str | None = None) -> str:
-    """La chiave con cui il client indirizza quel caso, col modello predefinito.
+    """The key the client uses to address that case, with the default model.
 
-    La versione del prompt segue il predefinito: cablarla qui vorrebbe dire che
-    cambiando prompt questi test smettono di parlare della memoria vera. E
-    porta l'impronta del **testo** del prompt, come fa il client: sigillare la
-    sola etichetta lasciava valide le risposte di un prompt riscritto."""
+    The prompt version follows the default: hardcoding it here would mean
+    that changing the prompt stops these tests from talking about the real
+    memory. It carries the fingerprint of the prompt's text, like the client
+    does: sealing only the version label would keep a rewritten prompt's old
+    responses valid."""
 
     versione = versione_prompt or ai_client.CONFIGURAZIONE_PREDEFINITA["versione_prompt"]
     return ai_client.chiave_memoria(
@@ -647,7 +643,7 @@ def voce_di_memoria(decisione) -> dict:
 
 
 def decisione_salvata(caso_dato: CasoValutazione, **modifiche) -> dict:
-    """Una decisione nel formato del consumatore, come sta scritta in memoria."""
+    """A decision in the consumer format, as it is stored in memory."""
 
     decisione = {
         "gestionale_source_row": caso_dato.gestionale_source_row,
@@ -663,7 +659,7 @@ def decisione_salvata(caso_dato: CasoValutazione, **modifiche) -> dict:
 
 
 class TrasportoVietato:
-    """Solleva se lo si chiama: serve a provare che non lo si chiama."""
+    """Raises if called; confirms that it never is."""
 
     def __init__(self) -> None:
         self.quante = 0
@@ -674,7 +670,7 @@ class TrasportoVietato:
 
 
 class TrasportoLento:
-    """Conta sotto lucchetto e ci mette qualche millisecondo: apposta, per i thread."""
+    """Counts under a lock and takes a few milliseconds, on purpose, for thread tests."""
 
     def __init__(self, *, costo: float = 0.0, pausa: float = 0.005) -> None:
         self._lucchetto = threading.Lock()
@@ -697,19 +693,19 @@ class ConCartellaTemporanea(unittest.TestCase):
 
 
 class ProvaMemoriaDelClientAI(ConCartellaTemporanea):
-    """La memoria vive in app/data/, fuori dal controllo di versione: e' un file
-    che si puo' modificare a mano, e da cui non deve poter uscire una decisione
-    che il client non avrebbe mai prodotto."""
+    """The memory file lives in `app/data/`, outside version control: it can be
+    edited by hand, and no decision the client would never have produced
+    should be able to come out of it."""
 
     def test_48_una_voce_con_decisione_che_non_e_un_oggetto_non_diventa_un_ricordo(self):
-        """Il primo dei due strati che difendono la memoria.
+        """The first of two layers defending the memory.
 
-        Il secondo — `decisione_non_utilizzabile` — e' provato da test_25, 26 e
-        27. Dalla superficie pubblica i due strati convergono: tolto il primo,
-        il secondo ferma comunque la voce e non si vede nessuna differenza. Per
-        questo il test guarda un metodo privato: e' l'unico modo di accorgersi
-        se qualcuno domani semplifica «tanto valida chi chiama» e la difesa in
-        profondita' diventa difesa singola senza che nessuno l'abbia deciso.
+        The second — `decisione_non_utilizzabile` — is covered by test_25, 26
+        and 27. From the public surface the two layers converge: remove the
+        first and the second still stops the entry, with no visible
+        difference. That is why this test looks at a private method: it is
+        the only way to notice if someone later decides "the caller validates
+        anyway" and defense in depth silently becomes a single check.
         """
 
         percorso = self.cartella() / "memoria_ai.json"
@@ -744,7 +740,7 @@ class ProvaMemoriaDelClientAI(ConCartellaTemporanea):
                 self.assertEqual(client.contabilita["dalla_memoria"], 0)
 
     def test_26_una_voce_manomessa_che_accetta_una_riga_fuori_shortlist_viene_scartata(self):
-        """La decisione piu' pericolosa che questo progetto conosca."""
+        """The most dangerous decision this project can make."""
 
         percorso = self.cartella() / "memoria_ai.json"
         manomessa = decisione_salvata(caso(), source_row=999)
@@ -766,7 +762,7 @@ class ProvaMemoriaDelClientAI(ConCartellaTemporanea):
         percorso = self.cartella() / "memoria_ai.json"
         storta = decisione_salvata(caso())
         del storta["requires_user_confirmation"]
-        storta["confidenza"] = "ALTA"          # il nome italiano non è quello del formato
+        storta["confidenza"] = "ALTA"          # wrong key name, not part of the format
         _scrivi_memoria(percorso, {chiave_di(caso()): voce_di_memoria(storta)})
         trasporto = TrasportoFinto([risposta(decisione_del_modello())])
         client = ClientAI(
@@ -782,7 +778,7 @@ class ProvaMemoriaDelClientAI(ConCartellaTemporanea):
         self.assertEqual(client.contabilita["dalla_memoria"], 0)
 
     def test_28_la_memoria_su_disco_risparmia_la_chiamata_alla_run_successiva(self):
-        """Il giro completo: un client scrive, quello dopo legge e non chiama."""
+        """The full loop: one client writes, the next reads and does not call."""
 
         percorso = self.cartella() / "memoria_ai.json"
         primo = ClientAI(
@@ -808,7 +804,7 @@ class ProvaMemoriaDelClientAI(ConCartellaTemporanea):
         self.assertEqual(secondo.contabilita["chiamate"], 0)
 
     def test_29_un_fallimento_non_entra_in_memoria(self):
-        """La run dopo deve poterlo ritentare: solo le risposte valide si ricordano."""
+        """The next run must be able to retry it: only valid responses get remembered."""
 
         percorso = self.cartella() / "memoria_ai.json"
         troncata = risposta("", finish_reason="length", token_uscita=400)
@@ -822,8 +818,8 @@ class ProvaMemoriaDelClientAI(ConCartellaTemporanea):
 
         self.assertEqual(primo.stato, "TRONCATA")
         self.assertEqual(secondo.stato, "TRONCATA")
-        # assertIsNone e non assertFalse: un {} passerebbe per «nessuna decisione»
-        # e sarebbe invece una voce di memoria vuota entrata di soppiatto.
+        # assertIsNone rather than assertFalse: a {} would pass for "no decision"
+        # while actually being an empty memory entry that slipped through.
         self.assertIsNone(primo.decisione)
         self.assertIsNone(secondo.decisione)
         self.assertEqual(trasporto.quante, 4, "due tentativi per valutazione, due volte")
@@ -860,8 +856,8 @@ class ProvaMemoriaDelClientAI(ConCartellaTemporanea):
         caso_uno = caso(riga=1, descrizione="ARTICOLO UNO")
         caso_due = caso(riga=2, descrizione="ARTICOLO DUE")
 
-        # Tutti e due nascono sul file vuoto: il secondo non ha in RAM la voce
-        # che il primo scrivera' fra un attimo.
+        # Both start from the empty file: the second has no in-memory record of
+        # the entry the first is about to write.
         uno = ClientAI(
             configurazione(),
             trasporto=TrasportoFinto([risposta(decisione_del_modello())]),
@@ -883,7 +879,7 @@ class ProvaMemoriaDelClientAI(ConCartellaTemporanea):
         self.assertEqual(set(voci), {chiave_di(caso_uno), chiave_di(caso_due)})
 
     def test_33_la_memoria_si_scrive_a_capo_unix_e_senza_lasciare_file_temporanei(self):
-        """write_text su Windows scriverebbe CRLF, e il file finirebbe in diff."""
+        """`write_text` on Windows would write CRLF, and the file would show up in diffs."""
 
         cartella = self.cartella()
         percorso = cartella / "memoria_ai.json"
@@ -904,21 +900,20 @@ class ProvaMemoriaDelClientAI(ConCartellaTemporanea):
 
 
 class TettoCheSiFaLeggereDaTuttiInsieme:
-    """Un tetto che, mentre lo si legge, tiene fermo il thread finche' non sono
-    arrivati tutti gli altri.
+    """A cap that, while being read, blocks the thread until all the others
+    have arrived too.
 
-    Serve a provare la **mutua esclusione**, non il totale. Sotto CPython il
-    totale non basta: fra il confronto `self._chiamate >= tetto` e
-    `self._chiamate += 1` non c'e' nessuna chiamata ne' nessun salto
-    all'indietro, quindi l'interprete non cede quasi mai il turno proprio li' e
-    anche senza lucchetto i numeri tornano lo stesso. Misurato: con il lucchetto
-    tolto, ottanta casi e tetto dieci danno esattamente dieci chiamate in 120
-    esecuzioni su 120. Il lucchetto sparirebbe da una riscrittura senza che
-    nessun test se ne accorga.
+    This proves mutual exclusion, not just the final total. Under CPython the
+    total alone is not enough: between the `self._chiamate >= tetto` check and
+    `self._chiamate += 1` there is no call and no backward jump, so the
+    interpreter almost never switches threads right there, and the numbers
+    come out right even without a lock. Measured: with the lock removed,
+    eighty cases and a cap of ten gave exactly ten calls in 120 out of 120
+    runs. A rewrite could drop the lock without any test noticing.
 
-    Il tetto si legge **dentro** la sezione da proteggere: se il lucchetto c'e',
-    nessun altro thread puo' entrarci e la porta scade da sola; se non c'e',
-    entrano tutti insieme.
+    The cap is read inside the protected section: with the lock, no other
+    thread can enter and the barrier times out on its own; without it, they
+    all get in together.
     """
 
     def __init__(self, valore: int, quanti: int, *, attesa: float = 0.5) -> None:
@@ -931,7 +926,7 @@ class TettoCheSiFaLeggereDaTuttiInsieme:
     def __int__(self) -> int:
         with self._lucchetto:
             self.letture += 1
-            prima = self.letture == 1  # la chiamata di riscaldamento, fatta da sola
+            prima = self.letture == 1  # the warm-up call, made alone
         if not prima:
             try:
                 self.porta.wait()
@@ -943,10 +938,10 @@ class TettoCheSiFaLeggereDaTuttiInsieme:
 
 
 class ProvaTettiSottoIThread(ConCartellaTemporanea):
-    """Controllare e poi incrementare, con sedici thread, non e' controllare."""
+    """Check-then-increment, with sixteen threads, stops being a real check."""
 
     def test_47_la_prenotazione_di_una_chiamata_non_ammette_due_thread_insieme(self):
-        """Il lucchetto, provato per quello che fa e non per il numero che produce."""
+        """Tests the lock for what it does, not for the number it happens to produce."""
 
         operai = 8
         trasporto = TrasportoLento(costo=0.0, pausa=0.001)
@@ -956,7 +951,7 @@ class ProvaTettiSottoIThread(ConCartellaTemporanea):
             chiave=CHIAVE_FINTA,
         )
         tetto = TettoCheSiFaLeggereDaTuttiInsieme(2, operai)
-        # Dopo la costruzione: la convalida della configurazione lo rifiuterebbe.
+        # After construction: config validation would otherwise reject this.
         client.configurazione["tetto_chiamate"] = tetto
         casi = [caso(riga=i, descrizione=f"ARTICOLO {i}") for i in range(1 + operai)]
 
@@ -993,8 +988,8 @@ class ProvaTettiSottoIThread(ConCartellaTemporanea):
         self.assertEqual(sum(1 for esito in esiti if esito.stato == "TETTO_CHIAMATE"), 70)
 
     def test_35_il_tetto_di_spesa_regge_con_dieci_thread(self):
-        """La prima chiamata si fa da sola apposta: prima di averne vista una non
-        si sa quanto costi, e la prenotazione della spesa lavora su una stima."""
+        """The first call runs alone on purpose: before seeing one, the cost is
+        unknown, and spend reservation works off an estimate."""
 
         casi = [caso(riga=i, descrizione=f"ARTICOLO {i}") for i in range(10)]
         trasporto = TrasportoLento(costo=0.50, pausa=0.02)
@@ -1016,7 +1011,7 @@ class ProvaTettiSottoIThread(ConCartellaTemporanea):
 
 
 class ProvaRisposteDeformi(ConCartellaTemporanea):
-    """Una sola risposta deforme non deve poter far saltare l'infornata."""
+    """One malformed response must not be able to blow up the whole batch."""
 
     def test_36_un_usage_di_forma_sbagliata_non_fa_sollevare(self):
         for uso in ("prompt 210, completion 48", ["prompt_tokens", 210], 7):
@@ -1062,8 +1057,8 @@ class ProvaRisposteDeformi(ConCartellaTemporanea):
         self.assertEqual(trasporto.quante, 2, "una ripetizione sola, non tre")
 
     def test_39_un_errore_dentro_un_200_vince_sui_choices_pieni(self):
-        """Se il servizio dichiara un guasto, l'esito è quel guasto: al massimo
-        si paga una ripetizione, che è il verso giusto in cui sbagliare."""
+        """If the service declares a failure, that failure is the outcome: at
+        most one retry gets paid for, which is the right way to fail."""
 
         codice, corpo = risposta(decisione_del_modello())
         corpo["error"] = {"code": 400, "message": "Provider returned error"}
@@ -1091,7 +1086,7 @@ class ProvaRisposteDeformi(ConCartellaTemporanea):
                 self.assertEqual(trasporto.quante, 2)
 
     def test_41_un_difetto_del_trasporto_non_e_la_rete_e_non_si_ripete(self):
-        """Ripetere un MemoryError o un KeyError è la cosa peggiore da fare."""
+        """Retrying a `MemoryError` or a `KeyError` would be the worst thing to do."""
 
         for guasto in (KeyError("choices"), MemoryError(), AssertionError("copione finito")):
             with self.subTest(guasto=type(guasto).__name__):
@@ -1109,7 +1104,7 @@ class ProvaRisposteDeformi(ConCartellaTemporanea):
                 self.assertIsNone(per_stato.get("ERRORE_RETE"), "non si confonde con la rete")
 
     def test_42_il_costo_dell_esito_somma_i_tentativi(self):
-        """Il tentativo troncato ha consumato e fatturato i token del ragionamento."""
+        """The truncated attempt still consumed and billed its reasoning tokens."""
 
         trasporto = TrasportoFinto(
             [
@@ -1128,7 +1123,7 @@ class ProvaRisposteDeformi(ConCartellaTemporanea):
 
 
 class ProvaInfornata(ConCartellaTemporanea):
-    """Un caso che fallisce non ferma gli altri, e non li fa nemmeno sparire."""
+    """A failing case does not stop the others, and does not make them disappear either."""
 
     def test_43_valuta_molti_torna_un_esito_per_caso_anche_con_esiti_misti(self):
         casi = [
@@ -1166,14 +1161,14 @@ class ProvaInfornata(ConCartellaTemporanea):
         self.assertEqual(trasporto.quante, 5, "una riuscita, più due ripetute")
 
     def test_43b_una_chiave_rifiutata_ferma_l_infornata_alla_prima(self):
-        """⚠ La promessa era gia' scritta e non era mantenuta.
+        """The warm-up promise was written but not kept.
 
-        Il commento del riscaldamento dice che «un modello sbagliato o una
-        chiave scaduta si scoprono prima di lanciare 948 chiamate», ma
-        `_prenota_chiamata` conta la chiamata PRIMA di farla: dopo la prima,
-        anche fallita, il ciclo di riscaldamento finiva e il pool partiva lo
-        stesso. Novecento risposte identiche, minuti di attesa, un rischio di
-        limitazione, e la notizia alla fine invece che subito.
+        The warm-up comment claims "a bad model or an expired key is caught
+        before launching hundreds of calls", but `_prenota_chiamata` counts
+        the call before making it: after the first attempt, even a failed
+        one, the warm-up loop was done and the pool started anyway. Hundreds
+        of identical failures, minutes of waiting, a rate-limit risk, and the
+        failure surfacing at the end instead of immediately.
         """
 
         casi = [caso(riga=indice, descrizione=f"CASO {indice}") for indice in range(6)]
@@ -1183,19 +1178,19 @@ class ProvaInfornata(ConCartellaTemporanea):
 
         esiti = client.valuta_molti(casi)
 
-        # Un esito per caso, come sempre: nessuno sparisce.
+        # One outcome per case, as always: none disappear.
         self.assertEqual(len(esiti), len(casi))
         self.assertEqual(esiti[0].stato, "HTTP_401")
         self.assertEqual([esito.stato for esito in esiti[1:]], ["NON_CHIESTO"] * 5)
-        # E di chiamate ne e' partita una sola.
+        # And only one call went out.
         self.assertEqual(trasporto.quante, 1)
-        # Nessuno di loro porta una decisione: a valle contano come da verificare.
+        # None of them carries a decision: downstream they count as needing review.
         self.assertTrue(all(esito.decisione is None for esito in esiti))
-        # E il dettaglio dice che cosa fare.
+        # And the detail says what to do.
         self.assertIn("Impostazioni", esiti[-1].dettaglio)
 
     def test_43c_un_guasto_passeggero_non_ferma_l_infornata(self):
-        """La controprova: un 429 e' passeggero e gli altri casi si tentano."""
+        """The counter-case: a 429 is transient, so the other cases still get tried."""
 
         casi = [caso(riga=indice, descrizione=f"CASO {indice}") for indice in range(3)]
 
@@ -1222,8 +1217,8 @@ class ProvaInfornata(ConCartellaTemporanea):
         self.assertNotIn("NON_CHIESTO", [esito.stato for esito in esiti])
 
     def test_44_un_caso_che_esplode_non_porta_via_l_infornata(self):
-        """Senza la rete di sicurezza si torna con un'eccezione al posto di 947
-        esiti buoni, già calcolati e già pagati."""
+        """Without this safety net, one bad case would raise instead of returning
+        the other outcomes, already computed and already paid for."""
 
         casi = [
             caso(riga=0, descrizione="CASO BUONO ZERO"),
@@ -1240,7 +1235,7 @@ class ProvaInfornata(ConCartellaTemporanea):
                 with self._lucchetto:
                     self.quante += 1
                 if "CASO ROTTO" in corpo["messages"][1]["content"]:
-                    return "duecento", {}      # il codice HTTP non è un numero
+                    return "duecento", {}      # HTTP status is not a number
                 return risposta(decisione_del_modello())
 
         trasporto = TrasportoConUnCasoRotto()
@@ -1258,9 +1253,9 @@ class ProvaInfornata(ConCartellaTemporanea):
 
 
 class ProvaConfigurazioneScrittaMale(ConCartellaTemporanea):
-    """Un tetto che vale zero spegne tutta la fase senza dirlo: ogni caso torna
-    TETTO_SPESA, tutto diventa DA_VERIFICARE e il messaggio all'utente gli
-    ripete il numero che credeva di aver impostato."""
+    """A cap of zero silently turns off the whole phase: every case comes back
+    `TETTO_SPESA`, everything becomes `DA_VERIFICARE`, and the message shown
+    to the user just echoes the number they thought they had set."""
 
     def _impostazioni(self, dati: dict) -> Path:
         percorso = self.cartella("prova_impostazioni_") / "impostazioni_ai.json"
@@ -1279,8 +1274,8 @@ class ProvaConfigurazioneScrittaMale(ConCartellaTemporanea):
         self.assertEqual(conf["tetto_spesa_usd"], 3.0)
         self.assertIsInstance(conf["tetto_spesa_usd"], float)
 
-        # E con quel tetto le chiamate partono davvero, invece di tornare tutte
-        # TETTO_SPESA come farebbe uno zero silenzioso.
+        # And with that cap, calls actually go out, instead of all coming back
+        # TETTO_SPESA as a silent zero would.
         trasporto = TrasportoFinto([risposta(decisione_del_modello())])
         client = ClientAI(conf, trasporto=trasporto, chiave=CHIAVE_FINTA)
         esito = client.valuta_candidati(caso())
@@ -1304,10 +1299,10 @@ class ProvaConfigurazioneScrittaMale(ConCartellaTemporanea):
 
 
 class ProvaImpostazioniSalvate(unittest.TestCase):
-    """Le funzioni su cui poggia la pagina Impostazioni (Fase 5d).
+    """The functions the Settings page relies on.
 
-    Il rischio qui non e' un errore che si vede: e' un file salvato che il
-    programma poi ignora, o una chiave che esce da dove non deve."""
+    The risk here is not a visible error: it is a file that gets saved but
+    then ignored by the program, or a key leaking from where it should not."""
 
     def setUp(self) -> None:
         self.cartella = Path(tempfile.mkdtemp(prefix="prova_impostazioni_5d_"))
@@ -1328,7 +1323,7 @@ class ProvaImpostazioniSalvate(unittest.TestCase):
         self.assertTrue(stato["presente"])
         self.assertEqual(stato["origine"], "file")
         self.assertNotIn(segreta, json.dumps(stato))
-        # Nemmeno un pezzo che permetta di ricostruirla: solo la coda.
+        # Not even a fragment that would let it be reconstructed: only the tail.
         self.assertNotIn(segreta[:12], json.dumps(stato))
         self.assertEqual(stato["coda"], segreta[-4:])
 
@@ -1339,8 +1334,8 @@ class ProvaImpostazioniSalvate(unittest.TestCase):
         )
 
     def test_salvare_la_chiave_non_cancella_il_resto_del_file(self):
-        """Il file esiste gia' e puo' contenere altro: riscriverlo da zero
-        farebbe sparire in silenzio quello che non conosciamo."""
+        """The file already exists and can hold other data: rewriting it from
+        scratch would silently drop what we don't know about."""
         self.secrets.write_text(
             json.dumps({"openrouter": {"api_key": "sk-vecchia-AAAA", "note": "mia"}, "altro": {"x": 1}}),
             encoding="utf-8",
@@ -1359,10 +1354,10 @@ class ProvaImpostazioniSalvate(unittest.TestCase):
         self.assertFalse(self.secrets.exists())
 
     def test_un_valore_non_utilizzabile_e_un_errore_non_un_ripiego(self):
-        """Il difetto misurato nella 5a: `tetto_spesa_usd` scritto «3,0» con la
-        virgola italiana azzerava il tetto **dicendo all'utente il numero che
-        credeva di aver impostato**. All'avvio il ripiego e' giusto; qui no,
-        perche' l'utente ha appena scritto quel numero e sta guardando."""
+        """The measured defect: `tetto_spesa_usd` written as "3,0" with an
+        Italian decimal comma zeroed out the cap while telling the user the
+        number they thought they had set. Falling back is fine at startup; not
+        here, because the user just typed that number and is watching."""
         with self.assertRaises(ValueError) as errore:
             ai_client.salva_impostazioni({"tetto_spesa_usd": "3,0"}, self.impostazioni)
 
@@ -1370,14 +1365,14 @@ class ProvaImpostazioniSalvate(unittest.TestCase):
         self.assertFalse(self.impostazioni.exists(), "niente si scrive quando qualcosa e' rifiutato")
 
     def test_la_chiave_non_passa_dalle_impostazioni(self):
-        """`carica_configurazione` ignorerebbe `api_key` in silenzio: sarebbe un
-        file che sembra dire una cosa che il programma non fa."""
+        """`carica_configurazione` would silently ignore `api_key`: the file
+        would look like it does something the program does not do."""
         with self.assertRaises(ValueError):
             ai_client.salva_impostazioni({"api_key": "sk-x"}, self.impostazioni)
 
     def test_una_versione_di_prompt_inesistente_si_ferma_qui(self):
-        """Altrimenti passa la convalida — e' una stringa non vuota — e fa
-        sollevare il client alla prima chiamata, a fase gia' avviata."""
+        """Otherwise it passes validation — it's a non-empty string — and only
+        makes the client raise on the first call, once the phase has already started."""
         with self.assertRaises(ValueError):
             ai_client.salva_impostazioni({"versione_prompt": "v99"}, self.impostazioni)
         self.assertFalse(self.impostazioni.exists())
@@ -1402,13 +1397,13 @@ class ProvaImpostazioniSalvate(unittest.TestCase):
 
 
 def errore_json_richiesto():
-    """La risposta vera di OpenRouter quando il fornitore vuole la parola «json».
+    """A real OpenRouter response for when the provider requires the word "json".
 
-    Copiata da una chiamata vera del 12 agosto 2026 a `qwen/qwen3.5-flash-02-23`:
-    la frase che conta **non** sta nel messaggio in cima — li' c'e' un generico
-    «Provider returned error» — ma annidata dentro una stringa in
-    `error.metadata.raw`. Un riconoscitore che guardasse il solo messaggio non
-    la vedrebbe mai."""
+    Copied from a real call to `qwen/qwen3.5-flash-02-23`: the phrase that
+    matters is not in the top-level message — that one just says a generic
+    "Provider returned error" — but nested inside a string in
+    `error.metadata.raw`. A detector that only looked at the message would
+    never see it."""
     return 400, {
         "error": {
             "message": "Provider returned error",
@@ -1427,13 +1422,13 @@ def errore_json_richiesto():
 
 
 class ProvaFornitoreCheVuoleLaParolaJson(unittest.TestCase):
-    """Il fornitore di calcolo lo sceglie OpenRouter, e puo' cambiare da un
-    giorno all'altro: uno che pretende la parola «json» nei messaggi
-    risponderebbe 400 a tutte e 948 le chiamate di una run. Il programma gira
-    da solo e non ci sarebbe nessuno a capire perche'.
+    """OpenRouter picks the compute provider, and it can change at any time: one
+    that requires the word "json" in the messages would answer 400 to every
+    call in a run. The program runs unattended, with no one there to notice why.
 
-    La parola non si aggiunge sempre, perche' misurato su 400 casi peggiora il
-    numero che non si negozia: si aggiunge quando quel fornitore l'ha chiesta."""
+    The word is not added unconditionally, because measured on 400 cases it
+    hurts the metric that matters most: it gets added only once that provider
+    has asked for it."""
 
     def test_il_primo_rifiuto_accende_l_aggiunta_e_la_ripetizione_riesce(self):
         trasporto = TrasportoFinto([errore_json_richiesto(), risposta(decisione_del_modello())])
@@ -1449,7 +1444,7 @@ class ProvaFornitoreCheVuoleLaParolaJson(unittest.TestCase):
         self.assertIn("json", secondo.lower(), "la seconda porta la parola richiesta")
 
     def test_resta_acceso_per_le_chiamate_successive(self):
-        """Senza memoria, 948 casi pagherebbero 948 primi tentativi buttati."""
+        """Without memory, every case would pay for a wasted first attempt."""
         trasporto = TrasportoFinto([
             errore_json_richiesto(),
             risposta(decisione_del_modello()),
@@ -1465,8 +1460,8 @@ class ProvaFornitoreCheVuoleLaParolaJson(unittest.TestCase):
         self.assertIn("json", trasporto.chiamate[2]["corpo"]["messages"][0]["content"].lower())
 
     def test_un_400_qualsiasi_non_si_ripete(self):
-        """La regola vecchia non si indebolisce: un model id sbagliato ripetuto
-        resta sbagliato, e ripeterlo raddoppierebbe soltanto il conto."""
+        """The old rule still holds: a bad model id stays bad on retry, and
+        retrying it would only double the bill."""
         quattrocento = (400, {"error": {"message": "openai/inesistente is not a valid model ID"}})
         trasporto = TrasportoFinto([quattrocento])
         client = ClientAI(configurazione(), trasporto=trasporto, chiave=CHIAVE_FINTA)
@@ -1478,13 +1473,13 @@ class ProvaFornitoreCheVuoleLaParolaJson(unittest.TestCase):
 
 
 class LaMemoriaSiScriveAOndateTests(unittest.TestCase):
-    """Salvare vuol dire riscrivere **tutto** il file, e il file cresce.
+    """Saving means rewriting the whole file, and the file keeps growing.
 
-    Misurato dalla revisione della Fase 6b: 948 casi con una memoria di 568 KB
-    pagavano ~90 secondi serializzati dentro il lucchetto, su una run che di
-    rete ne impiega 105 — e il file arrivava a 1408 KB, cioe' la settimana dopo
-    sarebbe costata di piu'. Il parallelismo su quei 90 secondi non compra
-    niente, perche' stanno tutti nella stessa sezione protetta."""
+    Measured: 948 cases with a 568 KB memory file paid roughly 90 seconds
+    serialized inside the lock, on a run whose network calls took 105 seconds
+    total — and the file grew to 1408 KB, meaning the next run would cost even
+    more. Parallelism buys nothing over those 90 seconds, because they all sit
+    inside the same protected section."""
 
     def _client(self, percorso: Path, trasporto, **modifiche):
         return ClientAI(
@@ -1492,7 +1487,7 @@ class LaMemoriaSiScriveAOndateTests(unittest.TestCase):
         )
 
     def _contando_i_salvataggi(self):
-        """Sostituisce `_salva_memoria` con una che conta e poi fa il suo lavoro."""
+        """Replaces `_salva_memoria` with one that counts calls, then does the real work."""
         vero = ai_client.ClientAI._salva_memoria
         quanti: list[int] = []
 
@@ -1517,8 +1512,8 @@ class LaMemoriaSiScriveAOndateTests(unittest.TestCase):
         self.assertEqual(len(voci), len(casi), "le risposte dell'infornata devono finire su disco")
 
     def test_una_valutazione_sola_si_salva_subito(self) -> None:
-        """Fuori da un'infornata non c'e' nessuna «fine» a cui appoggiarsi: chi
-        valuta un caso per volta deve trovare la sua risposta sul disco."""
+        """Outside a batch there is no "end" to rely on: evaluating one case at
+        a time must still leave its answer on disk right away."""
         trasporto = TrasportoFinto([risposta(decisione_del_modello())])
         with tempfile.TemporaryDirectory() as temporanea:
             percorso = Path(temporanea) / "memoria_ai.json"
@@ -1528,8 +1523,8 @@ class LaMemoriaSiScriveAOndateTests(unittest.TestCase):
         self.assertEqual(len(voci), 1)
 
     def test_un_infornata_che_solleva_salva_lo_stesso_quello_che_ha_pagato(self) -> None:
-        """Il salvataggio sta in un `finally`: le risposte gia' pagate non si
-        buttano perche' qualcosa e' andato storto dopo."""
+        """The save runs in a `finally`: responses already paid for do not get
+        thrown away because something failed afterward."""
         casi = [caso(riga=1), caso(riga=2)]
         trasporto = TrasportoFinto([risposta(decisione_del_modello())] * 2)
         with tempfile.TemporaryDirectory() as temporanea:
@@ -1543,11 +1538,10 @@ class LaMemoriaSiScriveAOndateTests(unittest.TestCase):
         self.assertTrue(esiste, "quello che era gia' in memoria non deve sparire")
 
     def test_un_prompt_riscritto_senza_rinominarlo_invalida_le_risposte_vecchie(self) -> None:
-        """La chiave sigillava l'**etichetta** della versione, non il testo:
-        chi correggeva `valuta_candidati.v3.md` senza rinominarlo continuava a
-        ricevere le risposte del prompt vecchio, e il commento che diceva «se
-        cambia uno qualunque di questi, la risposta vecchia non vale piu'» era
-        falso proprio sul campo che si cambia piu' spesso."""
+        """The key seals the prompt's text, not just its version label: editing
+        a prompt file without renaming it must not keep returning the old
+        prompt's responses, since any change to the prompt should invalidate
+        old answers — on exactly the field that changes most often."""
         cartella = Path(tempfile.mkdtemp(prefix="prova_prompt_testo_"))
         self.addCleanup(_ripulisci, cartella)
         percorso_prompt = cartella / "valuta_candidati.v9.md"
@@ -1575,10 +1569,10 @@ class LaMemoriaSiScriveAOndateTests(unittest.TestCase):
 
 class IlPredefinitoMisuratoTests(unittest.TestCase):
     def test_il_parallelismo_predefinito_e_quello_misurato(self) -> None:
-        """32 non e' scelto a occhio: 150 casi in 82,1 s a 8, 22,7 s a 32,
-        19,0 s a 64. E' il punto in cui la curva si piega. Cambiarlo senza
-        rifare la misura deve fare rumore, anche perche' raddoppiarlo raddoppia
-        le richieste che un fornitore di calcolo si vede arrivare insieme."""
+        """32 is not a guess: 150 cases took 82.1 s at 8 workers, 22.7 s at 32,
+        19.0 s at 64. It's the knee of the curve. Changing it without
+        re-measuring should be noticed, also because doubling it doubles the
+        requests a compute provider sees arrive at once."""
         self.assertEqual(ai_client.CONFIGURAZIONE_PREDEFINITA["parallelismo"], 32)
 
 

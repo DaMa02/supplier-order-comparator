@@ -1,102 +1,102 @@
-# Politica di matching
+# Matching policy
 
-## Indice
+## Contents
 
-1. Ordine delle operazioni
-2. EAN esatto
-3. Shortlist deterministica
-4. Valutazione AI
-5. Espositori tra fornitori
-6. Stati e audit
+1. Order of operations
+2. Exact EAN
+3. Deterministic shortlist
+4. AI evaluation
+5. Displays across suppliers
+6. State and audit trail
 
-## 1. Ordine delle operazioni
+## 1. Order of operations
 
-Applicare nell'ordine:
+Applied in this order:
 
-1. normalizzazione deterministica degli identificatori;
-2. match EAN esatto;
-3. raccolta completa e confronto strutturato delle occorrenze duplicate;
-4. generazione deterministica di una shortlist semantica;
-5. valutazione AI della shortlist e dei casi EAN duplicati rimasti ambigui;
-6. revisione umana dei risultati non certi.
+1. deterministic normalization of identifiers;
+2. exact EAN match;
+3. full collection and structured comparison of duplicate occurrences;
+4. deterministic generation of a semantic shortlist;
+5. AI evaluation of the shortlist and of the ambiguous duplicate-EAN cases still unresolved;
+6. human review of the results that aren't certain.
 
-## 2. EAN esatto
+## 2. Exact EAN
 
-Usare l'EAN gestionale come source of truth. Eliminare soltanto spazi esterni e artefatti numerici Excel come `.0`; non rimuovere caratteri interni e non convertire arbitrariamente codici non standard.
+The management-software EAN is the source of truth. Only strip leading/trailing spaces and Excel numeric artifacts such as a trailing `.0`; internal characters are never removed and non-standard codes are never rewritten.
 
-Leggere valori di celle attive. Una stringa presente soltanto nel dizionario interno `sharedStrings.xml` non è un prodotto del listino.
+Only active cell values are read. A string that exists solely in the workbook's internal `sharedStrings.xml` table is not a product row in the price list.
 
-Stati:
+States:
 
-- `EAN_ESATTO`: una sola riga utilizzabile;
-- `EAN_AMBIGUO`: più righe ancora valide;
-- `EAN_ASSENTE`: nessuna riga.
+- `EAN_ESATTO`: exactly one usable row;
+- `EAN_AMBIGUO`: more than one row still valid;
+- `EAN_ASSENTE`: no row.
 
-## 3. Shortlist deterministica
+## 3. Deterministic shortlist
 
-Per ogni `EAN_ASSENTE`, normalizzare descrizioni, marca e quantità/formato. Estrarre quando presenti:
+For every `EAN_ASSENTE` case, descriptions, brand and quantity/format are normalized. Extracted when present:
 
-- marca e famiglia;
-- volume o peso (`ml`, `l`, `g`, `kg`);
-- numero di pezzi, rotoli, lavaggi o notti;
-- variante, profumazione, colore, taglia e pubblico;
-- forma prodotto, per esempio spray, ricarica, roll-on o gel.
+- brand and product family;
+- volume or weight (`ml`, `l`, `g`, `kg`);
+- number of pieces, rolls, washes or nights;
+- variant, scent, color, size and target audience;
+- product form, e.g. spray, refill, roll-on or gel.
 
-Le quantità si leggono in tutte le forme che i listini usano davvero (`build_semantic_shortlists.attributes`, dal 21 settembre 2026):
+Quantities are read in every form the price lists actually use (`build_semantic_shortlists.attributes`):
 
-- unità dopo il numero: `18PZ`, `500 ML`, `3LT`, `250GR`, `78 MISURINI` (lavaggi);
-- unità davanti: `X 18`, `PZ.18`, `ML.500`, `LT.3`, `KG 4`;
-- somme attaccate, lette come base **e** come totale: `70+8 LAV` vale 70 e 78, `PZ.8+2` vale 8 e 10;
-- una `L` sola dopo un intero da 10 in su sono lavaggi (`COCCOLONE 45L`); `LT` e `LITRI` restano litri;
-- con un numero subito prima: l'unità col punto attaccato è sempre del numero dopo (`X 2 GR.90` sono 90 g, `4 IN 1 GR.900` sono 900 g); punto e spazio (`GR. 500`) solo se il numero prima conta pezzi; il solo spazio (`PH 3.5 ML 200`) solo per volumi e pesi, e se il numero dopo non ha un'unità sua;
-- pezzi e peso (o volume) nello stesso nome valgono anche come totale: `GR.250 X 2` vale 250 e 500 g.
+- unit after the number: `18PZ`, `500 ML`, `3LT`, `250GR`, `78 MISURINI` (washes);
+- unit before the number: `X 18`, `PZ.18`, `ML.500`, `LT.3`, `KG 4`;
+- concatenated sums, read as both the base value and the total: `70+8 LAV` is 70 and 78, `PZ.8+2` is 8 and 10;
+- a bare `L` after an integer of 10 or more is washes (`COCCOLONE 45L`); `LT` and `LITRI` remain liters;
+- with a number immediately before: a unit with a dot attached always belongs to the number that follows it (`X 2 GR.90` is 90 g, `4 IN 1 GR.900` is 900 g); dot-plus-space (`GR. 500`) only when the preceding number counts pieces; a plain space (`PH 3.5 ML 200`) only for volumes and weights, and only if the following number has no unit of its own;
+- pieces and weight (or volume) in the same name also count as a total: `GR.250 X 2` is 250 and 500 g.
 
-Non si leggono, di proposito: le fasce (`11-25 KG` del bambino, `0-6` anni, `KG. 11/25`), le taglie (`5°MIS.`), le formule (`2X13=26`), la `X` seguita da un numero con la sua unità (`54 DOSI X 12=648 GR`: 12 sono i grammi di una dose), le misure (`30 X 40 CM`), la `X` dopo un numero o prima di un'unità senza un numero suo (`2 X 250ML` vale 250 ML), i numeri attaccati a lettere (`2IN1`), le età e le protezioni (`45+`, `FP 50+`), i codici (`E1`, `N.4`), i `+` staccati. Meglio non leggere un numero che leggerlo sbagliato: un falso conflitto toglie 0,35 alla riga giusta.
+Deliberately not read: ranges (`11-25 KG` for a child's age, `0-6` months, `KG. 11/25`), sizes (`5°MIS.`), formulas (`2X13=26`), an `X` followed by a number with its own unit (`54 DOSI X 12=648 GR`: the 12 is the grams of a single dose), dimensions (`30 X 40 CM`), an `X` after a number or before a unit with no number of its own (`2 X 250ML` is 250 ML), numbers attached to letters (`2IN1`), ages and protection factors (`45+`, `FP 50+`), codes (`E1`, `N.4`), stray `+` signs. It's better to skip a number than to read it wrong: a false conflict costs the correct row 0.35 in score.
 
-Penalizzare deterministicamente i candidati con formato numerico incompatibile e ordinare i rimanenti con un punteggio riproducibile basato su token, string similarity e attributi strutturati. Nei file attuali la marca non ha una colonna separata affidabile: farla interpretare all'AI dalla descrizione, invece di inventare una regola rigida. Passare all'AI soltanto i migliori candidati e i relativi punteggi.
+Candidates with an incompatible numeric format are deterministically penalized, and the rest are ranked with a reproducible score based on tokens, string similarity and structured attributes. In the current files, brand has no reliable dedicated column, so the AI is left to read it from the description instead of encoding a rigid rule for it. Only the top candidates and their scores are passed to the AI.
 
-## 4. Valutazione AI
+## 4. AI evaluation
 
-L'AI deve valutare candidati già prodotti, non cercare liberamente nell'intero listino. Può rifiutare tutti i candidati o lasciare il caso irrisolto: la somiglianza testuale non impone un match.
+The AI evaluates candidates that have already been produced; it never searches the price list freely. It can reject every candidate or leave the case unresolved: textual similarity alone doesn't force a match.
 
-Rifiutare il match se:
+The match is rejected when:
 
-- la marca è diversa senza un alias documentato;
-- volume, peso, numero di pezzi o multipack sono incompatibili;
-- la variante modifica sostanzialmente il prodotto;
-- il miglior candidato non è nettamente preferibile al secondo.
+- the brand differs with no documented alias;
+- volume, weight, piece count or multipack size are incompatible;
+- the variant substantially changes the product;
+- the best candidate isn't clearly preferable to the second-best.
 
-Un match semantico accettato deve riportare una motivazione breve e un livello di confidenza. I match medi o bassi richiedono revisione dell'utente prima dell'ordine.
+An accepted semantic match must carry a short rationale and a confidence level. Medium- or low-confidence matches require user review before the order is placed.
 
-## 5. Espositori tra fornitori
+## 5. Displays across suppliers
 
-Confrontare due espositori come offerte dello stesso articolo soltanto quando la composizione è dimostrabilmente equivalente. La chiave primaria è un fingerprint stabile formato dalle coppie ordinate `EAN componente + quantità`. Il nome del display, il numero totale di pezzi o la sola marca non bastano.
+Two displays are compared as offers of the same item only when their composition is demonstrably equivalent. The primary key is a stable fingerprint built from the ordered `component EAN + quantity` pairs. The display's name, its total piece count, or the brand alone are not enough.
 
-Se tutti gli EAN e le quantità coincidono, le offerte sono comparabili anche quando i fornitori formulano diversamente il nome. Se mancano EAN o quantità, proporre il confronto solo con motivazione e conferma umana. Non confrontare automaticamente il prezzo per pezzo di due composizioni diverse.
+If every EAN and quantity matches, the offers are comparable even when suppliers word the name differently. If EAN or quantity is missing, the comparison is only proposed with a rationale and human confirmation. The per-piece price of two different compositions is never compared automatically.
 
-## 6. Stati e audit
+## 6. State and audit trail
 
-Conservare per ogni prodotto-fornitore:
+Kept for every product/supplier pair:
 
-- EAN gestionale;
-- EAN e riga del candidato;
-- metodo del match;
-- punteggio deterministico;
-- candidati alternativi;
-- decisione AI e motivazione, se applicabile;
-- conferma o correzione dell'utente.
+- management-software EAN;
+- candidate's EAN and row;
+- match method;
+- deterministic score;
+- alternative candidates;
+- AI decision and rationale, when applicable;
+- user confirmation or correction.
 
-Per gli espositori conservare inoltre riga padre, righe componente, quantità dichiarata e ricostruita, prezzo padre e ricostruito, confidenza, evidenze e fingerprint della composizione.
+For displays, also kept: parent row, component rows, declared and reconstructed quantity, parent and reconstructed price, confidence, evidence and composition fingerprint.
 
-Non rieseguire il matching nella fase di scrittura dell'ordine: utilizzare la riga sorgente approvata e persistita.
+Matching is never re-run at order-writing time: the approved, persisted source row is used as-is.
 
-### Lo stesso codice presso un altro fornitore (`EAN_DA_ALTRO_FORNITORE`)
+### The same code at another supplier (`EAN_DA_ALTRO_FORNITORE`)
 
-Dal 21 settembre 2026 (`merge_match_decisions.propaga_lo_stesso_codice`): se presso il fornitore A l'AI ha accettato una riga con EAN X diverso da quello del gestionale, presso ogni altro fornitore S **senza** abbinamento e con stato `EAN_ASSENTE`, l'unica riga utilizzabile con EAN X entra con `status: SEMANTICO_PROPOSTO`, `method: EAN_DA_ALTRO_FORNITORE`, confidenza `MEDIA` e **sempre da confermare**. Porta `propagato_da` (i fornitori fonte), `codice_propagato` e `prima` (stato, metodo, confidenza e motivazione che sostituisce).
+`merge_match_decisions.propaga_lo_stesso_codice`: if the AI accepted a row with EAN X (different from the management-software EAN) at supplier A, then at every other supplier S with no match and status `EAN_ASSENTE`, the one usable row carrying EAN X enters with `status: SEMANTICO_PROPOSTO`, `method: EAN_DA_ALTRO_FORNITORE`, confidence `MEDIA`, and it always requires confirmation. It carries `propagato_da` (the source suppliers), `codice_propagato`, and `prima` (the status, method, confidence and rationale it replaces).
 
-- Scavalca un `REJECT` dell'AI presso S e un `DA_VERIFICARE` non scartato: è il caso da cui nasce (le Linda Seta x18, rifiutate presso LARICE e accettate presso NOCE con lo stesso codice).
-- Non scavalca mai una riga già scelta, una decisione scartata (`ai_decisione_scartata`) né uno stato EAN diverso da `EAN_ASSENTE`.
-- Due o più righe candidate presso S (lo stesso EAN ripetuto, o due fonti con codici diversi): non si propone niente, si conta in `stesso_codice_ambiguo`.
-- Solo codici con la forma di un EAN vero (8, 12, 13 o 14 cifre, non tutti zeri), confrontati grezzi come la strada nativa.
-- Le fonti sono i soli `SEMANTICO_AI`: una riga propagata non diventa fonte, e l'ordine dei fornitori non cambia il risultato.
-- Un «no» dell'utente sulla riga propagata la spegne per impronta come ogni altro rifiuto; un «sì» si ricorda come conferma di (S, prodotto) con motivo `EAN_DA_ALTRO_FORNITORE`. Nessuna uguaglianza fra codici si scrive da sola.
+- It overrides an AI `REJECT` at S and an undiscarded `DA_VERIFICARE`: that's the scenario it's built for, where the AI rejects an item at one supplier but accepts the same EAN at another.
+- It never overrides a row that's already selected, a discarded decision (`ai_decisione_scartata`), or any EAN status other than `EAN_ASSENTE`.
+- Two or more candidate rows at S (the same EAN repeated, or two sources with different codes) propose nothing; the case is counted in `stesso_codice_ambiguo`.
+- Only codes shaped like a real EAN (8, 12, 13 or 14 digits, not all zeros) are eligible, compared as raw digits the same way the native EAN path does.
+- Sources are `SEMANTICO_AI` decisions only: a propagated row never becomes a source itself, and supplier order doesn't affect the result.
+- A user "no" on the propagated row discards it by fingerprint like any other rejection; a "yes" is remembered as a confirmation of (supplier, product) with reason `EAN_DA_ALTRO_FORNITORE`. No code equality is ever written on its own.

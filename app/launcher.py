@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Avvia il comparatore locale con percorsi e controlli sicuri per Windows."""
+"""Launch the local comparator with safe paths and checks, for Windows."""
 
 from __future__ import annotations
 
@@ -24,9 +24,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 
-# Sta accanto a questo file, quindi si importa senza toccare `sys.path`: il
-# lanciatore e' lo script principale e la sua cartella e' gia' la prima.  Serve
-# per chiedere «il server acceso sta eseguendo questi sorgenti?».
+# These live next to this file, so they import without touching `sys.path`
+# (the launcher's own directory is already first). They check whether a
+# running server is executing the current sources.
 import scrittura_sicura  # noqa: E402
 import versione_del_codice  # noqa: E402
 
@@ -41,15 +41,14 @@ REQUIRED_SOURCE_PATHS = (
     INSPECTOR_PATH,
     SKILL_ROOT / "scripts" / "promotions.py",
 )
-# Programma di navigazione richiesto: Chrome, non il predefinito di Windows.
-# La variabile d'ambiente serve per le prove e per installazioni fuori standard.
+# Required browser: Chrome, not the Windows default.
+# The env var is for tests and non-standard installs.
 CHROME_ENV_OVERRIDE = "COMPARATORE_CHROME"
 CHROME_RELATIVE_PATH = Path("Google") / "Chrome" / "Application" / "chrome.exe"
-# Quali fornitori si sanno compilare non e' scritto qui: lo dichiara il
-# registro, con `order_write` dentro l'adattatore (vedi `references/adapters.json`
-# e `references/schema-routing.md`).  Finche' era una tupla in questo file, un
-# fornitore imparato non poteva diventare compilabile senza toccare il codice —
-# ed era il contrario della regola su cui poggia tutta la Fase 4.
+# Which suppliers can be compiled isn't listed here: the registry declares it
+# via `order_write` on the adapter (see `references/adapters.json` and
+# `references/schema-routing.md`). A hardcoded list here would keep a newly
+# learned supplier from ever becoming compilable without a code change.
 ADAPTERS_PATH = SKILL_ROOT / "references" / "adapters.json"
 DATA_DIR = APP_DIR / "data"
 CURRENT_DIR = DATA_DIR / "current"
@@ -59,30 +58,25 @@ UPLOAD_DIR = CURRENT_DIR / "uploads"
 OUTPUT_DIR = CURRENT_DIR / "outputs"
 WRITER_CONFIG_PATH = CURRENT_DIR / "writer_config.json"
 WRITER_SCRIPT_PATH = SKILL_ROOT / "scripts" / "write_supplier_orders.mjs"
-# La libreria che legge e scrive gli `.xlsx`, copiata dentro il progetto: e'
-# quella che il writer cerca per prima.
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 PORT_ATTEMPTS = 20
 
-# Le memorie che il ricalcolo non rifa': se si perdono, non si rigenerano
-# premendo un pulsante. Dal commit 6007574 (18 agosto 2026) stanno fuori da
-# git — che e' giusto, perche' cambiano mentre il programma gira e l'avvio del
-# PC del negozio riporta indietro i file tracciati — ma da quel giorno vivono
-# SOLO sul disco del negozio, senza nessuna copia da nessuna parte. Il
-# commit ae2e214 le aveva messe sotto git proprio perche' «se muore il disco
-# non si recuperano»: quella protezione e' stata tolta e non sostituita.
+# State the recompute doesn't regenerate: lost, it isn't recreated by a
+# button press. These paths are intentionally outside git — they change
+# while the program runs, and the store PC's startup resets tracked files —
+# so they exist only on the store's disk, with no other copy anywhere.
 #
-# Quello che manca da un avvio all'altro non e' un errore: un'installazione
-# nuova non ha ancora ne' ordini ne' memoria AI.
+# A missing file between installs isn't a bug: a fresh install has neither
+# orders nor AI memory yet.
 MEMORIE_DA_COPIARE = (
     Path("current") / "state.json",
-    # ⚠ Il ponte a mano per i listini che il programma non e' riuscito a
-    # imparare.  Non era nell'elenco, e invece e' una memoria come le altre:
-    # sopravvive al ricalcolo e a «Inizia nuova comparazione», e per un
-    # fornitore che non e' stato imparato e' l'unica cosa che rende ancora
-    # leggibile il suo listino.  Perderla vuol dire riscriverla a mano senza
-    # sapere che cosa c'era scritto.
+    # The manual bridge for price lists the app failed to learn. Easy to
+    # miss here, but it's a memory like the others: it survives a recompute
+    # and "Inizia nuova comparazione" (start new comparison), and for an
+    # unlearned supplier it's the only thing that keeps its price list
+    # readable. Losing it means rewriting it by hand with no record of what
+    # was there.
     Path("current") / "decisioni_schemi.json",
     Path("history") / "conferme.db",
     Path("history") / "orders.json",
@@ -107,9 +101,9 @@ EMPTY_REVIEW: dict[str, Any] = {
 
 @dataclass(frozen=True)
 class NodeRuntime:
-    # ⚠ Basta Node.  Fino al 5 settembre 2026 qui c'era anche `node_modules`,
-    # la cartella con `@oai/artifact-tool`: le copie `.xlsx` adesso le scrive
-    # `scripts/lib/xlsx_in_posizione.mjs` con la sola libreria standard di Node.
+    # Node alone is enough: `.xlsx` copies are written by
+    # `scripts/lib/xlsx_in_posizione.mjs` using only Node's standard library,
+    # no `node_modules`.
     executable: Path
     version: str
     label: str
@@ -210,12 +204,12 @@ def node_version(executable: Path) -> str | None:
 
 
 def find_node_runtime() -> NodeRuntime | None:
-    """Il primo Node 18+ che si trova, nell'ordine in cui vale la pena cercarlo.
+    """Return the first Node 18+ found, in the order worth checking.
 
-    Il runtime portabile dell'app prima di tutto; poi quelli che il runtime di
-    sviluppo di Codex si porta dietro, perche' sul PC del negozio sono stati a
-    lungo l'unico Node presente; infine quello nel PATH.  Non serve nessuna
-    libreria accanto: il writer usa solo quello che Node ha in casa.
+    The app's bundled runtime first; then the ones Codex's dev runtime
+    carries, since on the store PC they were long the only Node present;
+    finally the one on PATH. No extra library is needed: the writer only
+    uses Node's own standard library.
     """
 
     user_profile = Path(os.environ.get("USERPROFILE") or Path.home())
@@ -258,12 +252,12 @@ def find_node_runtime() -> NodeRuntime | None:
 
 
 def _registro_degli_adattatori() -> Any:
-    """Il motore del registro, importato quando serve.
+    """Import and return the adapter registry engine, lazily.
 
-    Tardivo di proposito: il lanciatore parte anche da solo, e non deve
-    fallire all'avvio se la cartella `scripts` non e' al suo posto.  Leggere il
-    registro qui dentro con `json.loads` sarebbe una seconda verita' sullo
-    stesso file: `scripts/registro.py` e' l'unico che lo legge.
+    Deferred on purpose: the launcher must still start on its own even if
+    the `scripts` folder is missing. Reading the registry here with
+    `json.loads` would create a second source of truth for the same file:
+    `scripts/registro.py` is the only reader of it.
     """
 
     cartella = str(SKILL_ROOT / "scripts")
@@ -275,34 +269,32 @@ def _registro_degli_adattatori() -> Any:
 
 
 def nome_leggibile(supplier: Any) -> str:
-    """Come si chiama questo fornitore nelle frasi, secondo il registro.
+    """Return this supplier's name for user-facing messages, per the registry.
 
-    ⚠ Qui c'era `supplier.upper()` in cinque frasi: un fornitore imparato
-    compariva come `NUOVO_FORNITORE_1`, underscore compresi, mentre il registro
-    il suo nome ce l'aveva gia' — e il `display_name` che questo stesso modulo
-    mette dentro la regola di scrittura veniva proprio di li' (revisione di
-    regressione del 14 agosto 2026).
+    A raw `supplier.upper()` would show a learned supplier as
+    `NUOVO_FORNITORE_1`, underscore included, even though the registry
+    already has its proper name — the same name this module's
+    `display_name` uses in the write rule.
 
-    Se il registro non e' raggiungibile resta il ripiego di prima: una frase con
-    l'identificativo e' meglio di un lanciatore che non parte.
+    Falls back to the identifier itself if the registry can't be reached: a
+    message with the raw id is better than a launcher that won't start.
     """
 
     try:
         return _registro_degli_adattatori().nome_del_fornitore(supplier, ADAPTERS_PATH)
-    except Exception:  # noqa: BLE001 - il nome non vale un avvio mancato
+    except Exception:  # noqa: BLE001 - a name isn't worth a failed startup
         return str(supplier or "fornitore").upper()
 
 
 def adattatori_compilabili(percorso: Path | None = None) -> dict[str, dict[str, Any]]:
-    """I fornitori di cui il registro dichiara **come** si scrive l'ordine.
+    """Suppliers the registry declares it knows how to write orders for.
 
-    La compilabilita' e' una proprieta' dichiarata, non un elenco nel codice:
-    un adattatore che porta `order_write` si sa compilare, uno che non ce l'ha
-    no — e questo vale identico per i sei nativi e per qualunque schema
-    imparato dopo.  Finche' l'elenco era una tupla in questo file, un fornitore
-    imparato non sarebbe mai diventato compilabile e nessuno lo diceva:
-    misurato il 12 agosto 2026 con 102 prodotti assegnati a ACERO e gli
-    avvertimenti vuoti.
+    Compilability is a declared property, not a list in code: an adapter
+    that carries `order_write` is compilable, one without it isn't — equally
+    true for the six built-in suppliers and any schema learned later. A
+    hardcoded tuple here would silently leave a learned supplier
+    uncompilable: measured with 102 products assigned to acero and no
+    warning raised.
     """
 
     registro = _registro_degli_adattatori()
@@ -317,29 +309,21 @@ def adattatori_compilabili(percorso: Path | None = None) -> dict[str, dict[str, 
 def adattatore_del_documento(entry: dict[str, Any], supplier: str,
                              per_fornitore: dict[str, dict[str, Any]],
                              percorso: Path | None = None) -> dict[str, Any]:
-    """L'adattatore con cui si scrive l'ordine dentro QUESTO documento.
+    """The adapter that writes the order into THIS document.
 
-    ⚠ Lo dice la **decisione** con cui il documento e' stato letto, non il nome
-    del fornitore. E' la stessa lezione della quinta volta che un
-    `if supplier == "..."` e' stato tolto da questo progetto — chi legge un
-    listino lo decide la decisione — e vale identica sul lato della scrittura,
-    dove costa di piu': un ordine scritto nella colonna sbagliata esce dal
-    programma e va al fornitore.
+    It's decided by which adapter read the document, not by the supplier's
+    name: picking the first adapter for a supplier can be wrong in two
+    cases.
 
-    Due casi in cui prendere il primo adattatore di quel fornitore sbaglia, e
-    tutti e due esistono dal 22 agosto 2026:
+    - A supplier can have more than one schema (e.g. only one of two
+      variants declares that the order column header must read ORDINE).
+      Picking by supplier alone can silently drop that header check.
+    - The order column can be reassigned from the UI, which stores a
+      `__locale` entry with the new column. Looking up by supplier instead
+      finds the shipped entry and writes to the wrong column.
 
-    - **CIPRESSO ha due schemi**, e solo uno dei due dichiara che sopra la
-      colonna dell'ordine deve esserci scritto ORDINE. Misurato: prendendo la
-      voce per fornitore la regola esce senza `expected_header`, cioe' senza il
-      controllo — ed e' esattamente la difesa che a BETULLA era stata tolta da
-      una voce imparata, il 21 agosto.
-    - **la colonna d'ordine spostata dalla pagina** scrive una voce `__locale`
-      con la colonna nuova. Chi cerca per fornitore ritrova quella spedita e
-      scrive dove non vuole piu' nessuno.
-
-    Il ripiego sul fornitore resta per i confronti vecchi, le cui schede non
-    dichiarano nessun adattatore: meglio la voce di quel fornitore che niente.
+    Falls back to the supplier lookup for older comparisons, whose entries
+    don't declare an adapter: that entry is better than nothing.
     """
 
     registro = _registro_degli_adattatori()
@@ -352,18 +336,19 @@ def adattatore_del_documento(entry: dict[str, Any], supplier: str,
 
 
 def fornitori_compilabili(percorso: Path | None = None) -> tuple[str, ...]:
-    """Solo i nomi, dal piu' lungo al piu' corto.
+    """Return supplier names only, longest first.
 
-    L'ordine conta perche' il riconoscimento e' per sottostringa: con
-    «cedi» prima di «noce» un documento Noce finirebbe al fornitore
-    sbagliato, e sarebbe un ordine mandato a chi non lo aspetta.
+    Order matters because matching is by substring: matching a shorter name
+    before a longer name that contains it would route the document to the
+    wrong supplier, and the order would end up sent to whoever isn't
+    expecting it.
     """
 
     return tuple(sorted(adattatori_compilabili(percorso), key=lambda nome: (-len(nome), nome)))
 
 
 def supplier_key(file_entry: dict[str, Any], compilabili: tuple[str, ...] | None = None) -> str:
-    """Il fornitore di questo documento, se è uno che si sa compilare."""
+    """This document's supplier, if it's one the registry can compile for."""
 
     values = [
         file_entry.get("supplierId"),
@@ -380,10 +365,10 @@ def supplier_key(file_entry: dict[str, Any], compilabili: tuple[str, ...] | None
 
 
 def supplier_declared(file_entry: dict[str, Any]) -> str:
-    """Il fornitore che il documento dichiara, compilabile o no.
+    """The supplier this document declares, compilable or not.
 
-    Serve a dire l'assenza: un listino che non si sa compilare deve avere un
-    nome nell'avviso, altrimenti l'avviso non si puo' nemmeno scrivere.
+    Needed to name the gap: a price list the registry can't compile for
+    still needs a name in the warning, or the warning can't be written.
     """
 
     for chiave in ("supplierId", "supplier_id"):
@@ -446,13 +431,12 @@ def review_supplier_entries(review: dict[str, Any]) -> dict[str, dict[str, Any]]
 
 
 def fornitori_non_compilabili(review: dict[str, Any]) -> list[str]:
-    """I listini del confronto per cui il registro non dice come si scrive l'ordine.
+    """Price lists in the comparison for which the registry declares no write rule.
 
-    Non e' un guasto: e' una cosa che l'utente deve sapere **prima** di
-    assegnare mezzo ordine a quel fornitore, perche' alla fine di quella strada
-    non c'e' nessuna copia da mandare.  Un fornitore che sparisce dall'elenco
-    dei compilabili senza una parola e' esattamente il buco misurato il 12
-    agosto 2026.
+    Not a failure: the user needs to know this before assigning quantities
+    to that supplier, since no order copy will ever be produced for it. A
+    supplier silently missing from the compilable list is exactly the gap
+    this guards against.
     """
 
     compilabili = fornitori_compilabili()
@@ -472,24 +456,22 @@ def fornitori_non_compilabili(review: dict[str, Any]) -> list[str]:
 
 def fornitori_senza_copia(review: dict[str, Any],
                           percorso: Path | None = None) -> dict[str, str]:
-    """Ogni fornitore del confronto per cui OGGI non nascerebbe una copia, col perche'.
+    """Every supplier in the comparison that would produce no copy today, with why.
 
-    Due cause diverse, stessa conseguenza.  O il registro non dichiara
-    `order_write` (il fornitore non e' mai compilabile), oppure lo dichiara ma
-    il documento di questa settimana non combacia con la dichiarazione —
-    un'intestazione cambiata, un foglio sparito, righe fuori dal documento.
-    La seconda famiglia moriva dentro il messaggio di `prepare_writer_config`,
-    che il server butta via quando la scrittura riesce: BETULLA con
-    l'intestazione cambiata spariva dalla configurazione senza una parola in
-    pagina, e lo si scopriva alla compilazione con una frase che non diceva la
-    causa (revisione avversariale del 13 agosto 2026).  Chi vuole avvisare
-    PRIMA che la merce sia assegnata chiama questa, non il solo registro.
+    Two causes, same effect: either the registry declares no `order_write`
+    (never compilable), or it does but this week's document doesn't match
+    the declaration — a changed header, a missing sheet, rows outside the
+    document. The second kind is easy to miss: it's swallowed by
+    `prepare_writer_config`'s message, which the server discards once
+    writing succeeds, so the failure only surfaces at compile time with no
+    stated cause. Call this to warn before quantities are assigned, not the
+    registry alone.
 
-    `percorso` esiste perche' l'orchestratore lavora su un registro
-    configurabile (nelle prove e' una copia): guardarne uno e avvisare
-    sull'altro direbbe bugie in tutte e due le direzioni.  Con un registro
-    che non si apre risponde vuoto: quella e' un'altra frase, la dice
-    `registro.motivo_registro_illeggibile` e tocca al chiamante chiederla.
+    `percorso` exists because the orchestrator can run against a configurable
+    registry copy (used in tests): reading one registry while warning about
+    another would be wrong in both directions. An unreadable registry
+    returns empty; that case is reported separately by
+    `registro.motivo_registro_illeggibile`, which the caller must check.
     """
 
     if _registro_degli_adattatori().motivo_registro_illeggibile(percorso or ADAPTERS_PATH):
@@ -531,11 +513,12 @@ def fornitori_senza_copia(review: dict[str, Any],
 
 
 def fornitori_del_confronto(review: dict[str, Any]) -> list[str]:
-    """I fornitori che il confronto usa davvero, presi dalle offerte.
+    """Suppliers the comparison actually uses, taken from the offers.
 
-    Non da `review["files"]`: quello e' l'elenco dei documenti, e le due liste
-    divergono appena un listino viene eliminato o sostituito.  Chi deve dire
-    «per questo fornitore non nascera' nessuna copia» deve partire da qui.
+    Not from `review["files"]`, which lists documents: the two lists
+    diverge as soon as a price list is deleted or replaced. Anything that
+    needs to say "no copy will be produced for this supplier" must start
+    from here.
     """
 
     nomi: list[str] = []
@@ -546,7 +529,7 @@ def fornitori_del_confronto(review: dict[str, Any]) -> list[str]:
                 nomi.append(nome)
     if nomi:
         return sorted(nomi)
-    # Un confronto piu' vecchio puo' non portare l'elenco: si ricava dalle offerte.
+    # An older comparison may not carry this list: derive it from the offers.
     for prodotto in review.get("products") or []:
         if not isinstance(prodotto, dict):
             continue
@@ -564,25 +547,22 @@ def fornitori_ordinati_senza_copia(
     fornitori: Iterable[str],
     percorso: Path | None = None,
 ) -> dict[str, str]:
-    """I fornitori su cui si sta per ordinare che oggi non produrrebbero una copia.
+    """Suppliers about to be ordered from that would produce no copy today.
 
-    La differenza con `fornitori_senza_copia` non e' cosmetica, ed e' la
-    ragione per cui questa funzione esiste.  Quella parte dall'elenco dei
-    **documenti** (`review["files"]`); questa parte dai **fornitori** su cui
-    l'utente ha messo una quantita'.  Le due liste possono divergere — un
-    listino eliminato o sostituito lascia il fornitore dentro le offerte e lo
-    toglie dai documenti — e in quel caso la prima non ha niente da dire,
-    perche' i suoi avvisi nascono **dentro** il ciclo sui documenti trovati:
-    zero documenti risolti significa zero avvisi.
+    Differs from `fornitori_senza_copia` on purpose: that one iterates
+    documents (`review["files"]`); this one iterates suppliers the user has
+    assigned a quantity to. The two lists can diverge — a deleted or
+    replaced price list stays in the offers but drops out of the documents —
+    and in that case the document-based check has nothing to say, since its
+    warnings are only raised inside the loop over resolved documents.
 
-    Misurato il 14 agosto 2026 sul dataset vivo: quattro fornitori con offerte
-    e quantita' assegnate, un solo documento nell'elenco, il suo percorso non
-    piu' esistente.  `writer_readiness` rispondeva «Writer XLSX pronto» con
-    zero regole e zero avvisi, e la compilazione produceva il piano e nessuna
-    copia da mandare.
+    Measured on a live dataset: four suppliers with offers and assigned
+    quantities, one listed document whose path had disappeared.
+    `writer_readiness` reported ready with zero rules and zero warnings, and
+    compiling produced a plan with no copy to send.
 
-    Chi decide se si puo' compilare chiama questa, e la chiama con i fornitori
-    che stanno davvero nell'ordine.
+    Whatever decides if compiling is possible should call this, with the
+    suppliers actually in the order.
     """
 
     richiesti = [str(nome or "").strip().casefold() for nome in fornitori]
@@ -590,9 +570,9 @@ def fornitori_ordinati_senza_copia(
     if not richiesti:
         return {}
 
-    # Un registro che non si apre non e' un registro che «non dichiara»: non
-    # sappiamo niente di nessuno, quindi non si compila nessuno.  Fallire
-    # chiusi qui e' l'unica risposta onesta.
+    # A registry that fails to open isn't a registry that "declares
+    # nothing": we know nothing about anyone, so nothing compiles. Failing
+    # closed here is the only honest answer.
     motivo_registro = _registro_degli_adattatori().motivo_registro_illeggibile(
         percorso or ADAPTERS_PATH
     )
@@ -606,13 +586,11 @@ def fornitori_ordinati_senza_copia(
         }
 
     adattatori = adattatori_compilabili(percorso)
-    # ⚠ Non si usano `review_supplier_sources`/`review_supplier_entries`: quelle
-    # chiamano `fornitori_compilabili()` senza percorso, cioe' leggono sempre il
-    # registro predefinito.  L'orchestratore lavora su un registro
-    # configurabile — nelle prove e' una copia — e guardarne uno mentre si
-    # avvisa sull'altro dice bugie in tutte e due le direzioni: un fornitore
-    # dichiarato solo nel registro di lavoro risulterebbe «senza documento»
-    # anche col suo listino al posto giusto.
+    # Not using `review_supplier_sources`/`review_supplier_entries` here:
+    # those call `fornitori_compilabili()` without a path, always reading
+    # the default registry. The orchestrator can run against a configurable
+    # registry (a copy, in tests), and reading one while warning on the
+    # other would be wrong in both directions.
     compilabili = tuple(sorted(adattatori, key=lambda nome: (-len(nome), nome)))
     sorgenti: dict[str, Path] = {}
     voci: dict[str, dict[str, Any]] = {}
@@ -644,18 +622,18 @@ def fornitori_ordinati_senza_copia(
             continue
         source = sorgenti.get(nome)
         if source is None:
-            # Il caso che nessuno diceva.  Il fornitore e' compilabile in
-            # astratto, ma il documento di questa settimana non c'e' — mai
-            # caricato, eliminato dopo il confronto, o con un percorso che non
-            # si risolve piu'.
+            # An easy-to-miss case: the supplier is compilable in
+            # the abstract, but this week's document is missing — never
+            # uploaded, deleted after the comparison, or with a path that no
+            # longer resolves.
             voce = voci.get(nome)
             if voce is None and not (review.get("files") or []):
-                # ⚠ «Non lo so» non e' «non c'e'».  Un confronto che non porta
-                # affatto l'elenco dei documenti — le prove sintetiche, i
-                # formati piu' vecchi — non autorizza a dire che manchino: si
-                # tace, come si tace in `base_review` per lo stesso motivo.
-                # Quando l'elenco c'e' ed e' quel fornitore a non esserci,
-                # allora si', ed e' la divergenza che si vuole scoprire.
+                # "Unknown" isn't "missing". A comparison that carries no
+                # document list at all (synthetic test data, older formats)
+                # doesn't license saying suppliers are missing: stay silent,
+                # the same way `base_review` does for the same reason. When
+                # the list exists and this supplier is absent from it,
+                # that's the real divergence this check is meant to catch.
                 continue
             if voce is None:
                 esiti[nome] = (
@@ -706,14 +684,15 @@ def workbook_sheet_names(path: Path) -> list[str]:
 
 
 def formato_del_contenitore(path: Path) -> str:
-    """«xls», «xlsx» o «csv», guardato nei primi byte del file.
+    """Return "xls", "xlsx" or "csv", read from the file's first bytes.
 
-    Il formato lo decidono i byte e non l'estensione — lo dice gia' la nota di
-    Noce nel registro — e chi sa leggerli e' `scripts/inspect_sources.py`.
-    Qui si importa il suo invece di tenerne una seconda copia: due elenchi di
-    firme divergono, e quello che si dimentica di aggiornare e' sempre quello
-    che poi apre il file con il lettore sbagliato.  Se quella cartella non c'e'
-    resta l'estensione, che e' meno di niente ma non e' un guasto.
+    The format is decided by the bytes, not the extension — as noted for
+    noce in the registry — and `scripts/inspect_sources.py` knows how to
+    read them. Imported here rather than duplicated, since two signature
+    lists would drift apart, and the one that isn't updated is always the
+    one that opens the file with the wrong reader. Falls back to the
+    extension if that folder is missing: worse than nothing, but not a
+    failure.
     """
 
     cartella = str(SKILL_ROOT / "scripts")
@@ -721,13 +700,13 @@ def formato_del_contenitore(path: Path) -> str:
         sys.path.insert(0, cartella)
     try:
         from inspect_sources import container_format  # noqa: PLC0415 - import tardivo voluto
-    except Exception:  # noqa: BLE001 - senza `scripts` si ripiega, non si muore
+    except Exception:  # noqa: BLE001 - fall back without `scripts`, don't crash
         return path.suffix.casefold().lstrip(".") or "csv"
     return container_format(path)
 
 
 def numero_di_colonna(lettere: str) -> int:
-    """«G» → 7.  Quale colonna verificare lo dichiara il registro, non il codice."""
+    """`"G"` -> `7`. Which column to check is declared by the registry, not the code."""
 
     indice = 0
     for lettera in lettere.upper():
@@ -741,12 +720,12 @@ def _intero(valore: Any) -> int | None:
 
 def regola_noce(source: Path, mapping: dict[str, Any], order_column: str, header_row: int,
                     data_start_row: int, etichetta: str) -> tuple[dict[str, Any] | None, str | None]:
-    """Il listino `.xls` si compila in posizione, quattro byte per cella.
+    """The `.xls` price list is patched in place, four bytes per cell.
 
-    La colonna dell'EAN resta dichiarata **per nome**: `cat` e `Iva` sono nomi
-    di colonna veri di questo listino e insieme riferimenti Excel validi, e un
-    ripiego sulle lettere leggerebbe in silenzio la colonna sbagliata.  Chi
-    scrive la risolve leggendo la riga di intestazione del file.
+    The EAN column stays declared by name: `cat` and `Iva` are real column
+    names in this price list that are also valid Excel column references,
+    so falling back to letters would silently read the wrong column. The
+    writer resolves it by reading the file's header row.
     """
 
     colonne = mapping.get("columns")
@@ -760,25 +739,25 @@ def regola_noce(source: Path, mapping: dict[str, Any], order_column: str, header
         "header_row": header_row,
         "ean_column_name": nome_ean,
         "source_sha256": sha256_file(source),
-        # Il documento si compila in posizione, non passando da Node: e' scritto
-        # qui perche' chi legge la configurazione lo sappia senza dedurlo
-        # dall'estensione.
+        # The document is compiled in place, not via Node: stated here so
+        # whatever reads the config knows without inferring it from the
+        # extension.
         "compilazione": "patch_xls_in_posizione",
     }, None
 
 
 def _colonna_dichiarata(dichiarata: Any, intestazione: list[Any]) -> str | None:
-    """La lettera di colonna corrispondente a una dichiarazione del registro.
+    """Return the column letter for a registry declaration.
 
-    Il registro dice dove sta un campo in tre modi diversi a seconda del
-    fornitore — lettera, numero, nome dell'intestazione — e sono tutti e tre
-    legittimi. Il nome si puo' risolvere solo con l'intestazione del documento
-    davanti: senza, non si indovina e si torna `None`.
+    The registry states a field's position in one of three ways depending
+    on the supplier — letter, number, or header name — all equally valid.
+    A name can only be resolved against the document's own header: without
+    it, this doesn't guess and returns `None`.
     """
 
-    # Tardivo come gli altri openpyxl di questo file: il lanciatore deve poter
-    # partire e *dire* che manca (vedi il controllo in cima), non morire di
-    # ImportError prima di arrivare a spiegarlo.
+    # Deferred like the other openpyxl imports in this file: the launcher
+    # must be able to start and report that it's missing (see the check at
+    # the top), not die with an ImportError before it can explain.
     from openpyxl.utils import get_column_letter  # noqa: PLC0415
 
     if dichiarata in (None, ""):
@@ -798,8 +777,8 @@ def _colonna_dichiarata(dichiarata: Any, intestazione: list[Any]) -> str | None:
             continue
         if _registro_degli_adattatori().normalizza(valore) == atteso:
             return get_column_letter(indice)
-    # Nessuna intestazione che corrisponda: se la dichiarazione era gia' una
-    # lettera vale quella, altrimenti non si sa e non si inventa.
+    # No matching header: if the declaration was already a letter, use it;
+    # otherwise it's unknown, and nothing is guessed.
     if re.fullmatch(r"[A-Za-z]{1,3}", testo):
         return testo.upper()
     return None
@@ -810,11 +789,11 @@ def _colonne_da_verificare(
     mappatura: dict[str, Any] | None,
     intestazione: list[Any],
 ) -> dict[str, str]:
-    """Dove il writer puo' controllare che la riga sia quella giusta.
+    """Return where the writer can verify a row is the right one.
 
-    Solo cio' che il registro (o la mappatura confermata) dichiara gia': l'EAN
-    identifica l'articolo in modo esatto, la descrizione lo riconosce e basta.
-    Sono due controlli con due severita' diverse, e chi li usa lo sa.
+    Only what the registry (or the confirmed mapping) already declares: the
+    EAN identifies the item exactly, the description merely recognizes it.
+    Two checks with two different severities, known to whoever uses them.
     """
 
     motore = _registro_degli_adattatori()
@@ -830,16 +809,15 @@ def _colonne_da_verificare(
 def _riga_dell_intestazione(
     source: Path, sheet_name: str, order_column: str, atteso: str
 ) -> int | None:
-    """La riga in cui la colonna d'ordine porta la scritta attesa, se e' una sola.
+    """Return the row where the order column carries the expected text, if unique.
 
-    `None` quando non c'e' o quando ce ne sono due: in tutti e due i casi
-    indovinare vorrebbe dire scrivere le quantita' in un punto che nessuno ha
-    guardato, e chi chiama tiene i numeri dichiarati e lascia rifiutare la
-    verifica.
+    Returns `None` when it's absent or found twice: in either case, guessing
+    would mean writing quantities into a spot nobody looked at, so the
+    caller keeps the declared numbers and lets the check below reject.
 
-    Si guardano solo le prime righe: un'intestazione sta in cima, e leggere
-    tutto il foglio in sola lettura costerebbe l'attesa di cinque minuti che il
-    15 agosto 2026 ha fatto sembrare piantato l'avvio del programma.
+    Only the first rows are scanned: a header sits at the top, and reading
+    the whole sheet read-only costs the same five-minute stall that once
+    made startup look hung.
     """
 
     from openpyxl import load_workbook  # noqa: PLC0415
@@ -868,27 +846,26 @@ def _riga_dell_intestazione(
 
 def source_rule(supplier: str, source: Path, entry: dict[str, Any],
                 adattatore: dict[str, Any] | None = None) -> tuple[dict[str, Any] | None, str | None]:
-    """La regola con cui si scrive l'ordine dentro il listino di questo fornitore.
+    """The rule for writing an order into this supplier's price list.
 
-    Ogni numero e ogni lettera vengono dal registro — `order_write`
-    nell'adattatore, completato dalla `field_mapping` quando l'adattatore ne ha
-    una — e non da un ramo `if supplier == "..."`.  Prima era il codice a
-    sapere che BETULLA si ordina in colonna C: un fornitore imparato non sarebbe
-    mai potuto diventare compilabile, e nessuno lo diceva.  Qui si aggiunge
-    soltanto cio' che il registro non puo' sapere: il nome vero del foglio del
-    documento di oggi, la sua impronta, e la prova che l'intestazione
-    dichiarata sta dove e' scritto.
+    Every number and letter comes from the registry — `order_write` on the
+    adapter, completed by `field_mapping` when the adapter has one — never
+    from an `if supplier == "..."` branch. Hardcoding a supplier's column in
+    code would keep a learned supplier from ever becoming compilable. This
+    function adds only what the registry can't know: today's actual sheet
+    name, its fingerprint, and proof that the declared header sits where
+    it's declared.
 
-    ⚠ «FIRST» vuol dire due cose diverse a seconda di chi lo dice, ed e'
-    voluto.  In `order_write` lo dice il registro, cioe' una persona che quel
-    listino l'ha guardato: vuol dire «il primo foglio del documento».  In una
-    `field_mapping` vuol dire che il foglio **non e' stato identificato**, e
-    allora il documento ne deve avere uno solo — scegliere il primo di tre
-    scriverebbe l'ordine in un foglio che nessuno ha guardato.
+    "FIRST" means two different things depending on who states it, on
+    purpose. In `order_write` it's the registry's choice — someone who
+    looked at that price list — meaning "the document's first sheet". In a
+    `field_mapping` it means the sheet wasn't identified, so the document
+    must have exactly one: picking the first of several would write the
+    order into a sheet nobody looked at.
     """
 
-    # Tutto maiuscolo come nelle altre frasi del programma: `capitalize()`
-    # trasformava «Noce» in «Noce», una grafia che non e' di nessuno.
+    # All-caps like other messages in this program: `capitalize()` turned
+    # "Noce" into "Noce", a spelling that belongs to no one.
     etichetta = nome_leggibile(supplier)
     if not isinstance(adattatore, dict):
         adattatore = adattatori_compilabili().get(supplier) or {}
@@ -902,10 +879,10 @@ def source_rule(supplier: str, source: Path, entry: dict[str, Any],
     da_mappatura = bool(dichiarazione.get("from_field_mapping"))
     incompleta = (f"{etichetta} non attivato: la mappatura verificata deve indicare foglio, righe, "
                   f"campi e colonna {str(dichiarazione.get('order_column') or '').strip().upper()}")
-    # La mappatura e' quella del confronto, non quella del registro: e' quella
-    # che l'utente ha avuto davanti, ed e' misurata sul documento di oggi.
-    # Ripiegare su quella del registro vorrebbe dire scrivere l'ordine secondo
-    # un documento diverso da quello che si sta compilando.
+    # This is the comparison's mapping, not the registry's: it's what the
+    # user actually saw, measured against today's document. Falling back to
+    # the registry's mapping would write the order against a different
+    # document than the one being compiled.
     mapping = entry.get("fieldMapping") or entry.get("field_mapping")
     if not isinstance(mapping, dict):
         mapping = {}
@@ -916,41 +893,41 @@ def source_rule(supplier: str, source: Path, entry: dict[str, Any],
     if not re.fullmatch(r"[A-Z]{1,3}", dichiarata):
         return None, f"{etichetta} non attivato: il registro non dichiara la colonna d'ordine del suo listino"
     if da_mappatura and str(mapping.get("order_column") or mapping.get("orderColumn") or "").strip().upper() != dichiarata:
-        # La colonna la dichiara il registro; la mappatura confermata deve dire
-        # la stessa cosa. Se dicono due colonne diverse l'ordine finirebbe in
-        # una cella che nessuno ha verificato.
+        # The registry declares the column; the confirmed mapping must agree.
+        # If they name different columns the order would land in a cell no
+        # one verified.
         return None, incompleta
     order_column = dichiarata
 
-    # Righe e foglio: dove li dichiara chi legge il documento. Per gli
-    # adattatori con una mappatura e' la mappatura (che l'utente ha confermato);
-    # per quelli con un lettore dedicato e' `order_write`.
+    # Rows and sheet: declared by whatever reads the document. For adapters
+    # with a mapping, that's the mapping the user confirmed; for adapters
+    # with a dedicated reader, it's `order_write`.
     origine = mapping if da_mappatura else dichiarazione
     header_row = _intero(origine.get("header_row") or origine.get("headerRow"))
     data_start_row = _intero(origine.get("data_start_row") or origine.get("dataStartRow"))
     colonne = mapping.get("columns") if isinstance(mapping.get("columns"), dict) else {}
     mancanti = [str(nome) for nome in (dichiarazione.get("required_columns") or []) if nome not in colonne]
     if mancanti:
-        # La causa vera: mancano colonne, non righe.  La frase di prima
-        # mandava a cercare `data_start_row` quando il problema era un'altra
-        # dichiarazione (revisione avversariale del 13 agosto 2026).
+        # The real cause is missing columns, not rows: an earlier message
+        # pointed at `data_start_row` when the actual problem was a
+        # different declaration.
         if da_mappatura:
             return None, incompleta
         return None, (f"{etichetta} non attivato: il registro chiede le colonne "
                       + ", ".join(sorted(mancanti))
                       + " ma il documento non ha una mappatura confermata che le porti")
     atteso = str(dichiarazione.get("expected_header") or "").strip()
-    # La conferma «quella cella e' vuota, e va bene cosi'» arriva da due posti,
-    # e sono due strade per la stessa risposta umana: la mappatura confermata
-    # nell'anteprima (fornitori con `from_field_mapping`) oppure `order_write`
-    # stesso, quando la colonna e' stata scelta dalla pagina su un fornitore che
-    # ha un lettore dedicato e nessuna mappatura — BETULLA.  Senza la seconda,
-    # spostare la colonna d'ordine di BETULLA su una colonna senza titolo
-    # **spegnerebbe** ogni verifica invece di accenderla: `expected_header`
-    # assente vuol dire «niente da controllare», e la quantita' finirebbe in una
-    # cella che nessuno ha guardato.  Quello che si dichiara viene comunque
-    # misurato sul documento, qui sotto: la cella dev'essere ancora vuota
-    # davvero, e sotto non ci devono essere testo o formule.
+    # The confirmation "that cell is blank, and that's fine" can come from
+    # two places, both routes to the same human decision: the confirmed
+    # mapping in the preview (suppliers with `from_field_mapping`), or
+    # `order_write` itself, when the order column was chosen from the UI for
+    # a supplier with a dedicated reader and no mapping. Without the second
+    # route, moving that supplier's order column onto an untitled column
+    # would disable the check instead of enabling it: a missing
+    # `expected_header` means "nothing to verify", so the quantity could
+    # land in a cell no one looked at. Either way, what's declared is still
+    # checked against the document below: the cell must actually still be
+    # blank, with no text or formulas beneath it.
     intestazione_vuota_confermata = (
         dichiarazione.get("allow_blank_header_if_confirmed") is True
         and (
@@ -972,19 +949,19 @@ def source_rule(supplier: str, source: Path, entry: dict[str, Any],
             return None, f"{etichetta} non attivato: la mappatura non dichiara le righe di intestazione e dati"
         return regola_noce(source, mapping, order_column, header_row, data_start_row, etichetta)
     if procedura:
-        # Un refuso nella procedura ricadeva in silenzio su quella base: su un
-        # `.xls` si vedeva per caso (openpyxl si rifiuta), su un `.xlsx` no.
+        # Without this, a typo in the declared procedure would silently
+        # fall through to the default path: visible by chance on an `.xls`
+        # (openpyxl refuses it), invisible on an `.xlsx`.
         return None, (f"{etichetta} non attivato: il registro dichiara una procedura di "
                       f"scrittura sconosciuta («{procedura}»)")
 
-    # ⚠ Da qui in giu' si apre il documento con openpyxl, che di un `.xls` non
-    # sa niente: senza questa guardia l'utente riceveva la frase inglese della
-    # libreria — «openpyxl does not support the old .xls file format, please use
-    # xlrd to read this file» — incastonata dentro «Non riesco a leggere il
-    # listino LARICE», e la leggeva come «lo legge ma non ci sa scrivere».
-    # Il rimedio vero e' una riga di Excel, e va detto qui: il `.xls` si compila
-    # in posizione solo dove il registro dichiara quella procedura, che pretende
-    # una colonna d'ordine gia' tutta numerica (Noce).
+    # From here on the document opens with openpyxl, which knows nothing
+    # about `.xls`. Without this guard the user would see openpyxl's raw
+    # error message embedded in "can't read the price list", which reads as
+    # "it opens fine but can't be written to". The real fix is one Excel
+    # step, stated here: `.xls` only compiles in-place where the registry
+    # declares that procedure, which requires an order column that's already
+    # fully numeric (as with noce).
     formato = formato_del_contenitore(source)
     if formato != "xlsx":
         com_e = {"xls": "un Excel 97-2003 (.xls)"}.get(formato, "un file che non è un .xlsx")
@@ -1003,12 +980,12 @@ def source_rule(supplier: str, source: Path, entry: dict[str, Any],
 
     richiesto = str(origine.get("sheet") or origine.get("sheet_name") or "").strip()
     if not richiesto or richiesto.casefold() == "first":
-        # «FIRST» scritto nel registro e' una scelta di chi il listino l'ha
-        # guardato, e vuol dire «il primo foglio».  Un foglio ASSENTE invece
-        # non e' una scelta: prendere il primo di tre sarebbe scrivere
-        # l'ordine in un foglio che nessuno ha guardato.  Da una mappatura
-        # vale sempre la regola del foglio unico, perche' li' «FIRST» marca
-        # un foglio non identificato.
+        # "FIRST" declared in the registry is a deliberate choice by
+        # whoever reviewed that price list, meaning "the first sheet". A
+        # sheet name that's simply absent is not a choice: picking the
+        # first of several would write the order into a sheet nobody looked
+        # at. From a mapping the single-sheet rule always applies, since
+        # there "FIRST" marks an unidentified sheet.
         scelto_dal_registro = bool(richiesto) and not da_mappatura
         if not scelto_dal_registro and len(sheet_names) != 1:
             chi = "la mappatura" if da_mappatura else "il registro"
@@ -1022,19 +999,17 @@ def source_rule(supplier: str, source: Path, entry: dict[str, Any],
         return None, (f"{etichetta} non attivato: il foglio indicato {dove} "
                       "non coincide con il listino")
 
-    # ⚠ Dove sta l'intestazione, quando il registro dice di **cercarla** invece
-    # di dichiararne la riga. Serve ai listini che non hanno una riga di
-    # intestazione vera: nel foglio delle offerte sopra i prodotti ci sono
-    # righe vuote e la sola parola ORDINE, e quante siano quelle righe vuote
-    # cambia di mese in mese. La lettura lo sa gia' — segue un
-    # `data_start_marker` che si ricalcola a ogni giro — e senza questo la
-    # scrittura restava indietro con un numero congelato: il confronto mostrava
-    # le offerte, la compilazione non produceva nessuna copia per quel
-    # fornitore e lo diceva solo con un avviso in mezzo agli altri.
+    # Locating the header when the registry says to search for it instead
+    # of declaring its row. Needed for price lists without a real header
+    # row: above the offers there are blank rows and just the word ORDINE,
+    # and how many blank rows there are varies month to month. Reading
+    # already tracks this via a `data_start_marker` recalculated each run;
+    # without matching that here, writing would use a stale frozen row
+    # number.
     #
-    # Se la parola non c'e', o compare piu' di una volta, non si indovina: si
-    # tengono i numeri dichiarati e la verifica qui sotto rifiuta, che e'
-    # esattamente quello che deve succedere.
+    # If the word isn't found, or appears more than once, this doesn't
+    # guess: it keeps the declared numbers and lets the check below reject,
+    # which is the correct outcome.
     if dichiarazione.get("expected_header_search") is True and atteso:
         trovata = _riga_dell_intestazione(source, sheet_name, order_column, atteso)
         if trovata is not None:
@@ -1047,10 +1022,10 @@ def source_rule(supplier: str, source: Path, entry: dict[str, Any],
         "order_column": order_column,
         "data_start_row": data_start_row,
         "source_sha256": sha256_file(source),
-        # Il nome leggibile viaggia con la regola: il writer Node non legge il
-        # registro — la configurazione e' il suo unico ingresso dichiarato — e
-        # senza questo si ritrovava a stampare l'identificativo tecnico, con
-        # l'underscore, nei messaggi e nei nomi dei file d'ordine.
+        # The display name travels with the rule: the Node writer never
+        # reads the registry — the config is its only declared input — so
+        # without this it would print the raw identifier, underscore
+        # included, in messages and order file names.
         "display_name": _registro_degli_adattatori().nome_del_fornitore(supplier, ADAPTERS_PATH),
     }
     if header_row is not None and header_row >= 1:
@@ -1059,11 +1034,9 @@ def source_rule(supplier: str, source: Path, entry: dict[str, Any],
         return None, (f"{etichetta} non attivato: le righe dichiarate non stanno insieme "
                       f"(intestazione alla riga {header_row}, dati dalla riga {data_start_row})")
 
-    # Il documento si apre anche quando non c'e' un'intestazione da
-    # verificare: righe e intestazione dichiarate vengono da un file che una
-    # persona modifica a mano, e un refuso di una cifra scriverebbe le
-    # quantita' fuori dai dati senza una parola (revisione avversariale del
-    # 13 agosto 2026).
+    # The document is opened even when there's no header to verify: the
+    # declared rows come from a file a person edits by hand, and a single
+    # typo'd digit would silently write quantities outside the data range.
     try:
         from openpyxl import load_workbook
 
@@ -1072,15 +1045,12 @@ def source_rule(supplier: str, source: Path, entry: dict[str, Any],
             foglio = workbook[sheet_name]
             ultima_riga = foglio.max_row
             numero_colonna_ordine = numero_di_colonna(order_column)
-            # ⚠ Su un foglio aperto in **sola lettura** `foglio.cell(r, c)` non
-            # e' un accesso: openpyxl rilegge il foglio dall'inizio a ogni
-            # chiamata.  Il ciclo qui sotto ne faceva una per riga di listino —
-            # 3382 chiamate su CIPRESSO, cioe' 5,7 milioni di righe analizzate
-            # — e il 15 agosto 2026 l'avvio del programma e' rimasto muto per
-            # **cinque minuti**, con l'utente convinto che si fosse piantato.
-            # Il ramo era appena diventato raggiungibile: e' l'intestazione
-            # vuota confermata di CIPRESSO a portarci.  Adesso il foglio si
-            # attraversa **una volta sola**, e si prende quello che serve.
+            # On a sheet opened read-only, `foglio.cell(r, c)` isn't a plain
+            # access: openpyxl re-reads the sheet from the start on every
+            # call. Calling it once per price-list row measured 3382 calls
+            # on cipresso — 5.7 million rows scanned — and the launch hung
+            # silently for five minutes. Now the sheet is walked exactly
+            # once, taking what's needed along the way.
             intestazione = None
             valori_intestazione: list[Any] = []
             contenuto_inatteso = None
@@ -1116,10 +1086,10 @@ def source_rule(supplier: str, source: Path, entry: dict[str, Any],
     except Exception as exc:
         return None, (f"{etichetta} non attivato: non riesco a verificare il foglio "
                       f"{sheet_name} ({exc})")
-    # Dove il writer puo' controllare che la riga di destinazione porti davvero
-    # il prodotto del piano. E' la difesa che il 12 agosto 2026 avrebbe fermato
-    # l'ordine finito sulla riga 2600, e finora esisteva solo per Noce.
-    # Non si inventa niente: si dichiara solo cio' che il registro dice gia'.
+    # Where the writer can verify that the destination row really carries
+    # the planned product, generalizing a check available elsewhere only
+    # for noce; nothing is invented here, only what the registry already
+    # declares.
     verifica = _colonne_da_verificare(adattatore, mapping, valori_intestazione)
     if verifica:
         regola["verify"] = verifica
@@ -1167,14 +1137,14 @@ def writer_readiness(
         missing.append("Node 18+")
     if not WRITER_SCRIPT_PATH.is_file():
         missing.append(str(WRITER_SCRIPT_PATH))
-    # I listini del confronto che il registro non sa compilare: l'assenza si
-    # dice qui, dove si decide chi entra nella configurazione di scrittura.
-    # Senza, sparivano prima ancora di essere nominati.
+    # Price lists in the comparison the registry can't compile: reported
+    # here, where it's decided who enters the write configuration. Without
+    # this they'd disappear before ever being named.
     motivo_registro = _registro_degli_adattatori().motivo_registro_illeggibile(ADAPTERS_PATH)
     if motivo_registro:
-        # Un registro che non si apre non e' un registro che «non dichiara»:
-        # la frase per-fornitore manderebbe a cercare una dichiarazione dentro
-        # un file rotto (revisione avversariale del 13 agosto 2026).
+        # A registry that fails to open isn't one that "declares nothing":
+        # a per-supplier message here would send someone looking for a
+        # declaration inside a broken file.
         warnings.append(
             "Il registro degli adattatori non si legge, quindi nessun fornitore "
             "risulta compilabile e nessuna copia d'ordine nascerà. " + motivo_registro
@@ -1199,15 +1169,16 @@ def writer_readiness(
         usable_sources[supplier] = source
         rules[supplier] = rule
 
-    # ⚠ Gli avvisi qui sopra nascono **dentro** il ciclo sulle sorgenti
-    # risolte.  Un fornitore il cui listino e' sparito — mai caricato,
-    # eliminato dopo il confronto, percorso che non si risolve piu' — non entra
-    # in quel ciclo, quindi nessuno lo nomina: zero sorgenti significa zero
-    # avvisi.  Misurato il 14 agosto 2026 sul dataset vivo: quattro fornitori
-    # con offerte, un solo documento nell'elenco, e `writer_readiness` che
-    # rispondeva con zero regole e **zero avvisi**.
+    # The warnings above are raised inside the loop over resolved sources.
+    # A supplier whose price list has gone missing — never uploaded,
+    # deleted after the comparison, an unresolvable path — never enters
+    # that loop, so nothing names it: zero sources means zero warnings.
+    # Measured on a live dataset: four suppliers with offers, one listed
+    # document, and `writer_readiness` reporting zero rules and zero
+    # warnings.
     #
-    # Si parte dai fornitori che il confronto usa davvero, non dai documenti.
+    # Start from the suppliers the comparison actually uses, not from the
+    # documents.
     mancanti = [
         fornitore for fornitore in fornitori_del_confronto(review)
         if fornitore not in sources
@@ -1225,14 +1196,13 @@ def writer_readiness(
 def prepare_writer_config(
     review: dict[str, Any], *, write: bool, destinazione: Path | None = None
 ) -> WriterSetup:
-    """Costruisce la configurazione di scrittura a partire dal confronto vivo.
+    """Build the write configuration from the live comparison.
 
-    `destinazione` esiste per l'orchestratore: dopo un ricalcolo i listini sono
-    altri file, con altri nomi e altre righe, e una configurazione rimasta a
-    quella della settimana scorsa farebbe compilare **il listino di prima** con
-    i numeri di riga di adesso.  Il lanciatore la scrive dove ha sempre fatto;
-    l'orchestratore la scrive dove gliela chiede il server, che nelle prove non
-    e' la cartella vera.
+    `destinazione` exists for the orchestrator: after a recompute, price
+    lists are different files with different names and rows, and a stale
+    config would compile last week's list using today's row numbers. The
+    launcher writes it where it always has; the orchestrator writes it
+    wherever the server asks, which in tests isn't the real folder.
     """
 
     percorso = Path(destinazione) if destinazione is not None else WRITER_CONFIG_PATH
@@ -1257,24 +1227,23 @@ def prepare_writer_config(
         "supplier_write_rules": rules,
     }
     if write:
-        # ⚠ Questo file lo scrivono in due, e non due fili: il **processo** del
-        # lanciatore, che ci passa a ogni avvio — anche quando il servizio e'
-        # gia' acceso e sta ricalcolando — e il filo della catena dentro il
-        # servizio, quando riconfigura la scrittura a fine ricalcolo. Con un
-        # temporaneo dal nome fisso i due si sovrapponevano, e il file
-        # pubblicato poteva prendere il `run_id` da uno e i `supplier_files`
-        # dall'altro: la guardia che confronta le due run direbbe di si'
-        # proprio a cio' che deve fermare, e il writer scriverebbe i numeri di
-        # riga di adesso dentro il listino di prima. Il gesto che lo innesca e'
-        # quello che l'utente fa quando la pagina sembra bloccata: doppio clic
-        # sull'avvio a ricalcolo in corso. Trovato dalla verifica avversariale
-        # del 20 agosto 2026.
+        # Two different writers touch this file, not two threads: the
+        # launcher process, which passes through on every startup — even
+        # while the service is already running a recompute — and the
+        # service's own pipeline, when it reconfigures writing at the end of
+        # a recompute. With a fixed temporary name the two could overlap,
+        # letting the published file take `run_id` from one write and
+        # `supplier_files` from the other: the guard that compares run ids
+        # would then approve exactly the mismatch it exists to catch, and
+        # the writer would apply today's row numbers to last week's price
+        # list. Triggered by double-clicking the launcher while a recompute
+        # is already in progress.
         scrittura_sicura.scrivi_json(percorso, config)
 
-    # «Pronto» con zero regole non e' pronto: e' una configurazione che non
-    # compilera' niente, e dirlo «pronto» e' la frase che ha coperto il buco
-    # fino al 14 agosto 2026.  Il numero dei fornitori scrivibili sta nella
-    # frase, cosi' lo zero si vede.
+    # "Ready" with zero rules isn't ready: it's a configuration that will
+    # compile nothing, and calling it ready hid that gap for a while. The
+    # count of writable suppliers is stated explicitly, so a zero is
+    # visible.
     if rules:
         quanti = len(rules)
         testa = (
@@ -1306,12 +1275,12 @@ def application_health(port: int, *, timeout: float = 0.35) -> bool:
 
 
 def salute(port: int, *, timeout: float = 0.35) -> dict[str, Any] | None:
-    """La risposta di `/api/health`, oppure `None` se non risponde l'app.
+    """Return `/api/health`'s response, or `None` if the app doesn't respond.
 
-    Separata da `application_health` perche' adesso non basta sapere **che**
-    qualcuno risponde: serve sapere **quale programma** e', e lo dice
-    `firmaDelCodice`.  Un server piu' vecchio della firma non ce l'ha, e
-    l'assenza e' essa stessa la risposta: e' vecchio di sicuro.
+    Kept separate from `application_health` because knowing that something
+    responds isn't enough: it matters which program it is, and
+    `firmaDelCodice` says so. A server older than this signature won't have
+    it, and its absence is itself the answer: it's definitely old.
     """
 
     request = urllib.request.Request(
@@ -1331,10 +1300,10 @@ def salute(port: int, *, timeout: float = 0.35) -> dict[str, Any] | None:
 
 
 def e_lo_stesso_programma(risposta: dict[str, Any], firma_del_disco: str) -> bool:
-    """Il server che risponde sta eseguendo i sorgenti che ci sono adesso?
+    """Is the responding server running today's sources?
 
-    Un server senza `firmaDelCodice` e' precedente a questa difesa: si tratta
-    come diverso, che e' la risposta prudente e anche quella vera.
+    A server without `firmaDelCodice` predates this check: treated as
+    different, which is both the cautious and the correct answer.
     """
 
     dichiarata = risposta.get("firmaDelCodice")
@@ -1342,11 +1311,12 @@ def e_lo_stesso_programma(risposta: dict[str, Any], firma_del_disco: str) -> boo
 
 
 def chiedi_di_spegnersi(port: int, *, timeout: float = 6.0) -> tuple[bool, str]:
-    """Chiede al server di fermarsi e aspetta che smetta di rispondere.
+    """Ask the server to stop and wait until it stops responding.
 
-    Restituisce `(spento, motivo)`.  Il motivo non e' decorazione: se una run e'
-    in corso il servizio **rifiuta**, e chi chiama deve dirlo invece di
-    insistere — una catena uccisa a meta' costa il lavoro gia' pagato all'AI.
+    Returns `(stopped, reason)`. The reason matters: if a run is in
+    progress the service refuses, and the caller must report that instead
+    of retrying — killing a pipeline mid-run throws away AI work already
+    paid for.
     """
 
     request = urllib.request.Request(
@@ -1386,18 +1356,17 @@ def port_is_free(port: int) -> bool:
 
 
 def select_port(first_port: int) -> tuple[int, bool]:
-    """La porta da usare, e se il server c'e' gia' e si puo' riusare.
+    """Return the port to use, and whether an existing server can be reused.
 
-    ⚠ **Un server sano non basta piu' a farsi riusare: deve anche eseguire i
-    sorgenti di adesso.**  Prima bastava che rispondesse, e chi riapriva il
-    `.cmd` dopo un aggiornamento tornava sul programma di prima credendo di
-    averlo riavviato — il caso vero: server acceso il 15 agosto alle 19:25 e
-    quattro consegne dopo ancora quello.
+    A healthy server alone isn't enough to be reused: it must also be
+    running today's sources. If responding were the only check, reopening
+    the launcher after an update would silently reattach to the old server
+    instead of restarting it.
 
-    Se la firma non coincide si chiede al server di spegnersi e si riprende
-    **la sua stessa porta**: mai la successiva.  Andare sulla porta dopo
-    lascerebbe due servizi vivi sugli stessi dati, che e' peggio del codice
-    vecchio — quello almeno e' coerente con se stesso.
+    If the signature doesn't match, the server is asked to stop and the same
+    port is reused, never the next one: running on the next port would leave
+    two live services on the same data, which is worse than stale code —
+    stale code is at least consistent with itself.
     """
 
     if not 1 <= first_port <= 65535:
@@ -1447,9 +1416,8 @@ def server_command(port: int, writer_config: Path | None) -> list[str]:
         str(UPLOAD_DIR),
         "--output-dir",
         str(OUTPUT_DIR),
-        # Le compilazioni datate: si passa esplicitamente, cosi' il posto dove
-        # finiscono gli ordini pronti sta scritto qui e non dipende da come il
-        # servizio deduce un percorso predefinito.
+        # Compiled order files: passed explicitly so the destination is
+        # stated here rather than left to the service's own default.
         "--orders-dir",
         str(CURRENT_DIR / "ordini"),
         "--host",
@@ -1472,7 +1440,7 @@ def chrome_candidates() -> list[Path]:
 
 
 def find_chrome() -> Path | None:
-    """Percorso di Chrome, oppure None se non è installato su questo computer."""
+    """Return Chrome's path, or None if it isn't installed on this machine."""
 
     override = os.environ.get(CHROME_ENV_OVERRIDE, "").strip()
     if override:
@@ -1486,10 +1454,10 @@ def find_chrome() -> Path | None:
 
 
 def open_application(url: str) -> None:
-    # Il comparatore si apre in Chrome perché è il programma di navigazione scelto
-    # dall'utente: il predefinito di Windows qui è Edge. Se Chrome manca si ripiega
-    # sul predefinito invece di fermare l'avvio: meglio la pagina aperta altrove
-    # che nessuna pagina.
+    # Opens in Chrome because that's the user's chosen browser: the Windows
+    # default here is Edge. Falls back to the system default instead of
+    # blocking startup if Chrome is missing: a page open elsewhere beats no
+    # page at all.
     chrome = find_chrome()
     if chrome is not None:
         print(f"Apro Chrome: {url}")
@@ -1568,17 +1536,16 @@ def run_check() -> int:
 
 
 def avvisi_del_controllo(writer_setup: WriterSetup) -> list[str]:
-    """Le cose che non fermano l'avvio ma fermano il lavoro.
+    """Things that don't block startup but do block the work.
 
-    ⚠ `--check` diceva `[OK]` e usciva zero anche quando i listini non si
-    sarebbero potuti compilare, quando la porta era occupata da un altro
-    programma e quando la cartella delle copie non era scrivibile. E' il
-    comando che si suggerisce a chi «non riesce ad avviare»: rispondere «va
-    tutto bene» a una macchina su cui il lavoro non si puo' finire e' peggio
-    che non rispondere.
+    Without these, `--check` prints `[OK]` and exits zero even when price
+    lists can't be compiled, the port is taken by another program, or the
+    backup folder isn't writable. This is the command suggested to anyone
+    who "can't get it to start": saying everything is fine on a machine
+    where the work can't be finished is worse than not answering.
 
-    Restano avvisi e non guasti — l'avvio ci riesce lo stesso — quindi il
-    codice d'uscita non cambia: quello che cambia e' che si leggono.
+    These stay warnings, not failures — startup still succeeds — so the
+    exit code doesn't change; what changes is that they're visible.
     """
 
     avvisi: list[str] = []
@@ -1614,9 +1581,9 @@ def avvisi_del_controllo(writer_setup: WriterSetup) -> list[str]:
             "conferme, ordini e schemi imparati resterebbero senza copia di sicurezza."
         )
 
-    # Importato qui e non in cima: il lanciatore deve poter partire anche su una
-    # macchina in cui la parte AI non si importa, e questa e' l'unica riga che
-    # ne ha bisogno.
+    # Imported here, not at the top: the launcher must still start on a
+    # machine where the AI part can't be imported, and this is the only
+    # line that needs it.
     import ai_client  # noqa: PLC0415
 
     stato = ai_client.stato_chiave()
@@ -1635,21 +1602,21 @@ def cartella_delle_copie(
     piattaforma: str | None = None,
     ambiente: dict[str, str] | None = None,
 ) -> Path:
-    """Dove tenere le copie di sicurezza, fuori dal progetto.
+    """Return where to keep safety copies, outside the project.
 
-    Fuori e' la condizione, non un dettaglio: dentro il repository tornerebbe
-    il problema di partenza, perche' l'avvio del PC del negozio riporta
-    indietro i file tracciati e `.gitignore` ignora tutto `app/data/`.
+    Outside is the requirement, not a detail: inside the repository would
+    bring back the original problem, since the store PC's startup resets
+    tracked files and `.gitignore` excludes all of `app/data/`.
 
-    Il percorso si sceglie qui e non si scrive in una costante, perche' il
-    programma deve girare su Windows (il negozio) e su macOS (dove si
-    sviluppa): `%LOCALAPPDATA%` su macOS non esiste, e un ramo che dipende da
-    lei salterebbe sempre proprio sulla macchina in cui si prova.
+    The path is computed here rather than stored as a constant because the
+    program runs on both Windows (the store) and macOS (development):
+    `%LOCALAPPDATA%` doesn't exist on macOS, and a branch depending on it
+    would always be skipped on the test machine.
 
-    ⚠ I tre parametri esistono per una ragione sola: **poter provare il ramo
-    di Windows su una macchina che Windows non e'**. Non si passano mai
-    nell'uso normale. Cambiare `os.name` dall'esterno, che sarebbe l'altra
-    strada, rompe `pathlib` a meta' prova.
+    The three parameters exist for one reason: testing the Windows branch
+    on a machine that isn't Windows. They're never passed in normal use.
+    Overriding `os.name` directly, the other option, breaks `pathlib`
+    mid-test.
     """
 
     nome = sistema if sistema is not None else os.name
@@ -1671,25 +1638,24 @@ def cartella_delle_copie(
 def copia_le_memorie(dati: Path | None = None, destinazione: Path | None = None,
                      quando: str | None = None,
                      su_guasto: Callable[[str], None] | None = None) -> Path | None:
-    """Uno zip datato delle memorie non rigenerabili, o `None` se non si e' fatto.
+    """Return a dated zip of non-regenerable state, or `None` if none was made.
 
-    ⚠ Si chiama DOPO che il server e' partito, mai prima: `memoria_ai.json` da
-    solo pesa 2,1 MB, e comprimerlo davanti all'apertura della pagina
-    ritarderebbe l'unica cosa che l'utente sta aspettando.
+    Called after the server has started, never before: `memoria_ai.json`
+    alone weighs 2.1 MB, and compressing it before the page opens would
+    delay the one thing the user is waiting for.
 
-    ⚠ Non solleva mai. Una copia e' una rete di sicurezza, non una condizione
-    per lavorare: un disco pieno o una cartella non scrivibile devono lasciare
-    il programma acceso, non spegnerlo.
+    Never raises. A backup is a safety net, not a precondition for working:
+    a full disk or an unwritable folder must leave the program running, not
+    stop it.
 
-    ⚠ Ma non riuscire in silenzio e' un'altra cosa. Fino al 22 agosto 2026
-    questa funzione tornava `None` sia quando non c'era niente da copiare sia
-    quando la copia non si era potuta fare, e chi la chiama stampava una riga
-    **solo se era andata bene**: cartella non scrivibile, disco pieno,
-    antivirus sul temporaneo, e l'avvio sembrava normale. Si continuava a
-    lavorare credendo che la rete di sicurezza ci fosse — ed e' l'unica copia
-    che `conferme.db` ha, perche' quella memoria nessun ricalcolo la sa rifare.
-    `su_guasto` riceve il motivo, in italiano, e chi chiama decide dove
-    scriverlo.
+    Failing silently is a separate problem, though. Returning `None` both
+    when there's nothing to back up and when the backup failed, with the
+    caller only printing a line on success, would hide an unwritable
+    folder, a full disk, or antivirus locking the temp file behind a
+    startup that looks normal while the safety net silently isn't there.
+    It's the only backup `conferme.db` has, since no recompute can
+    regenerate that state. `su_guasto` receives the reason, in Italian, and
+    the caller decides where to print it.
     """
 
     cartella_dati = Path(dati or DATA_DIR)
@@ -1702,9 +1668,9 @@ def copia_le_memorie(dati: Path | None = None, destinazione: Path | None = None,
     try:
         cartella_copie.mkdir(parents=True, exist_ok=True)
         percorso = cartella_copie / f"{giorno}.zip"
-        # Un temporaneo accanto e poi `os.replace`: se la compressione si
-        # interrompe a meta', la copia di ieri e' ancora buona invece di
-        # essere stata sostituita da un archivio monco.
+        # Write to a temp file beside it, then `os.replace`: if compression
+        # is interrupted midway, yesterday's copy is still good instead of
+        # being replaced by a truncated archive.
         temporaneo = cartella_copie / f".{giorno}.zip.parziale"
         with zipfile.ZipFile(temporaneo, "w", compression=zipfile.ZIP_DEFLATED) as archivio:
             for voce in presenti:
@@ -1720,8 +1686,8 @@ def copia_le_memorie(dati: Path | None = None, destinazione: Path | None = None,
 
 
 def _tieni_le_ultime_copie(cartella: Path, quante: int = COPIE_DA_TENERE) -> None:
-    """Le copie piu' vecchie si cancellano: il nome porta la data, quindi
-    l'ordine alfabetico e' gia' l'ordine del tempo."""
+    """Delete the oldest backups: the filename carries the date, so
+    alphabetical order is already chronological order."""
 
     try:
         archivi = sorted(cartella.glob("*.zip"))
@@ -1731,7 +1697,7 @@ def _tieni_le_ultime_copie(cartella: Path, quante: int = COPIE_DA_TENERE) -> Non
         try:
             vecchio.unlink()
         except OSError:
-            # Una copia vecchia che non si cancella non fa danno a nessuno.
+            # An old backup that fails to delete harms no one.
             continue
 
 
@@ -1793,11 +1759,12 @@ def main() -> int:
         if not args.no_browser:
             open_application(url)
         print("Per fermare il comparatore, torna in questa finestra e premi Ctrl+C.")
-        # ⚠ Ctrl+C non passa da `/api/spegni`, che si rifiuta di spegnere mentre
-        # la catena lavora: uccide il processo e basta. La ragione di quel
-        # rifiuto vale lo stesso — una run uccisa a meta' lascia una cartella
-        # orfana e le risposte AI gia' pagate da rifare — quindi qui si dice,
-        # perche' questa e' l'unica riga che chi ordina legge prima di premerlo.
+        # Ctrl+C doesn't go through `/api/spegni`, which refuses to stop
+        # while the pipeline is running: it just kills the process. The
+        # reason for that refusal still applies here — a run killed midway
+        # leaves an orphaned folder and AI answers already paid for that
+        # would need redoing — so it's stated here, the one line read
+        # before pressing it.
         print("            Se sta ricalcolando, aspetta che finisca: fermarlo adesso")
         print("            butta via il lavoro di quel confronto.")
         return_code = process.wait()

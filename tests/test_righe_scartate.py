@@ -1,12 +1,11 @@
-"""Ogni riga che non entra nel confronto dev'essere contata, col suo motivo.
+"""Every row dropped from the comparison must be counted, with its reason.
 
-Il difetto che questi test difendono: `rows_not_orderable` contava **solo** le
-righe con un `row_type`, che assegna soltanto il registro dei codici di riga.
-Una riga buttata perche' il prezzo non si e' letto, o perche' mancano i pezzi
-per collo, non ne ha uno: l'utente vedeva «righe non ordinabili: 0» con mezzo
-listino fuori dal confronto. Nello stesso punto `row_filter` scartava senza
-nemmeno un contatore, e i quattro listini piu' grossi — BETULLA, Larice, Noce
-e il gestionale — non producevano nessun rapporto di lettura.
+`rows_not_orderable` only counted rows carrying a `row_type`, which only the
+adapter registry assigns. A row dropped for an unreadable price, or missing
+pieces-per-carton, has no `row_type`, so the count read zero with half a
+price list out of the comparison. `row_filter` discarded rows the same way,
+with no counter at all, and the four fixed-schema readers (BETULLA, Larice,
+Noce, the management-software export) produced no read report at all.
 """
 
 from __future__ import annotations
@@ -52,7 +51,7 @@ class CasoConCartella(unittest.TestCase):
 
 
 class RigheNonOrdinabiliContateTests(CasoConCartella):
-    """Le righe declassate per prezzo, fattore o descrizione entrano nel conto."""
+    """Rows demoted for price, factor or description are counted."""
 
     MAPPATURA = {
         "header_row": 1,
@@ -110,7 +109,7 @@ class RigheNonOrdinabiliContateTests(CasoConCartella):
         self.assertEqual(lettura["rows_not_orderable"], {"senza_descrizione": 1})
 
     def test_il_conteggio_non_e_zero_quando_meta_listino_e_fuori(self) -> None:
-        """La misura del difetto: prima diceva zero, ed erano tre righe su sei."""
+        """Regression guard: the count must not read zero when half the rows are dropped."""
 
         percorso = self.listino(
             "8000000000011;PRIMO;6;2,50\n"
@@ -132,7 +131,7 @@ class RigheNonOrdinabiliContateTests(CasoConCartella):
         self.assertEqual(sum(lettura["rows_not_orderable"].values()), 3)
 
     def test_lo_stesso_conteggio_su_un_foglio_di_calcolo(self) -> None:
-        """Il formato non c'entra: il conteggio è del motore, non del lettore."""
+        """Format is irrelevant: the count comes from the shared engine, not the reader."""
 
         percorso = self.radice / "listino.xlsx"
         workbook = Workbook()
@@ -161,7 +160,7 @@ class RigheNonOrdinabiliContateTests(CasoConCartella):
 
 
 class FiltroDiRigaContatoTests(CasoConCartella):
-    """`row_filter` scartava senza un contatore, accanto a chi invece contava."""
+    """`row_filter` discarded rows without counting them, unlike the other paths."""
 
     def test_le_righe_fuori_dal_filtro_si_contano(self) -> None:
         percorso = self.radice / "listino.csv"
@@ -195,19 +194,16 @@ class FiltroDiRigaContatoTests(CasoConCartella):
 
 
 class LeRigheSeparatoreNonSonoProdottiTests(CasoConCartella):
-    """Il titolo di una sezione entrava fra i prodotti letti.
+    """A section-title row can slip into the read products.
 
-    ⚠ **Misurato sul listino QUERCIA vero il 17 agosto 2026.** Le sue sei righe
-    separatore («OGNI € 1500,00 OMAGGIO …», «LISTINO») hanno descrizione vuota,
-    EAN vuoto e nessun prezzo, ma scrivono il loro testo nella colonna
-    «Articolo», cioè nel `supplier_code`. La vecchia guardia di
-    `supplier_record` pretende vuoti tutti e tre — codice compreso — e quindi
-    non scattava: 4185 righe lette invece di 4179.
-
-    Il lettore del gestionale scarta queste righe da sempre, con questa stessa
-    etichetta; quello dei fornitori no. Sopra il taglio del listino il danno è
-    un conteggio gonfiato; un separatore **dentro** i prodotti diventa una voce
-    di catalogo con la scritta promozionale al posto del codice articolo.
+    On QUERCIA, separator rows (e.g. "OGNI € 1500,00 OMAGGIO …", "LISTINO")
+    have an empty description, empty EAN and no price, but carry their text
+    in the "Articolo" column, i.e. in `supplier_code`. A guard requiring all
+    three fields empty misses them, since the code column isn't. The
+    management-software reader has always dropped such rows under the same
+    label; the supplier readers didn't: a separator above the cut inflates
+    the row count, one that lands inside the product rows becomes a catalog
+    entry with the promo text in place of the item code.
     """
 
     MAPPATURA = {
@@ -241,8 +237,8 @@ class LeRigheSeparatoreNonSonoProdottiTests(CasoConCartella):
         self.assertEqual([record["description"] for record in records], ["PRIMO", "SECONDO"])
         self.assertEqual(lettura["rows_excluded"], {"non_e_una_riga_prodotto": 1})
         self.assertEqual(lettura["rows_kept"], 2)
-        # E soprattutto: il testo del separatore non è entrato come codice
-        # articolo di nessuno. È la voce che finirebbe nel catalogo.
+        # The separator text must not end up as anyone's item code: that's
+        # the value that would land in the catalog.
         self.assertNotIn(
             "OGNI 1500 EURO OMAGGIO A SCELTA",
             [str(record.get("supplier_code") or "") for record in records],
@@ -268,12 +264,12 @@ class LeRigheSeparatoreNonSonoProdottiTests(CasoConCartella):
         self.assertEqual(lettura["rows_excluded"], {"non_e_una_riga_prodotto": 1})
 
     def test_una_riga_col_prezzo_resta_un_prodotto_anche_senza_nome(self) -> None:
-        """⚠ Il confine, dalla parte della prudenza.
+        """The cutoff errs toward keeping a row.
 
-        Un prezzo, o un codice a barre, bastano a dire che lì c'è merce: la
-        riga resta letta e viene **declassata** col suo motivo, che è
-        l'informazione che dice all'utente «guarda la colonna del nome». Solo
-        una riga senza nome, senza codice a barre e senza prezzo non è merce.
+        A price or a barcode is enough to say there's an item there: the row
+        stays and is demoted with its reason, which is what tells the user
+        to check the description column. Only a row with no name, no
+        barcode and no price is not merchandise.
         """
 
         percorso = self.listino(
@@ -291,10 +287,11 @@ class LeRigheSeparatoreNonSonoProdottiTests(CasoConCartella):
 
 
 class RapportoDeiListiniACablatiTests(CasoConCartella):
-    """I quattro listini a schema noto raccontano com'e' andata la lettura.
+    """The four fixed-schema readers must report what their read kept, excluded and demoted.
 
-    Erano gli unici a non produrre nessun rapporto, cioe' proprio i piu' grossi:
-    il riquadro «cosa e' stato buttato» restava muto dove serviva di piu'.
+    They were the only ones producing no report at all, and the largest
+    price lists at that: the "what got dropped" panel stayed silent where
+    it mattered most.
     """
 
     def test_betulla_dichiara_righe_lette_tenute_e_saltate(self) -> None:
@@ -342,17 +339,16 @@ class RapportoDeiListiniACablatiTests(CasoConCartella):
 
         self.assertEqual(len(records), 2)
         self.assertEqual(lettura["rows_kept"], 2)
-        # L'intestazione porta la parola EAN nella colonna dell'EAN: si salta.
+        # The header row has the word "EAN" in the EAN column, so it's skipped.
         self.assertEqual(lettura["rows_excluded"], {"senza_ean": 1})
         self.assertEqual(lettura["rows_not_orderable"], {"senza_prezzo": 1})
 
     def test_noce_distingue_prezzo_fattore_e_disponibilita(self) -> None:
         percorso = self.radice / "noce.csv"
         percorso.write_text(
-            # ⚠ Il prezzo sta fra virgolette perche' il separatore dei decimali
-            # e' la virgola, come in tutti i listini: scritto «2.50» sarebbe
-            # duecentocinquanta euro, e dal 6 settembre 2026 un prezzo cosi'
-            # non si legge affatto.
+            # The price is quoted because the decimal separator is a comma,
+            # as in every price list: "2.50" unquoted would parse as two
+            # hundred fifty euros, and now fails to parse at all.
             "catalog_page,ean,product,packaging,availability,price,unit\n"
             '1,8000000000011,PRODOTTO BUONO,CT,Disponibile,"2,50",x 6\n'
             "1,8000000000012,SENZA PREZZO,CT,Disponibile,,x 6\n"
@@ -393,15 +389,14 @@ class RapportoDeiListiniACablatiTests(CasoConCartella):
 
 
 class FattoreDOrdineMancanteTests(CasoConCartella):
-    """Un fattore d'ordine che manca o vale zero non e' «uno».
+    """An order factor that is missing or zero must not be treated as one.
 
-    Quanto costa quello che si ordina si sa moltiplicando il prezzo del pezzo
-    per i pezzi che stanno insieme. Quando quel numero mancava e veniva dato
-    per uno, il collo costava quanto un pezzo: l'offerta risultava N volte piu'
-    conveniente di quello che era e **vinceva** il confronto, che mette davanti
-    il prezzo piu' basso. Dove invece lo zero passava per un numero buono,
-    l'ordine entrava a totale zero, il totale del fornitore era falso e la
-    soglia minima non scattava, perche' zero sta sotto qualunque soglia.
+    The comparison ranks offers by carton price, which is unit price times
+    pieces per carton. If a missing factor defaulted to one, the carton
+    would price as a single unit and wrongly win the comparison (the lowest
+    price ranks first). If a zero factor were accepted as valid, the order
+    total would come out zero, understating the supplier total and letting
+    it dodge the minimum-order threshold, since zero is below any threshold.
     """
 
     MAPPATURA = {
@@ -428,7 +423,7 @@ class FattoreDOrdineMancanteTests(CasoConCartella):
         return percorso
 
     def espositore(self, pezzi_del_collo: object) -> dict[str, object]:
-        """Il risultato del riconoscimento espositori, ridotto all'essenziale."""
+        """A minimal display-detection result, with just the fields under test."""
 
         return {
             "row_classifications": [],
@@ -449,7 +444,7 @@ class FattoreDOrdineMancanteTests(CasoConCartella):
             ],
         }
 
-    # -- BETULLA --------------------------------------------------------------
+    # -- BETULLA --
 
     def test_betulla_senza_pezzi_per_collo_non_si_puo_ordinare(self) -> None:
         percorso = self.betulla([
@@ -467,7 +462,7 @@ class FattoreDOrdineMancanteTests(CasoConCartella):
         self.assertEqual(lettura["rows_not_orderable"], {"senza_pezzi_per_collo": 2})
 
     def test_betulla_con_i_pezzi_per_collo_resta_identico(self) -> None:
-        """Il rischio vero della correzione: far sparire dal confronto righe sane."""
+        """Regression guard: the fix must not drop rows that already have valid data."""
 
         percorso = self.betulla([
             ["8000000000011", "C-1", None, "PRODOTTO BUONO", 6, 2.50, None, 22],
@@ -483,7 +478,7 @@ class FattoreDOrdineMancanteTests(CasoConCartella):
         self.assertEqual([record["pieces_per_carton"] for record in records], [6, 12])
         self.assertEqual(lettura["rows_not_orderable"], {})
 
-    # -- l'espositore Larice ------------------------------------------------
+    # -- Larice display offers --
 
     def test_l_espositore_col_collo_leggibile_costa_il_collo_intero(self) -> None:
         _righe, offerte, riepilogo = integrate_larice_displays([], self.espositore(24))
@@ -494,7 +489,7 @@ class FattoreDOrdineMancanteTests(CasoConCartella):
         self.assertEqual(riepilogo["display_offers_not_orderable"], {})
 
     def test_l_espositore_senza_i_pezzi_del_collo_non_si_puo_ordinare(self) -> None:
-        """Il prezzo dell'espositore non si inventa: senza quel numero non c'è."""
+        """The display price is never made up: without that number, there is none."""
 
         for pezzi in (None, 0, "", "a richiesta"):
             with self.subTest(pezzi=pezzi):
@@ -505,19 +500,18 @@ class FattoreDOrdineMancanteTests(CasoConCartella):
                 self.assertEqual(offerta["unusable_reason"], "senza_pezzi_per_collo")
                 self.assertIsNone(offerta["list_price_per_display"])
                 self.assertIsNone(offerta["net_price_per_display"])
-                # Il prezzo del singolo pezzo non deve restare in giro: chi
-                # prepara il confronto, quando il prezzo dell'espositore manca,
-                # ripiega su quello e l'offerta torna la piu' conveniente di
-                # tutte dalla porta di servizio.
+                # The parent (single-piece) price must not linger: the
+                # comparison would fall back to it when the display price is
+                # missing, making the offer look unbeatably cheap.
                 self.assertIsNone(offerta["parent_price_pre_discount"])
                 self.assertIsNone(offerta["parent_price_post_discount"])
                 self.assertEqual(riepilogo["display_offers_not_orderable"], {"senza_pezzi_per_collo": 1})
 
-    # -- il valore fisso dichiarato nel profilo del fornitore ---------------
+    # -- the fixed value declared in the supplier profile --
 
     def test_un_valore_fisso_scritto_male_non_diventa_un_fattore(self) -> None:
-        """Una configurazione scritta male non fa cadere la lettura, ma non
-        produce nemmeno un fattore d'ordine che nessuno ha dichiarato."""
+        """A malformed config value must not crash the read, nor silently
+        produce an order factor nobody declared."""
 
         percorso = self.radice / "listino.csv"
         percorso.write_text(
@@ -537,16 +531,14 @@ class FattoreDOrdineMancanteTests(CasoConCartella):
                 self.assertEqual([record["usable"] for record in records], [True, False])
                 self.assertEqual(records[1]["unusable_reason"], "senza_pezzi_per_collo")
                 self.assertEqual(lettura["rows_not_orderable"], {"senza_pezzi_per_collo": 1})
-                # ⚠ E la riga non deve nemmeno **dichiarare** un collo che non
-                # ha: uno zero scritto qui e' un numero come un altro per
-                # chiunque lo rilegga — a partire da `mapped_standalone_displays`
-                # — e la riga tornerebbe ordinabile dalla porta di servizio.
-                # Senza questa riga la guardia sul valore fisso non la provava
-                # nessun test (controprova del 14 agosto 2026: mutazione verde).
+                # The row must not report a carton size it doesn't have either:
+                # a zero written here reads as a valid number to any later
+                # consumer (e.g. `mapped_standalone_displays`), which would make
+                # the row orderable through a different path.
                 self.assertIsNone(records[1]["pieces_per_carton"])
 
     def test_un_valore_fisso_buono_vale_ancora_per_le_righe_senza_quel_dato(self) -> None:
-        """L'altra metà della regola: un numero vero al posto giusto funziona."""
+        """The other half of the rule: a real number in the right place works."""
 
         percorso = self.radice / "listino.csv"
         percorso.write_text(
@@ -563,12 +555,13 @@ class FattoreDOrdineMancanteTests(CasoConCartella):
         self.assertEqual([record["pieces_per_carton"] for record in records], ["6.0000", "12.0000"])
 
     def test_un_moltiplicatore_fisso_scritto_male_non_porta_via_le_righe_buone(self) -> None:
-        """Il valore fisso sbagliato non deve avere la precedenza su un dato vero.
+        """A bad fixed value must never override a real value read from the row.
 
-        Il moltiplicatore, quando c'e', decide da solo: se un `0` dichiarato nel
-        profilo diventasse un moltiplicatore, prenderebbe il posto dei pezzi per
-        collo letti dal listino e **tutte** le righe uscirebbero dall'ordine —
-        anche quelle che il collo ce l'hanno scritto.
+        When present, `order_multiplier` takes priority over pieces per
+        carton. If a `0` declared in the profile were accepted as a real
+        multiplier, it would override the carton size read from every row,
+        including ones where that value is correct, dropping all of them
+        from the order.
         """
 
         percorso = self.radice / "listino.csv"
@@ -586,7 +579,7 @@ class FattoreDOrdineMancanteTests(CasoConCartella):
         self.assertEqual(records[0]["pieces_per_carton"], "6.0000")
 
     def test_senza_colonna_e_col_valore_fisso_scritto_male_ci_si_ferma(self) -> None:
-        """Tutte le righe fuori dall'ordine, una per una, è peggio di un errore."""
+        """Silently dropping every row from the order is worse than raising."""
 
         percorso = self.radice / "listino.xlsx"
         workbook = Workbook()
@@ -610,14 +603,14 @@ class FattoreDOrdineMancanteTests(CasoConCartella):
 
 
 class NumeroDiRigaFisicoTests(CasoConCartella):
-    """Il numero di riga e' quello del file, anche quando un campo va a capo.
+    """`source_row` is the physical file row, even when a field wraps onto two lines.
 
-    Chi controlla un ordine apre il listino del fornitore e va a quella riga.
-    Il numero contava i prodotti invece delle righe: bastava una descrizione
-    scritta fra virgolette su due righe perche' da li' in poi indicasse il
-    prodotto sbagliato. Oggi il danno resta dentro il confronto perche' nessun
-    listino CSV e' compilabile; diventa un ordine sulla riga sbagliata il
-    giorno in cui lo diventa.
+    Whoever checks an order opens the supplier's price list and goes to that
+    row. Counting products instead of physical rows breaks that: a single
+    quoted, multi-line description shifts every row number after it by one,
+    pointing at the wrong product. No CSV price list currently fills written
+    orders, so the effect stays inside the comparison; it would become an
+    order on the wrong row if one did.
     """
 
     MAPPATURA = {
@@ -644,7 +637,7 @@ class NumeroDiRigaFisicoTests(CasoConCartella):
 
         records, _avvisi = read_mapped_csv_supplier(percorso, "nuovo", self.MAPPATURA)
 
-        # Riga 1 intestazione, righe 2 e 3 il primo prodotto, poi 4 e 5.
+        # Row 1 is the header, rows 2-3 are the first product, then 4 and 5.
         self.assertEqual([record["source_row"] for record in records], [2, 4, 5])
         self.assertEqual(records[1]["description"], "PRODOTTO DOPO")
         self.assertEqual(records[2]["description"], "ULTIMO PRODOTTO")
@@ -695,14 +688,14 @@ class NumeroDiRigaFisicoTests(CasoConCartella):
 
 
 class ListinoLettoAVuotoTests(CasoConCartella):
-    """Un listino aperto col separatore sbagliato non e' un fornitore senza prodotti.
+    """A price list opened with the wrong delimiter is not a supplier with no products.
 
-    Il separatore delle colonne, quando non e' dichiarato, si indovina
-    guardando il testo: su un listino italiano, dove ogni prezzo porta la
-    virgola dei decimali, la virgola sembra la scelta giusta. Il file usciva
-    letto e vuoto, e il fornitore risultava «non ha questo prodotto» su tutti i
-    prodotti: la differenza fra un listino non letto e un fornitore che non
-    tiene niente non si vedeva da nessuna parte.
+    When not declared, the CSV delimiter is guessed from the file text; on
+    an Italian price list, where every price carries a decimal comma, a
+    comma looks like the right guess even when it's the field separator
+    instead. Read that way, the file comes out empty, and the supplier shows
+    up as "doesn't carry this item" for every item: nothing distinguishes an
+    unreadable price list from a supplier that genuinely stocks nothing.
     """
 
     COLONNE = {
@@ -720,8 +713,8 @@ class ListinoLettoAVuotoTests(CasoConCartella):
             "8000000000013;PRODOTTO TRE;6;4,50\n",
             encoding="utf-8",
         )
-        # Nessuna intestazione da controllare e nessun separatore dichiarato:
-        # e' il caso in cui il file usciva vuoto senza dire niente a nessuno.
+        # No header to check and no delimiter declared: without this guard,
+        # the file would parse as empty with no warning at all.
         mappatura = {
             "header_row": 0,
             "italian_numbers": True,
@@ -752,7 +745,7 @@ class ListinoLettoAVuotoTests(CasoConCartella):
         self.assertIn("separatore", messaggio)
 
     def test_col_separatore_giusto_il_listino_si_legge(self) -> None:
-        """La controprova: la guardia non deve fermare una lettura sana."""
+        """Control case: the guard must not block a valid read."""
 
         percorso = self.radice / "listino.csv"
         percorso.write_text(
@@ -775,17 +768,15 @@ class ListinoLettoAVuotoTests(CasoConCartella):
 
 
 class ColonneDiLariceDalRegistroTests(CasoConCartella):
-    """Dove stanno le colonne del listino Larice lo dice il registro.
+    """The Larice column layout comes from the adapter registry, not hardcoded positions.
 
-    Le posizioni stavano scritte dentro il lettore, una per una. Il giorno che
-    Larice ne sposta una — o che l'utente conferma una variazione di schema e
-    il registro impara la mappatura nuova — il lettore continuava a guardare la
-    colonna di prima. Ed e' il lettore dei **prezzi**: non ne sparirebbero
-    alcuni, uscirebbe un listino intero di prezzi sbagliati con l'aria di
-    essere giusto.
+    A hardcoded layout keeps reading the old column after Larice moves one,
+    or after the user confirms a schema change and the registry learns the
+    new mapping. Since this reads prices, the failure isn't missing rows: it's
+    a whole price list of wrong prices that looks correct.
     """
 
-    # Le lettere che il registro dichiara davvero, oggi.
+    # The columns the registry currently declares.
     COLONNE_DI_OGGI = {
         "supplier_code": "C",
         "pieces_per_carton": "E",
@@ -809,10 +800,9 @@ class ColonneDiLariceDalRegistroTests(CasoConCartella):
     }
 
     def listino(self, colonne: dict[str, str], riga: dict[str, object]) -> Path:
-        """Un foglio Larice con ogni dato nella colonna che dice `colonne`.
+        """Build a Larice sheet with each value in the column `colonne` names.
 
-        Il listino vero non ha nessuna riga di intestazione: il prodotto sta
-        gia' sulla prima riga.
+        The real file has no header row: the product data starts on row 1.
         """
 
         percorso = self.radice / "larice.xlsx"
@@ -825,10 +815,10 @@ class ColonneDiLariceDalRegistroTests(CasoConCartella):
         return percorso
 
     def registro_con(self, colonne: dict[str, str]) -> None:
-        """Un registro uguale a quello vero, tranne le colonne di Larice.
+        """Build a registry copy identical to the real one except for Larice's columns.
 
-        Quello vero lo legge una persona prima del commit: un collaudo non deve
-        poterlo toccare nemmeno per sbaglio.
+        The real registry is reviewed by a person before every commit; a test
+        must not be able to touch it, even by accident.
         """
 
         documento = json.loads(ADAPTERS.read_text(encoding="utf-8"))
@@ -842,7 +832,7 @@ class ColonneDiLariceDalRegistroTests(CasoConCartella):
         self.addCleanup(setattr, registro, "REGISTRO", originale)
 
     def test_sul_listino_di_oggi_i_record_escono_identici(self) -> None:
-        """Il rischio principale della correzione: cambiare i numeri di chi sta bene."""
+        """Regression guard: reading from the registry must not change the numbers for a working layout."""
 
         percorso = self.listino(self.COLONNE_DI_OGGI, self.PRODOTTO)
 
@@ -886,7 +876,7 @@ class ColonneDiLariceDalRegistroTests(CasoConCartella):
         self.assertTrue(records[0]["usable"])
 
     def test_una_colonna_che_il_registro_non_dichiara_ferma_la_lettura(self) -> None:
-        """Fermarsi costa un messaggio; indovinare costa un listino di prezzi."""
+        """Raising costs an error message; guessing costs a wrong price list."""
 
         senza = {
             campo: dove for campo, dove in self.COLONNE_DI_OGGI.items()
@@ -904,12 +894,12 @@ class ColonneDiLariceDalRegistroTests(CasoConCartella):
 
 
 class NumeriCheNonSonoNumeriTests(CasoConCartella):
-    """«Non un numero» e «infinito» non sono prezzi.
+    """NaN and infinity are not prices.
 
-    Un foglio di calcolo li produce da solo — una divisione per zero che si
-    porta dietro — e con loro non si fa aritmetica: si moltiplicano e si
-    sommano come gli altri senza far saltare niente, e in fondo a un ordine
-    resta un totale che non e' un numero e che non legge nessuno.
+    A spreadsheet can produce them on its own, e.g. from a division by zero
+    carried over from a formula. Left unguarded, they multiply and sum like
+    any other number without raising, leaving an order total that is not a
+    number and that nobody notices.
     """
 
     MAPPATURA = {
@@ -956,12 +946,12 @@ class NumeriCheNonSonoNumeriTests(CasoConCartella):
 
 
 class EspositoriIsolatiTests(CasoConCartella):
-    """L'espositore su una riga sola non e' piu' sano della riga da cui viene.
+    """A single-row display offer inherits the usability of its own row, nothing more.
 
-    Un fornitore puo' vendere un espositore gia' montato su una riga sola, senza
-    le righe componente. Quella riga usciva di qui senza che nessuno avesse
-    detto se si poteva comprare: niente `usable`, e il prezzo preso com'era
-    scritto anche quando il fattore d'ordine non si leggeva.
+    A supplier can sell a pre-assembled display on a single row, with no
+    component rows behind it. Without this check, such a row would carry no
+    `usable` verdict at all, and its price would be taken as written even
+    when the order factor doesn't parse.
     """
 
     def mappatura(self, colonne: dict[str, str], **regole: object) -> dict[str, object]:
@@ -1048,8 +1038,8 @@ class EspositoriIsolatiTests(CasoConCartella):
         self.assertEqual(audit["display_offers_not_orderable"], {"senza_prezzo": 1})
 
     def test_il_fattore_puo_venire_dal_moltiplicatore_come_per_le_altre_righe(self) -> None:
-        """Chi dichiara il moltiplicatore invece dei pezzi per collo non deve
-        perdere l'espositore: e' la stessa riga, e la riga e' ordinabile."""
+        """A row that declares `order_multiplier` instead of pieces-per-carton
+        must not lose its display offer: it's the same row, and it's orderable."""
 
         _standard, espositori, _audit = self.espositori(
             [["E000001", "EXPO MISTO", 1, 12.50, "8000000000011"], self.NORMALE],
@@ -1061,18 +1051,16 @@ class EspositoriIsolatiTests(CasoConCartella):
         self.assertTrue(espositori[0]["usable"])
 
     def test_una_riga_che_si_dichiara_sana_senza_fattore_non_diventa_ordinabile(self) -> None:
-        """La difesa che da un foglio di calcolo non si riesce a mettere alla prova.
+        """A defense-in-depth case a spreadsheet-driven test can't reach directly.
 
-        I lettori scrivono `usable: False` da soli quando il fattore d'ordine
-        manca, quindi il primo ramo della guardia copre gia' tutti i casi che
-        nascono da un listino: la controprova del 14 agosto 2026 ha mostrato che
-        spegnere il secondo ramo non fa diventare rosso nessuno dei test.
-
-        Ma la funzione e' pubblica — la chiama anche `catalog_search` — e un
-        record che si dichiara ordinabile senza dire quanti pezzi si comprano
-        insieme non deve produrre un espositore ordinabile: il prezzo
-        dell'espositore si moltiplica per quel numero, e senza quel numero
-        l'offerta costa quanto un pezzo e vince il confronto.
+        The readers already set `usable: False` themselves when the order
+        factor is missing, so no spreadsheet input can exercise this guard on
+        its own; it protects `mapped_standalone_displays` as a public
+        function, also called by `catalog_search`. A record that claims to be
+        usable without saying how many pieces come per carton must still not
+        produce an orderable display: the display price is the per-piece
+        price times that count, and without it the offer would look as cheap
+        as a single piece and win the comparison.
         """
 
         mappatura = self.mappatura(self.COLONNE_A_COLLO)

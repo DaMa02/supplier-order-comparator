@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Merge explicit AI routing decisions into deterministic source profiles."""
+"""Merge explicit routing decisions, deterministic or hand-written, into source profiles."""
 
 from __future__ import annotations
 

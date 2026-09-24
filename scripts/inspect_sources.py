@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Profile candidate XLSX/XLS/CSV inputs without changing them.
 
-The output is intentionally descriptive.  A Codex/LLM preflight must review the
-deterministic hints and complete ``ai_preflight`` before parsing a run.
+The output is intentionally descriptive: a later step matches each profile
+against the adapter registry, or a person maps it through the guided UI, and
+fills in ``ai_preflight`` — a legacy field name for a decision that's always
+deterministic or hand-written, never an AI call — before parsing a run.
 
-Il formato lo decidono i primi byte del file, non l'estensione: i .xls di
-Noce passano dal lettore Excel 97-2003 di ``app/xls_reader.py``, i .xlsx da
-openpyxl, tutto il resto dal lettore CSV.
+The format is decided by the file's first bytes, not its extension: legacy
+Excel 97-2003 files go through the reader in ``app/xls_reader.py``, .xlsx
+through openpyxl, everything else through the CSV reader.
 """
 
 from __future__ import annotations
@@ -25,12 +27,12 @@ from typing import Any, Iterable
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
-# Il lettore dei file Excel 97-2003 sta nella cartella dell'applicazione e usa
-# soltanto la libreria standard: un listino .xls si apre senza installare
-# niente sul computer dell'utente.  Il registro degli schemi sta invece qui
-# accanto, e la sua cartella si aggiunge lo stesso: chi importa questo modulo
-# ce l'ha gia' in cammino, ma dipenderne in silenzio vorrebbe dire un errore di
-# importazione al primo consumatore che se ne dimentica.
+# The legacy Excel 97-2003 reader lives in the application folder and uses
+# only the standard library: an .xls price list opens with nothing extra
+# installed on the user's machine. The schema registry lives next to it, and
+# its folder is added too — importers of this module already have it on the
+# path, but relying on that silently would mean an import error for the
+# first caller that forgets to set it up.
 SCRIPTS_DIR = Path(__file__).resolve().parent
 APP_DIR = SCRIPTS_DIR.parent / "app"
 for cartella in (SCRIPTS_DIR, APP_DIR):
@@ -45,15 +47,15 @@ SUPPORTED_SUFFIXES = {".xlsx", ".xls", ".csv"}
 SAMPLE_LIMIT = 12
 EXAMPLE_LIMIT = 5
 
-# I primi byte di un file dicono che cosa e' davvero.  L'estensione no: un
-# listino puo' arrivare rinominato, e aprire un .xls con il lettore dei .xlsx
-# (o viceversa) darebbe all'utente un errore incomprensibile.
+# A file's first bytes say what it really is. The extension doesn't: a
+# price list can arrive renamed, and opening an .xls with the .xlsx reader
+# (or the reverse) would give the user an error they can't make sense of.
 FIRMA_OLE2 = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"  # Excel 97-2003
 FIRMA_ZIP = b"PK\x03\x04"  # Excel 2007 e successivi: e' un archivio
 
 
 def container_format(path: Path) -> str:
-    """Dice con quale lettore va aperto il file, guardando i suoi primi byte."""
+    """Says which reader a file needs, by inspecting its first bytes."""
     with path.open("rb") as stream:
         testa = stream.read(8)
     if testa.startswith(FIRMA_OLE2):
@@ -64,12 +66,12 @@ def container_format(path: Path) -> str:
 
 
 def normalized(value: Any) -> str:
-    """Il token normalizzato di un'intestazione, come lo calcola il registro.
+    """A header's normalized token, computed the same way the registry does.
 
-    Il nome resta perche' lo usa il resto del modulo, ma il calcolo e' uno
-    solo: due implementazioni che si allontanano di un carattere vorrebbero
-    dire un listino riconosciuto qui e non ritrovato nel registro, e nessuno
-    saprebbe perche'.
+    Kept as a local name because the rest of the module uses it, but the
+    computation itself has a single implementation: two versions drifting
+    apart by even one character would mean a price list recognized here and
+    not found by the registry, with no visible reason why.
     """
 
     return registro.normalizza(value)
@@ -103,20 +105,20 @@ def type_name(value: Any, data_type: str | None = None) -> str:
 
 
 def header_candidates(rows: list[tuple[int, list[Any]]]) -> list[dict[str, Any]]:
-    """Le righe che somigliano a un'intestazione secondo un elenco di parole note.
+    """The rows that look like a header, matched against a list of known words.
 
-    Resta perche' e' quello che una persona legge nel manifest per capire a
-    colpo d'occhio dov'e' l'intestazione e quanto ci somiglia.  Il
-    riconoscimento pero' non passa piu' di qui: l'elenco qui sotto descrive i
-    fornitori di oggi, e un fornitore nuovo non ci comparirebbe.  Quello che il
-    registro legge sono le righe di `prime_righe_non_vuote`.
+    Kept because it's what a person reads in the manifest to see at a glance
+    where the header is and how confident the match looks. This isn't what
+    drives recognition: the keyword list below describes today's suppliers,
+    and a new supplier wouldn't show up in it. What the registry actually
+    reads are the rows from `prime_righe_non_vuote`.
     """
 
     keywords = {
         "ean", "codice", "codart", "descrizione", "descrcommerciale", "colli",
         "quantita", "prezzo", "sconto", "iva", "totale", "totali", "ordine",
         "pzct", "cessione", "product", "packaging", "availability", "unit",
-        # Intestazioni del listino Noce in formato Excel 97-2003.
+        # Headers from a legacy Excel 97-2003 price list.
         "codiceabarre", "descrizionearticolo", "pezzixcartone",
         "offerta", "importo", "cat", "ragionesociale", "variato",
     }
@@ -136,29 +138,27 @@ def header_candidates(rows: list[tuple[int, list[Any]]]) -> list[dict[str, Any]]
     return sorted(candidates, key=lambda item: (-item["score"], item["row"]))[:5]
 
 
-# Quante righe si consegnano al registro perche' ci cerchi l'intestazione.  Le
-# intestazioni misurate sui listini veri stanno fra la riga 1 e la riga 6:
-# venti righe lasciano margine a un fornitore piu' prolisso senza appesantire
-# il manifest, che una persona deve poter ancora leggere.
+# How many rows are handed to the registry to search for a header. Measured
+# headers in real price lists sit between row 1 and row 6; twenty rows leave
+# margin for a wordier supplier without bloating the manifest past what a
+# person can still read.
 RIGHE_PER_IL_REGISTRO = 20
 
 
 def prime_righe_non_vuote(rows: list[tuple[int, list[Any]]],
                           candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Le righe che il registro puo' leggere per cercarci un'intestazione.
+    """The rows the registry can read to look for a header.
 
-    Sono le prime righe con del contenuto, senza sceglierne nessuna: e' l'unico
-    modo perche' il registro veda l'intestazione di un fornitore che nessuno ha
-    ancora censito.  `header_candidates` scarta le righe che non contengono una
-    parola del suo elenco, e quell'elenco l'ha scritto chi guardava i fornitori
-    di oggi; senza righe grezze un listino nuovo non arriverebbe mai al motore
-    e la Fase 5 non avrebbe niente da imparare.
+    These are simply the first rows with content, none pre-selected: it's
+    the only way for the registry to see the header of a supplier it hasn't
+    catalogued yet. `header_candidates` discards rows with no word from its
+    fixed keyword list, so without these raw rows a new supplier's price
+    list would never reach the recognition engine and the learning step
+    would have nothing to learn from.
 
-    Le righe gia' riconosciute da `header_candidates` si aggiungono anche
-    quando cadono piu' in basso della ventesima, perche' prima di questa fase
-    erano le uniche che il riconoscimento guardava e arrivano fino alla
-    cinquantesima: un fornitore con un preambolo lungo si riconosceva ieri e
-    deve continuare a riconoscersi oggi.
+    Rows `header_candidates` already recognized are added even when they
+    fall past row twenty, up to row fifty: a supplier with a long preamble
+    needs its header row included too, not just the leading rows.
     """
 
     righe = {
@@ -170,25 +170,26 @@ def prime_righe_non_vuote(rows: list[tuple[int, list[Any]]],
     return [{"row": numero, "values": righe[numero]} for numero in sorted(righe)]
 
 
-# Un separatore di sezione: una riga con pochissime celle piene in mezzo a
-# righe piene.  E' cosi' che un listino scrive «da qui comincia un'altra cosa»
-# — `A68 = 'LISTINO'` su QUERCIA, dopo 56 righe di prezzi che sono valorizzazioni
-# di omaggi e non prezzi d'acquisto.  Le soglie sono misurate sui listini veri:
-# i separatori hanno una o due celle piene, le righe di prodotto ne hanno da
-# otto in su, e quattro e' un margine largo per un listino piu' povero.
+# A section break: a row with very few filled cells sandwiched between rows
+# that are mostly full. This is how a price list marks "something different
+# starts here" — a single marker cell after a promotional block of prices
+# that are gift valuations, not purchase prices. The thresholds are measured
+# on real price lists: a break has one or two filled cells, a product row
+# has eight or more, and four is a wide margin for a sparser price list.
 CELLE_DI_UN_SEPARATORE = 2
 CELLE_DI_UNA_RIGA_PIENA = 4
-# Solo in testa al documento: piu' in basso una riga stretta e' un'etichetta di
-# gruppo dentro i dati, non l'inizio dei dati — il listino LARICE ne ha 625, e
-# nessuna dice dove comincia il listino.  Cento righe lasciano margine al
-# blocco promozionale piu' lungo misurato (QUERCIA: 61 righe).
+# Only near the top of the document: further down, a narrow row is a group
+# label inside the data, not the start of the data — LARICE's price list has
+# 625 such rows, none of which mark where the list actually begins. A
+# hundred rows leave margin for the longest measured promotional block
+# (QUERCIA: 61 rows).
 SEPARATORI_IN_TESTA = 100
-# Le righe attorno a un separatore che il profilo si porta dietro: due prima
-# per far vedere che cosa finisce, sei dopo per far vedere che cosa comincia.
+# The rows around a section break that the profile carries along: two
+# before to show what ends, six after to show what begins.
 RIGHE_PRIMA_DEL_SEPARATORE = 2
 RIGHE_DOPO_IL_SEPARATORE = 6
-# Il tetto delle righe in piu': un documento che alterna sezioni ogni tre righe
-# non deve gonfiare il profilo, che una persona deve poter ancora leggere.
+# The cap on these extra rows: a document alternating sections every three
+# rows must not bloat the profile past what a person can still read.
 RIGHE_DI_SEZIONE_AL_MASSIMO = 24
 
 
@@ -197,13 +198,13 @@ def _cella_vuota(valore: Any) -> bool:
 
 
 def separatori_di_sezione(rows: list[tuple[int, list[Any]]]) -> list[dict[str, Any]]:
-    """Le righe che dichiarano l'inizio di una sezione, con che cosa c'e' scritto.
+    """The rows that mark the start of a section, with their marker text.
 
-    Servono a chi mappa un fornitore nuovo: senza, «i dati cominciano alla riga
-    69» e' un numero che si puo' soltanto indovinare aprendo Excel, e la
-    settimana dopo sara' un altro numero.  Con questo elenco la pagina puo'
-    proporre «i prodotti cominciano dopo la riga 68 («LISTINO»)», che e' una
-    regola e non un numero.
+    Used when mapping a new supplier: without this, "data starts at row 69"
+    is a number that can only be guessed by opening Excel, and next week
+    it'll be a different number. With this list the page can instead propose
+    "products start after the row that says 'LISTINO'" — a rule, not a
+    number.
     """
 
     piene = [sum(1 for valore in valori if not _cella_vuota(valore)) for _numero, valori in rows]
@@ -224,12 +225,12 @@ def separatori_di_sezione(rows: list[tuple[int, list[Any]]]) -> list[dict[str, A
             "row": numero,
             "column": indice,
             "letter": get_column_letter(indice),
-            # Corto: e' un'etichetta da riconoscere in un elenco, non il testo
-            # da leggere — quello sta per intero nelle righe qui accanto.
+            # Short on purpose: a label to recognize in a list, not the text
+            # to read — the full text is in the surrounding rows.
             "text": display_value(valori[indice - 1], limit=80),
-            # Dove comincerebbero i dati tagliando qui: e' il numero che la
-            # pagina mostra accanto alla proposta, e quello che il marcatore
-            # ricalcolera' da solo la settimana prossima.
+            # Where data would start if cut here: the number the page shows
+            # next to the proposal, which the marker recomputes on its own
+            # on every later run.
             "data_from": rows[posizione + 1][0] if posizione + 1 < len(rows) else numero + 1,
         })
     return trovati
@@ -237,13 +238,13 @@ def separatori_di_sezione(rows: list[tuple[int, list[Any]]]) -> list[dict[str, A
 
 def righe_dei_separatori(rows: list[tuple[int, list[Any]]], separatori: list[dict[str, Any]],
                          gia_presenti: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Le righe attorno ai separatori, quelle che il profilo non porta gia'.
+    """The rows around section breaks that the profile doesn't already carry.
 
-    Senza di loro l'anteprima della mappatura e' cieca proprio dove serve: su
-    QUERCIA mandava le righe 1-20, 2094-2098 e 4180-4190, cioe' tutto tranne il
-    punto in cui il listino vero comincia.  Chi scriveva 69 in «Prima riga dei
-    prodotti» continuava a vedere le righe 3-20 — il blocco promozionale — e il
-    taglio restava da indovinare.
+    Without them the mapping preview is blind exactly where it matters:
+    it would show the leading rows and a couple of sample windows deep in
+    the file, everything except the point where the real price list starts.
+    Entering the data's first row would still show the promotional block
+    above it, leaving the cut to be guessed.
     """
 
     coperte = {int(voce.get("row") or 0) for voce in gia_presenti}
@@ -278,9 +279,9 @@ def sample_rows(nonempty_rows: list[tuple[int, list[Any]]]) -> dict[str, list[di
 
 
 def profile_xlsx(path: Path) -> dict[str, Any]:
-    # Il file si apre passando il contenuto e non il nome: openpyxl si rifiuta
-    # di aprire un percorso che finisce per .xls anche quando dentro c'e' un
-    # vero .xlsx, e un listino rinominato e' un caso reale.
+    # Opened from the file's content, not its path: openpyxl refuses to open
+    # a path ending in .xls even when the bytes are a real .xlsx, and a
+    # renamed price list is a real case here.
     with path.open("rb") as stream:
         workbook = load_workbook(stream, read_only=False, data_only=False)
     sheet_profiles = []
@@ -365,25 +366,25 @@ def profile_xlsx(path: Path) -> dict[str, Any]:
 
 def censisci_valori_delle_formule(path: Path, sheet_profiles: list[dict[str, Any]],
                                   formule_per_foglio: dict[int, set[tuple[int, int]]]) -> None:
-    """Che cosa **vale** una formula, non soltanto che e' una formula.
+    """What a formula cell evaluates to, not just that it's a formula.
 
-    Una cella scritta ``=SUM(E4*(1-5%))`` e' un prezzo come tutte le altre: il
-    lettore la apre con ``data_only=True`` e ci trova 1,52.  Il profilo invece
-    la apre con ``data_only=False``, ci trova il testo della formula e la conta
-    fra i tipi come «formula»: la colonna dei prezzi di GINEPRO risultava **0%
-    numerica** su 4132 celle, `tipi_plausibili` la bocciava e quel fornitore
-    sarebbe tornato SCHEMA_VARIATO ogni settimana, cioe' una mappatura a mano
-    per sempre.  Due parti dello stesso programma guardavano la stessa cella e
-    ne dicevano due cose diverse.
+    A cell written as a formula is a price like any other: the reader opens
+    the file with ``data_only=True`` and gets the computed number. The
+    profile instead opens with ``data_only=False``, sees the formula text
+    and counts it under the "formula" type — a price column made entirely
+    of formulas would then look 0% numeric, fail the plausible-type check,
+    and that supplier would be flagged as changed every single run, meaning
+    a manual mapping forever. Two parts of the same program were looking at
+    the same cell and reporting two different things about it.
 
-    Il valore in cache openpyxl lo espone solo riaprendo il documento, quindi
-    il file si legge una seconda volta — **soltanto quando ci sono formule**, e
-    in sola lettura, con una passata unica di ``iter_rows``: la seconda lettura
-    costa quanto la prima o meno (misurato: +0,4 s su QUERCIA, il piu' pesante dei
-    listini veri).  Un documento senza formule non paga niente.
+    openpyxl only exposes the cached computed value by reopening the file,
+    so it's read a second time — only when there are formulas, and read-only,
+    in a single ``iter_rows`` pass: measured on the heaviest real price
+    list, the second read adds +0.4 s. A document with no formulas pays
+    nothing extra.
 
-    Il conto finisce in una chiave a parte, `formula_values`: `types` continua
-    a dire quante formule c'e', che e' un dato vero e che nessuno deve perdere.
+    The result goes into a separate key, `formula_values`: `types` still
+    reports the formula count, which is real data nobody should lose.
     """
 
     for numero in formule_per_foglio:
@@ -399,11 +400,11 @@ def censisci_valori_delle_formule(path: Path, sheet_profiles: list[dict[str, Any
                     ultima_riga = max(riga for riga, _colonna in formule)
                     ultima_colonna = max(colonna for _riga, colonna in formule)
                     conteggi: dict[int, Counter] = {}
-                    # Le righe si scorrono una volta sola, con i limiti espliciti
-                    # perche' l'indice della colonna sia quello vero: chiamare
-                    # `foglio.cell(r, c)` dentro un ciclo su un foglio aperto in
-                    # sola lettura rilegge il foglio dall'inizio a ogni cella
-                    # (misurato altrove nel progetto: 290 s contro 2,6 s).
+                    # Rows are scanned once, with explicit bounds so the
+                    # column index is correct: calling `sheet.cell(r, c)`
+                    # inside a loop on a read-only sheet re-scans the sheet
+                    # from the start on every single cell access — measured
+                    # elsewhere in this project at 290 s vs 2.6 s.
                     for numero_riga, valori in enumerate(
                         fogli[numero].iter_rows(
                             min_row=1, max_row=ultima_riga,
@@ -422,21 +423,21 @@ def censisci_valori_delle_formule(path: Path, sheet_profiles: list[dict[str, Any
                     sheet_profiles[numero]["formula_values_read"] = True
             finally:
                 workbook.close()
-    except Exception as exc:  # il profilo resta utilizzabile, ma lo dice
-        # Senza il valore in cache le colonne calcolate risultano non numeriche
-        # e il documento viene declassato: e' il comportamento prudente, ma chi
-        # legge il profilo deve sapere perche', invece di vedere una verifica
-        # rossa senza causa.
+    except Exception as exc:  # the profile stays usable, but says why
+        # Without the cached value, formula columns show up as non-numeric
+        # and the document gets flagged as changed — the cautious behavior,
+        # but whoever reads the profile needs to know why, rather than
+        # seeing a failed check with no visible cause.
         for numero in formule_per_foglio:
             sheet_profiles[numero]["formula_values_error"] = f"{type(exc).__name__}: {exc}"
 
 
 def sheet_profile_from_grid(name: str, grid: list[list[tuple[Any, bool]]]) -> dict[str, Any]:
-    """Profila un foglio letto da un .xls, dove ogni cella e' (valore, grassetto).
+    """Profiles a sheet read from an .xls, where each cell is (value, bold).
 
-    Il grassetto viene contato colonna per colonna: sui listini Noce il
-    prezzo in offerta e' segnalato anche cosi' («i prezzi offerta sono in
-    grassetto»), quindi va visto anche nel profilo e non solo nei dati.
+    Bold is counted per column: some suppliers flag a discounted price with
+    bold formatting rather than a separate column, so the profile needs to
+    surface it too, not just the data.
     """
     column_stats: dict[int, dict[str, Any]] = {}
     nonempty_rows: list[tuple[int, list[Any]]] = []
@@ -489,10 +490,10 @@ def sheet_profile_from_grid(name: str, grid: list[list[tuple[Any, bool]]]) -> di
             "max_column": active_max_col,
             "nonempty_rows": len(nonempty_rows),
         },
-        # Di un .xls si legge il valore gia' calcolato che Excel ha memorizzato:
-        # una cella con formula non si distingue da una scritta a mano, e le
-        # celle unite non sono disponibili.  Dichiararlo e' meglio che scrivere
-        # uno zero che sembra una misura.
+        # For an .xls, only the value Excel already computed and stored is
+        # read: a formula cell can't be told apart from a hand-typed one,
+        # and merged-cell data isn't available. Reporting these as unknown
+        # is better than writing a zero that looks like a real measurement.
         "formula_count": None,
         "merged_ranges_count": None,
         "values_only": True,
@@ -506,13 +507,13 @@ def sheet_profile_from_grid(name: str, grid: list[list[tuple[Any, bool]]]) -> di
 
 
 def profile_xls(path: Path) -> dict[str, Any]:
-    """Profila un Excel 97-2003 con il lettore di sola libreria standard."""
+    """Profiles a legacy Excel 97-2003 file with the standard-library-only reader."""
     sheet_profiles = [sheet_profile_from_grid(sheet.name, sheet.rows) for sheet in read_workbook(path)]
     details = {
         "format": "xls",
         "sheet_count": len(sheet_profiles),
-        # Riepilogo di tutto il libro: serve a chi legge un solo numero di
-        # righe attive senza scorrere foglio per foglio.
+        # Whole-workbook summary: lets a reader get a single active-rows
+        # figure without scanning sheet by sheet.
         "active_range": {
             "max_row": max((sheet["active_range"]["max_row"] for sheet in sheet_profiles), default=0),
             "max_column": max((sheet["active_range"]["max_column"] for sheet in sheet_profiles), default=0),
@@ -534,19 +535,20 @@ def sniff_csv(path: Path) -> tuple[str, csv.Dialect]:
     raise ValueError("Codifica o separatore CSV non riconosciuto")
 
 
-# In un CSV tutto e' testo: il tipo lo decide come e' scritto il valore.  Senza
-# questo, il profilo di un CSV dichiarava «testo» anche la colonna dei prezzi,
-# e la verifica dei tipi del registro non poteva che bocciarla: un fornitore
-# che manda un CSV non sarebbe mai potuto entrare nel registro.  I prezzi
-# arrivano scritti all'italiana — «21,75» — e vanno riconosciuti anche cosi'.
+# A CSV is all text: the type is inferred from how the value is written.
+# Without this, a CSV's price column would show up as "text", and the
+# registry's type check would reject it outright — a supplier sending a CSV
+# could never enter the registry. Prices arrive written the Italian way
+# (e.g. "21,75") and need to be recognized as numbers in that form too.
 NUMERO_SCRITTO = re.compile(r"[+-]?(?:\d{1,3}(?:[.\s ]\d{3})+|\d+)(?:[.,]\d+)?")
 
 
 def tipo_del_testo(valore: Any) -> str:
-    """Se quel testo e' un numero scritto, dirlo: e' l'unico tipo che un CSV ha.
+    """Reports whether this text is a written number — the only type a CSV has.
 
-    Serve solo a descrivere la colonna nel profilo.  Nessun calcolo passa di
-    qui: i valori li converte chi legge il listino, con le sue regole.
+    Only describes the column in the profile. No conversion happens here:
+    the reader that actually parses the price list converts values with its
+    own rules.
     """
 
     testo = str(valore or "").strip()
@@ -584,11 +586,10 @@ def profile_csv(path: Path) -> dict[str, Any]:
     candidati = header_candidates(rows[:20])
     intestazione = prime_righe_non_vuote(rows, candidati)
     separatori = separatori_di_sezione(rows)
-    # Il profilo di un CSV e' piatto: non ha fogli, e il registro lo tratta
-    # come se ne avesse uno solo senza nome.  Cosi' anche il CSV passa dallo
-    # stesso motore, invece di avere un riconoscimento tutto suo che puo'
-    # allontanarsi da quello dei fogli di calcolo senza che nessuno se ne
-    # accorga.
+    # A CSV's profile is flat: it has no sheets, and the registry treats it
+    # as having exactly one, unnamed. This way a CSV goes through the same
+    # recognition engine, instead of its own logic that could quietly drift
+    # from how spreadsheets are handled.
     return {
         "format": "csv",
         "encoding": encoding,
@@ -604,8 +605,8 @@ def profile_csv(path: Path) -> dict[str, Any]:
 
 
 def profile_file(path: Path) -> dict[str, Any]:
-    # Il lettore lo sceglie il contenuto del file, non il suo nome: un listino
-    # rinominato non deve far uscire un errore che l'utente non sa leggere.
+    # The reader is chosen from the file's content, not its name: a renamed
+    # price list shouldn't produce an error the user can't make sense of.
     container = container_format(path)
     if container == "xls":
         details = profile_xls(path)
@@ -613,10 +614,10 @@ def profile_file(path: Path) -> dict[str, Any]:
         details = profile_xlsx(path)
     else:
         details = profile_csv(path)
-    # Di che fornitore sia il documento lo dice il registro, non questo file.
-    # Qui non c'e' piu' nessuna intestazione scritta a mano: un fornitore che
-    # cambia listino si segue aggiornando references/adapters.json, che e'
-    # l'unica cosa che il programma potra' fare quando girera' da solo.
+    # Which supplier a document belongs to is decided by the registry, not
+    # by this file: there's no hardcoded per-supplier detection here. A
+    # supplier changing its price list format is handled by updating
+    # references/adapters.json, the only thing an unattended run can do.
     hint = registro.riconosci(details)
     digest = file_hash(path)
     return {
@@ -672,13 +673,13 @@ def main() -> int:
     for path in candidates:
         try:
             profiles.append(profile_file(path))
-        except Exception as exc:  # keep the complete inventory for AI error handling
+        except Exception as exc:  # one bad file doesn't hide the rest: every error is collected
             errors.append({"path": str(path.resolve()), "error": f"{type(exc).__name__}: {exc}"})
 
-    # Un documento che il programma non ha riconosciuto, o che ha declassato,
-    # va contato qui: nessuno andra' a leggere gli stati uno per uno dentro il
-    # manifest, e «10 profilati, 0 errori» su quattro listini da interpretare
-    # si legge come un successo pieno.
+    # A document the program didn't recognize, or flagged as changed, gets
+    # counted here: nobody will read the per-file states one by one inside
+    # the manifest, and "10 profiled, 0 errors" would otherwise read as a
+    # full success even with several documents still needing review.
     stati = Counter(str((profilo.get("deterministic_hint") or {}).get("state") or "AMBIGUO")
                     for profilo in profiles)
     da_guardare = sum(stati[stato] for stato in ("AMBIGUO", "SCHEMA_VARIATO"))
@@ -695,8 +696,8 @@ def main() -> int:
         "instruction": "L'AI deve riesaminare profili e hint, compilare ai_preflight e salvare input_manifest.json prima dei parser.",
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    # Il manifest si scrive a fine riga LF come tutto il resto del progetto:
-    # `write_text` su Windows lo convertirebbe in CRLF da solo.
+    # The manifest is written with LF line endings, like the rest of the
+    # project: `write_text` on Windows would otherwise convert them to CRLF.
     with args.output.open("w", encoding="utf-8", newline="\n") as flusso:
         json.dump(result, flusso, ensure_ascii=False, indent=2)
     riepilogo = {

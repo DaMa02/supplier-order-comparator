@@ -1,135 +1,123 @@
 #!/usr/bin/env python3
 """Merge deterministic exact matches and bounded AI decisions into one audited result.
 
-Due decisioni della Fase 5b vivono qui, e non nel client AI.
+Two decisions belong here, not in the AI client.
 
-**Gli `ALTA` non si fanno confermare a schermo.** Deciso da Daniele l'11 agosto
-2026: un revisore umano guarda comunque gli ordini prima di mandarli, quindi il
-lavoro va speso nel rendere `ALTA` degno di fiducia — prompt misurato e verifica
-avversariale — non in centinaia di conferme. Misurato sul banco con
-`openai/gpt-5.6-luna` e il prompt `v3`, su tre passate indipendenti da 150 casi:
-`ALTA` sbagliati **zero** ogni volta. Chi non e' `ALTA` la conferma la chiede
-ancora.
+High-confidence (`ALTA`) matches are not confirmed on screen. A human reviewer
+still checks the orders before sending them, so the effort goes into making
+`ALTA` trustworthy — a tuned prompt plus an adversarial check — rather than
+into hundreds of confirmations. On a benchmark of three independent runs of
+150 cases, `ALTA` was never wrong. Anything below `ALTA` still asks for
+confirmation.
 
-**Un rifiuto sbagliato resta silenzioso**, e questa e' la difesa che si puo'
-permettere. La verifica avversariale protegge dagli `ACCEPT` sbagliati, non dai
-`REJECT`: un prodotto rifiutato sparisce dal confronto presso quel fornitore e
-niente lo dice. Correggerlo costerebbe altre chiamate; contarlo no. Ogni rifiuto
-porta con se' il punteggio del suo miglior candidato, e chi legge questi dati
-decide che cosa segnalare.
+A wrong rejection stays silent, and that is the risk this design accepts. The
+adversarial check protects against wrong `ACCEPT`s, not against `REJECT`s: a
+rejected product disappears from that supplier's comparison and nothing flags
+it. Fixing it would cost more model calls; counting it doesn't. Every
+rejection carries its best candidate's score, and callers decide what to
+surface.
 
-Poi la Fase 6a, che chiude le porte da chiudere prima di accendere davvero il
-passo AI. Tutte e quattro nascono dallo stesso principio: **un fallimento non
-deve poter somigliare a un successo.**
+Four checks close off ways a failure could look like a success.
 
-**1. La riga accettata si verifica contro cio' che il modello ha visto davvero,
-cioe' la shortlist.** Il numero di riga non identifica un prodotto: identifica
-una posizione. Se il listino viene riletto dopo la costruzione della shortlist e
-ha una riga in piu' in testa, la riga 441 e' un altro articolo, e la decisione
-`ALTA` — che non chiede conferma a nessuno — metterebbe in ordine quell'altro.
-Il record completo si prende ancora da `normalized_sources.json`, perche' la
-shortlist non porta il moltiplicatore d'ordine, ma deve essere lo stesso
-prodotto: **stesso EAN, stessa descrizione, stesso prezzo**.
+1. An accepted row is verified against what the model actually saw — the
+shortlist. A row number identifies a position, not a product: if the price
+list is re-read after the shortlist is built and gains a row at the top, row
+441 is a different item, and an `ALTA` decision — which asks nobody — would
+put that other item on the order. The full record still comes from
+`normalized_sources.json`, since the shortlist doesn't carry the order
+multiplier, but it must be the same product: same EAN, same description, same
+price.
 
-⚠ Il confronto si fa contro il candidato della **shortlist**, mai contro quello
-di `matching_result.json`. La prima versione di questa guardia sbagliava
-esattamente qui, e la revisione avversariale l'ha smontata: `prepare_sources.py`
-scrive `matching_result.json` e `normalized_sources.json` nella stessa
-esecuzione, dagli stessi oggetti, quindi confrontare l'uno con l'altro e'
-confrontare il listino con se stesso. L'unico artefatto che puo' essere vecchio
-e' la shortlist — cioe' l'unico che il modello ha visto.
+The comparison is always against the shortlist's candidate, never against
+`matching_result.json`'s. `prepare_sources.py` writes both files from the same
+objects in the same run, so comparing one against the other only compares the
+price list with itself. The shortlist is the only artifact that can be stale —
+the only one the model actually saw.
 
-**2. Il modello non puo' nominare una riga che non gli e' stata mostrata.** Le
-righe ammesse sono quelle della shortlist, e basta. Prima erano ammesse anche
-quelle dei candidati EAN ambigui, che pero' al modello non arrivano: il passo
-AI costruisce i suoi casi dalle sole shortlist.
+2. The model can't name a row it wasn't shown. Only shortlist rows are
+accepted. Ambiguous-EAN candidates never reach the model, so they can't be
+accepted either.
 
-**3. L'assenza di decisioni non e' un successo.** `--decisions-attese` e'
-**obbligatorio**: chi chiama dichiara quante decisioni la fase AI ha prodotto e
-il numero deve tornare. Facoltativo non serviva a niente — bastava dimenticarlo
-per riaprire la porta. Zero e' un valore legittimo e attua la decisione
-commerciale «se OpenRouter non risponde il programma tira dritto».
+3. Absence of decisions is not success. `--decisions-attese` is required: the
+caller declares how many decisions the AI phase produced, and the count must
+match. Zero is a legitimate value and reflects the commercial decision that
+the pipeline proceeds even when OpenRouter doesn't respond.
 
-**4. Contare non dimostra appartenenza.** Un file di decisioni di un'altra run
-riconcilia benissimo — dichiarate 942, trovate 942 — e non se ne applica
-nemmeno una. Quindi si contano anche le decisioni che **non hanno trovato la
-loro coppia**, e se non sono zero la catena si ferma.
+4. Counting doesn't prove membership. A decisions file from another run can
+reconcile perfectly — same declared and found count — while none of its
+decisions actually apply. So decisions that don't find their matching pair are
+counted too, and a nonzero count here stops the pipeline.
 
-**Il file si scrive sempre**, quando si arriva a costruirlo, con le coppie
-guaste degradate a `DA_VERIFICARE`. Non scriverlo sembrava piu' prudente e non
-lo era: resterebbe sul disco il `resolved_matches.json` della run precedente, e
-`build_review_data.py` lo leggerebbe come se fosse di oggi. Un artefatto fresco
-e degradato e' onesto; uno vecchio e scambiato per nuovo no. Il segnale sta nel
-**codice d'uscita** e nel riepilogo.
+The output file is always written, once the run gets far enough to build it,
+with broken pairs degraded to `DA_VERIFICARE`. Skipping the write would leave
+the previous run's `resolved_matches.json` on disk, and `build_review_data.py`
+would read it as current. A fresh, degraded artifact is honest; a stale one
+mistaken for fresh is not. The signal is the exit code and the summary.
 
-⚠ Il riepilogo completo si stampa quando si arriva a costruirlo. I guasti che
-si scoprono prima — ingresso illeggibile, decisioni non riconciliate — stampano
-il loro messaggio e basta, perche' a quel punto non c'e' ancora niente da
-riassumere. Il commento precedente diceva «si stampa sempre» e non era vero.
+The full summary prints only once the run gets far enough to build it.
+Failures caught earlier — unreadable input, unreconciled decisions — print
+their message alone, since at that point there's nothing to summarize yet.
 
-**Ogni coppia degradata porta `ai_decisione_scartata`**, ed e' il campo con cui
-`build_review_data.py` conta questi casi in cima alla pagina. Senza, il vincolo
-del progetto — «cio' che viene scartato va contato in un riepilogo visibile» —
-sarebbe soddisfatto solo su `stdout`, che nessuno legge.
+Every degraded pair carries `ai_decisione_scartata`, the field
+`build_review_data.py` uses to count these cases at the top of the page.
+Without it, the constraint "what gets discarded must be counted in a visible
+summary" would only hold on stdout, which nobody reads.
 
-Poi la Fase 6b, che ne chiude altre due.
+Two more checks.
 
-**5. Una decisione deve dichiarare il caso su cui e' stata presa.** I quattro
-controlli qui sopra confrontano artefatti della **run corrente** — la shortlist
-con il listino, la riga accettata con la shortlist — e rispetto a un file di
-decisioni di un'altra run sono ciechi per costruzione: il gestionale e' lo
-stesso file di settimana in settimana, quindi le coppie `(riga, fornitore)` si
-sovrappongono quasi tutte e la riconciliazione dei numeri torna. Da qui
-l'impronta: `valuta_shortlist.py` scrive su ogni decisione `ai_impronta_caso`,
-calcolata su cio' che il modello ha davvero visto, e qui la si ricalcola dalla
-shortlist di oggi. Se non corrisponde, la decisione non e' di questa run e la
-coppia torna al revisore.
+5. A decision must declare the case it was made on. The four checks above
+compare artifacts from the current run — the shortlist against the price
+list, the accepted row against the shortlist — and are blind by construction
+to a decisions file from another run: the management-software export is
+usually the same file week to week, so most `(row, supplier)` pairs overlap
+and the count still reconciles. Hence the fingerprint: `valuta_shortlist.py`
+writes `ai_impronta_caso` on every decision, computed from what the model
+actually saw, and it's recomputed here from today's shortlist. A mismatch
+means the decision isn't from this run, and the pair goes back to the
+reviewer.
 
-L'impronta e' **obbligatoria**: una decisione che non ce l'ha non e' vecchia, e'
-di un produttore che non la scrive — e ammetterla renderebbe la guardia
-aggirabile dimenticandosi un campo, che e' esattamente il difetto che
-`--decisions-attese` ha appena chiuso. Le due cose restano pero' **distinte**
-nella causa e nel messaggio, perche' mandano a cercare il guasto in due posti
-diversi.
+The fingerprint is required: a decision without one isn't old, it's from a
+producer that doesn't write it — accepting it would make the check bypassable
+by simply omitting a field, exactly the gap `--decisions-attese` closes. The
+two causes stay distinct in the returned data and message, since they point
+at different places to look for the problem.
 
-⚠ Che cosa l'impronta prova, e che cosa no. Prova che il caso e' **identico** a
-quello di oggi. Se il listino di un fornitore non cambia da una settimana
-all'altra, il caso e' davvero lo stesso e la decisione della settimana scorsa
-passa — ed e' giusto, perche' e' quello che fa apposta la memoria delle
-risposte. Quello che l'impronta **non** dice e' con quale modello e con quale
-prompt quella decisione e' stata presa: per quello ogni riga porta anche
-`ai_modello`, `ai_versione_prompt` e `ai_versione_avversario`, che qui si
-leggono e non si giudicano — il confronto con la configurazione viva e' lavoro
-dell'orchestratore, che la configurazione ce l'ha.
+What the fingerprint proves, and what it doesn't. It proves the case is
+identical to today's. If a supplier's price list hasn't changed since last
+week, the case really is the same and last week's decision still applies —
+that's the point of the answer memory. It does not say which model or prompt
+produced the decision; for that, every row also carries `ai_modello`,
+`ai_versione_prompt` and `ai_versione_avversario`, read here but not judged —
+comparing them against the live configuration is the orchestrator's job, since
+it's the orchestrator that holds that configuration.
 
-**6. Una coppia semantica senza shortlist e' lavoro che nessuno ha tentato.**
-Il numero di `--decisions-attese` viene dal rapporto della fase AI, ma quel
-rapporto conta i casi **del file che ha ricevuto**: se le shortlist sono 500
-per 948 coppie, la fase ne valuta 500, ne dichiara 500, qui se ne trovano 500 e
-tutto riconcilia — perche' le due parti stanno contando la stessa cosa mancante.
-Quattrocentoquarantotto prodotti sparivano dalla valutazione con esito 0
-dappertutto. `coda_semantica` e `coda_valutabile` erano gia' tutti e due qui,
-stampati uno accanto all'altro e mai confrontati.
+6. A semantic pair without a shortlist is work nobody attempted. The
+`--decisions-attese` count comes from the AI phase's own report, but that
+report only counts the cases in the file it received: if there are 500
+shortlists for 948 pairs, the phase evaluates 500, declares 500, this script
+finds 500, and everything reconciles — because both sides are counting the
+same missing work. `coda_semantica` and `coda_valutabile` are both reported
+side by side in the summary so a reader can catch the gap; the script itself
+does not compare them.
 
-Poi, dal 21 settembre 2026, una regola che non chiude una porta ma ne apre una.
+7. An accepted match carries its barcode to other suppliers. Case in point: the
+management software identifies an item by one EAN, while two suppliers use a
+different, shared EAN for the same item, with no EAN link between them; the
+model accepted one supplier's row and rejected the other's (written with an
+abbreviated description), so only one match went through on its own. But the
+accepted row states a barcode, and the other supplier had a row with that same
+barcode.
 
-**7. Un abbinamento accettato porta il suo codice a barre agli altri
-fornitori.** Il caso vero: il gestionale chiama `LINDA SETA ULTRA LUNGO ALI
-18PZ` 8009405394204, NOCE e LARICE lo chiamano tutti e due 8009496220932.
-Nessun aggancio per EAN; l'AI ha accettato la riga NOCE (2,31) e rifiutato
-quella LARICE (2,25), scritta abbreviata, e NOCE ha vinto da solo. Ma la
-riga accettata **dice** un codice, e presso LARICE quel codice c'era.
-
-Dopo le decisioni, per ogni prodotto: se presso un fornitore A l'AI ha accettato
-una riga con EAN X diverso da quello del prodotto, presso ogni altro fornitore S
-**senza** abbinamento, e senza nessuna riga col codice del prodotto, l'unica
-riga utilizzabile con EAN X entra come proposta. Sempre **da confermare**,
-qualunque fosse la confidenza su A: la prova la da' il modello, non una
-persona, e un «no» su S resta un no (lo ricorda il servizio, per impronta
-della riga). Non scavalca mai una riga gia' scelta, una decisione scartata o un
-EAN ambiguo; scavalca invece un rifiuto dell'AI presso S, perche' e' proprio il
-caso da cui nasce. Le fonti si fotografano prima di cambiare qualcosa, quindi
-niente catene e niente dipendenza dall'ordine dei fornitori.
+After decisions are made, for each product: if the model accepted a row at
+supplier A with an EAN different from the product's own, then for every other
+supplier S with no match and no row matching the product's own EAN, the one
+usable row at S with that same EAN is proposed. Always pending confirmation,
+regardless of A's confidence — the evidence comes from the model, not a
+person, and a "no" already recorded at S (by row fingerprint) stays a no. This
+never overrides an already-chosen row, a discarded decision, or an ambiguous
+EAN; it does override an AI rejection at S, since that's the case it exists
+for. Sources are snapshotted before anything is changed, so there are no
+propagation chains and no dependency on supplier order.
 """
 
 from __future__ import annotations
@@ -145,49 +133,49 @@ CARTELLA_SCRIPT = Path(__file__).resolve().parent
 if str(CARTELLA_SCRIPT) not in sys.path:
     sys.path.insert(0, str(CARTELLA_SCRIPT))
 
-# L'impronta la definisce chi scrive le shortlist. Si importa, non si ricopia:
-# due implementazioni della stessa impronta vorrebbe dire che quella
-# dimenticata e' quella che accetta un file di un'altra run.
+# The fingerprint is defined by whoever writes the shortlists. Imported, not
+# duplicated: two implementations of the same fingerprint would risk one
+# silently drifting and accepting a file from another run.
 from build_semantic_shortlists import impronta_caso  # noqa: E402
 
 
 def uscita_in_utf8() -> None:
-    """Stdout e stderr in UTF-8, qualunque sia la tabella codici della console.
+    """Force stdout and stderr to UTF-8, regardless of the console's codepage.
 
-    Su Windows un processo Python che scrive su una pipe usa la codifica di
-    sistema (cp1252 qui). Il riepilogo porta le **descrizioni vere dei
-    prodotti**, e basta un `CAFFÈ` perche' chi legge la pipe si trovi davanti a
-    byte che non sono UTF-8. L'orchestratore della 6c leggera' proprio questa
-    uscita: e' meglio che sia sempre la stessa, qualunque console ci sia sotto.
-    Scoperto da un test, non da una run."""
+    On Windows a Python process writing to a pipe uses the system codepage
+    (cp1252 here). The summary carries real product descriptions, and a
+    single accented character is enough to produce bytes that aren't UTF-8
+    for whatever reads the pipe. The output needs to be consistent across
+    consoles for the orchestrator reading it downstream.
+    """
 
     for flusso in (sys.stdout, sys.stderr):
         try:
             flusso.reconfigure(encoding="utf-8")
-        except (AttributeError, ValueError):  # pragma: no cover - flussi rimpiazzati
+        except (AttributeError, ValueError):  # pragma: no cover - stream already replaced
             pass
 
 
-# La confidenza che vale una riga d'ordine senza domande a schermo.
+# Confidence level that goes on an order line with no on-screen confirmation.
 CONFIDENZA_SENZA_CONFERMA = "ALTA"
 
-# Il metodo delle righe entrate perche' presso un altro fornitore l'AI ha
-# accettato una riga con lo stesso codice a barre (regola 7 in testa).
+# Method tag for rows entered because a different supplier's AI-accepted row
+# shares the same barcode (rule 7 in the module docstring).
 METODO_STESSO_CODICE = "EAN_DA_ALTRO_FORNITORE"
-# Le lunghezze di un EAN/GTIN vero. Un codice interno corto o fatto di zeri non
-# e' la prova di niente, e non deve trascinare righe da un listino all'altro.
+# Valid EAN/GTIN lengths. A short internal code or one made of zeros proves
+# nothing and must not carry rows across price lists.
 LUNGHEZZE_EAN = frozenset({8, 12, 13, 14})
 
-# Sopra questo punteggio un rifiuto merita di essere guardato. Misurato sul
-# banco (150 casi, `openai/gpt-5.6-luna`, prompt `v3` con verifica): a 0,65
-# segnala 5 dei 13 rifiuti sbagliati e 5 degli 87 giusti; a 0,60 ne segnala gli
-# stessi 5 e il rumore sale a 12; a 0,80 restano 3 su 13. E' il punto in cui il
-# segnale e' ancora meta' di quello che si mostra.
+# Above this score a rejection is worth a second look. Measured on a
+# benchmark (150 cases, with adversarial verification): at 0.65 it flags 5 of
+# the 13 wrong rejections and 5 of the 87 correct ones; at 0.60 it still
+# flags the same 5 but noise rises to 12; at 0.80 only 3 of 13 remain. This
+# is the point where the signal is still at least half of what gets shown.
 SOGLIA_RIFIUTO_SOSPETTO = 0.65
 
-# I codici d'uscita, perche' l'orchestratore deve distinguere «ho fatto» da «non
-# ho potuto» senza leggere la prosa. Sono un contratto: stanno in `SKILL.md` con
-# questi numeri e un test li inchioda.
+# Exit codes, so the caller (`app/pipeline_jobs.py` or a shell) can tell
+# "done" from "couldn't" without parsing text. They're a contract, pinned by a
+# test.
 USCITA_OK = 0
 USCITA_INGRESSO_NON_UTILIZZABILE = 2
 USCITA_DECISIONI_NON_RICONCILIATE = 3
@@ -200,17 +188,16 @@ def load(path: Path) -> Any:
 
 
 def coppia(riga: Any, fornitore: Any) -> tuple[Any, str]:
-    """La chiave con cui matching, shortlist e decisioni si legano fra loro.
+    """The key that links matching, shortlist and decisions together.
 
-    `"12"` e `12` sono la stessa riga. Le decisioni la normalizzavano gia', gli
-    altri due file no: bastava che il gestionale portasse la riga come testo
-    perche' ogni decisione diventasse «senza riscontro», il riepilogo dicesse
-    «i due file non parlano della stessa run» e l'orchestratore mandasse a
-    rifare — cioe' a ripagare — la fase AI su una run sana. Trovato dalla
-    revisione della 6b, eseguendolo.
+    `"12"` and `12` are the same row. Without normalizing the row number here,
+    a row written as text by one file and as a number by another would make
+    every decision look "unmatched" and force a healthy run to redo the paid
+    AI phase.
 
-    Un valore che non e' un intero resta com'e': meglio una coppia che non si
-    lega — e si vede — di due righe diverse che collassano su una."""
+    A value that isn't an integer is left as-is: a pair that fails to link —
+    visibly — is safer than two different rows silently collapsing into one.
+    """
 
     if not isinstance(riga, bool):
         try:
@@ -223,11 +210,12 @@ def coppia(riga: Any, fornitore: Any) -> tuple[Any, str]:
 
 
 def impronta_attesa(shortlist: dict[str, Any]) -> str:
-    """L'impronta che una decisione di **questa** run deve portare.
+    """The fingerprint a decision from this run must carry.
 
-    Si ricalcola dalla shortlist di oggi con la stessa funzione che l'ha scritta
-    (`build_semantic_shortlists.impronta_caso`), passandole i tre soli campi che
-    il modello legge di ogni candidato."""
+    Recomputed from today's shortlist with the same function that wrote it
+    (`build_semantic_shortlists.impronta_caso`), passing it the three fields
+    the model reads for each candidate.
+    """
 
     return impronta_caso(
         shortlist.get("gestionale_source_row"),
@@ -242,17 +230,17 @@ def impronta_attesa(shortlist: dict[str, Any]) -> str:
 
 
 def prezzo_confrontabile(valore: Any) -> float | None:
-    """Il prezzo come numero, da qualunque forma arrivi. `None` se non lo e'.
+    """The price as a number, from whatever shape it arrives in. `None` if it isn't one.
 
-    ⚠ **`prepare_sources.py` scrive i prezzi come stringhe** (`json_decimal`
-    serializza con `format(..., "f")`, quindi `"2.1000"`). La prima versione di
-    questa funzione accettava solo `int` e `float`: sui dati veri **0 righe su
-    25.093** avevano un prezzo, e il prezzo dentro l'identita' non confrontava
-    niente. La revisione avversariale l'ha misurato.
+    `prepare_sources.py` writes prices as strings (`json_decimal` serializes
+    with `format(..., "f")`, giving `"2.1000"`), so this must accept strings
+    as well as numbers — otherwise the price component of `identita()` never
+    matches anything.
 
-    E il verso opposto conta quanto questo: se un artefatto porta `1.0` e
-    l'altro `"1.0"` — un adattatore imparato, una normalizzazione futura — due
-    scritture dello stesso numero non devono diventare due prodotti diversi."""
+    The reverse direction matters just as much: if one artifact carries `1.0`
+    and another `"1.0"`, two spellings of the same number must not become two
+    different products.
+    """
 
     if isinstance(valore, bool) or valore is None:
         return None
@@ -265,27 +253,25 @@ def prezzo_confrontabile(valore: Any) -> float | None:
 
 
 def identita(record: dict[str, Any]) -> tuple[str, str, float | None]:
-    """Che cosa prova che due righe sono lo stesso prodotto.
+    """What proves two rows are the same product.
 
-    Non il numero di riga, che e' una posizione e cambia quando il fornitore
-    aggiunge una riga in testa. EAN, descrizione e prezzo: sono i tre campi che
-    la shortlist e il listino normalizzato portano tutti e due.
+    Not the row number, which is a position and shifts when the supplier adds
+    a row above it. EAN, description and price: the three fields both the
+    shortlist and the normalized price list carry.
 
-    Il prezzo c'e' perche' la riga che finisce in ordine e' quella da cui si
-    prende il prezzo, e quella dev'essere la stessa riga. Il modello il prezzo
-    non lo vede, e giustamente: non c'entra con l'identita' del prodotto.
-    ⚠ Nota di misura, perche' la prima stesura di questo commento diceva un
-    numero sbagliato: fra le righe **utilizzabili** — le uniche che possono
-    entrare in una shortlist o in un ordine — i listini veri di oggi hanno **3
-    identita' duplicate in tutto, nessuna con prezzo diverso**. Le «24 di
-    Larice» si contano solo includendo righe che non sono ordinabili. Quindi il
-    campo non serve contro un problema di oggi: serve perche' costa una riga e
-    perche' un fornitore che domani mette due lotti dello stesso articolo a
-    prezzo diverso non deve poterli scambiare.
+    Price is included because the row that ends up on the order is the row
+    the price is taken from, and it must be the same row. The model never
+    sees the price, correctly so — it has no bearing on product identity.
+    Among usable rows (the only ones that can enter a shortlist or an order),
+    duplicate identities are rare in real price lists and none carry
+    different prices; the field is included at negligible cost, as a
+    safeguard in case a supplier ever prices two lots of the same item
+    differently.
 
-    `or ""` e non `get(campo, "")`: nei listini veri un EAN mancante arriva
-    dal JSON come `null`, non come chiave assente, e `null` contro `""` sarebbe
-    un disallineamento inventato che ferma una run buona."""
+    `or ""`, not `get(field, "")`: in real price lists a missing EAN arrives
+    from JSON as `null`, not as an absent key, and `null` against `""` would
+    be a false mismatch that stops a good run.
+    """
 
     return (
         str(record.get("ean") or "").strip(),
@@ -295,7 +281,7 @@ def identita(record: dict[str, Any]) -> tuple[str, str, float | None]:
 
 
 def leggibile(chi: tuple[str, str, float | None] | None) -> str | None:
-    """L'identita' come la leggerebbe una persona, per il riepilogo."""
+    """The identity in human-readable form, for the summary."""
 
     if chi is None:
         return None
@@ -303,10 +289,11 @@ def leggibile(chi: tuple[str, str, float | None] | None) -> str | None:
 
 
 def miglior_punteggio(shortlist: dict[str, Any]) -> float | None:
-    """Il punteggio del candidato migliore fra quelli mostrati all'AI.
+    """The score of the best candidate shown to the AI.
 
-    Non si legge `candidates[0]`: l'ordinamento e' una proprieta' di chi ha
-    scritto la shortlist, e questa funzione non deve dipenderne."""
+    Does not read `candidates[0]`: ordering is a property of whoever wrote the
+    shortlist, and this function shouldn't depend on it.
+    """
     punteggi = [
         candidato.get("score")
         for candidato in shortlist.get("candidates") or []
@@ -337,13 +324,12 @@ def parse_args() -> argparse.Namespace:
 
 
 def carica_decisioni(args: argparse.Namespace) -> tuple[list[Any] | None, int, str]:
-    """Le decisioni, o il motivo per cui non si può proseguire."""
+    """The decisions, or the reason processing can't continue."""
 
     if args.decisions is None:
         return [], USCITA_OK, ""
     if not args.decisions.exists():
-        # Un percorso indicato e non trovato e' un guasto, non un file vuoto:
-        # prima passava per «l'AI non ha deciso niente».
+        # A declared path that doesn't exist is a failure, not an empty file.
         return None, USCITA_DECISIONI_NON_RICONCILIATE, f"File delle decisioni non trovato: {args.decisions}"
     try:
         decisioni = load(args.decisions)
@@ -367,19 +353,17 @@ def indicizza_decisioni(decisioni: list[Any]) -> tuple[dict[tuple[int, str], dic
         except (KeyError, TypeError, ValueError) as errore:
             return None, USCITA_INGRESSO_NON_UTILIZZABILE, f"Decisione senza coppia utilizzabile: {errore}"
         if chiave in indice:
-            # Vince l'ultima riga del file, e un ACCEPT puo' diventare un
-            # REJECT: il prodotto sparirebbe dal confronto per l'ordine delle
-            # righe in un file, non per una decisione di qualcuno.
+            # The last row in the file wins, and an ACCEPT can turn into a
+            # REJECT — the product would silently disappear because of row
+            # order in the file, not because of a decision anyone made.
             return None, USCITA_DECISIONI_NON_RICONCILIATE, f"Decisione duplicata: {chiave}"
         if decisione.get("action") not in {"ACCEPT", "REJECT", "UNRESOLVED"}:
             return None, USCITA_INGRESSO_NON_UTILIZZABILE, f"Azione AI non valida: {decisione.get('action')}"
         if decisione["action"] == "ACCEPT":
-            # Un `ACCEPT` senza riga e' una decisione malformata, non un
-            # modello che ha inventato una riga: lo schema del client ammette
-            # `source_row: null`, e raccontarlo come allucinazione manderebbe
-            # chi legge a cercare il guasto dalla parte sbagliata. La riga si
-            # normalizza a intero come si fa con la coppia: `"50"` scritto da
-            # un altro programma non e' un guasto.
+            # An ACCEPT with no row is a malformed decision, not a model that
+            # hallucinated a row: the client's schema allows `source_row:
+            # null`. The row is normalized to an int the same way as the pair
+            # key, since a different producer may write it as text.
             try:
                 decisione = {**decisione, "source_row": int(decisione["source_row"])}
             except (KeyError, TypeError, ValueError):
@@ -415,11 +399,11 @@ def main() -> int:
         coppia(item["gestionale_source_row"], item["supplier"]): item for item in shortlists
     }
 
-    # La coda semantica e' il lavoro che la fase AI aveva davanti: ogni coppia
-    # prodotto-fornitore che l'EAN non ha gia' risolto da solo. `valutabile`
-    # toglie i casi senza nessun candidato, che il client rifiuta di mandare al
-    # modello: sono sei su 948 nella run vera, e senza questo numero un
-    # riepilogo onesto sembra dire «ne mancano sei».
+    # The semantic queue is the work the AI phase had ahead of it: every
+    # product-supplier pair the EAN match didn't already resolve. `valutabile`
+    # drops the cases with no candidate at all, which the client refuses to
+    # send to the model — without this count, an otherwise honest summary can
+    # look like it's missing work.
     coda_semantica = sum(
         1
         for product in matching
@@ -448,31 +432,31 @@ def main() -> int:
     propagati: list[dict[str, Any]] = []
     stesso_codice_ambiguo: list[dict[str, Any]] = []
     counts: dict[str, int] = {}
-    # Due conteggi che non sono stati: quanti match l'AI ha messo in un ordine
-    # senza chiedere niente, e quanti rifiuti avevano un candidato che
-    # somigliava molto. Il primo dice quanto pesa la fiducia data ad `ALTA`, il
-    # secondo e' la sola traccia che resta di un rifiuto sbagliato.
+    # Two counters worth tracking: how many matches the AI put on an order
+    # with no confirmation asked, and how many rejections had a candidate that
+    # scored high. The first shows how much weight `ALTA` trust carries, the
+    # second is the only remaining trace of a possibly wrong rejection.
     accettati_senza_conferma = 0
     rifiuti_sospetti = 0
-    # Ogni riga accettata che nel listino non e' piu' il prodotto mostrato al
-    # modello, e ogni riga che al modello non e' mai stata mostrata.
+    # Every accepted row that has stopped being the product the model was shown,
+    # and every row the model was never shown at all.
     disallineamenti: list[dict[str, Any]] = []
     righe_inventate: list[dict[str, Any]] = []
     ean_traditi: list[dict[str, Any]] = []
-    # Le decisioni prese su un caso che oggi non e' piu' quello: un file di
-    # un'altra run, o una shortlist ricostruita dopo la fase AI.
+    # Decisions made on a case that has since diverged from today's: a decisions
+    # file from another run, or a shortlist rebuilt after the AI phase ran.
     di_un_altra_run: list[dict[str, Any]] = []
-    # Le coppie semantiche per cui una shortlist non e' mai stata scritta: non
-    # sono state valutate e nessuno le ha nemmeno provate.
+    # Semantic pairs for which a shortlist was never written: never
+    # evaluated, and nobody even attempted them.
     senza_shortlist: list[dict[str, Any]] = []
-    # Le decisioni che hanno trovato la loro coppia. Quelle che non la trovano
-    # sono il segno che i due file non parlano della stessa run.
+    # Decisions that found their matching pair. Ones that don't are a sign
+    # the two files aren't from the same run.
     con_riscontro: set[tuple[int, str]] = set()
-    # Quelle la cui coppia esiste ma nel frattempo l'EAN l'ha risolta da solo.
-    # Non sono un guasto: succede ogni volta che si rifanno i passi
-    # deterministici dopo la fase AI, e il risultato e' **migliore** di quello
-    # che l'AI proponeva. Contarle fra le «senza riscontro» fermerebbe una run
-    # sana e manderebbe a rifare — cioe' a pagare — la fase AI.
+    # Pairs whose key exists but the EAN match has since resolved on its own.
+    # Not a failure: this happens whenever the deterministic steps are rerun
+    # after the AI phase, and the result is better than what the AI proposed.
+    # Counting these as unmatched would stop a healthy run and force a costly
+    # re-run of the AI phase.
     superate_dall_ean: set[tuple[int, str]] = set()
     for product in matching:
         row = product["gestionale"]["source_row"]
@@ -494,14 +478,12 @@ def main() -> int:
                 }
             else:
                 shortlist = shortlist_index.get(key)
-                # Una coppia semantica **senza shortlist** e' lavoro che nessuno
-                # ha nemmeno tentato. Prima passava per «l'AI non ha deciso» e
-                # non incideva su nessun conteggio: con 500 shortlist su 948
-                # coppie, 448 prodotti sparivano dalla valutazione e tutta la
-                # catena usciva 0, perche' il rapporto dichiarava le decisioni
-                # contando lo **stesso** file troncato. La riconciliazione
-                # tornava perche' le due parti contavano la stessa cosa
-                # mancante. Trovato da due revisori su tre, eseguendolo.
+                # A semantic pair with no shortlist is work nobody even
+                # attempted. It must be tracked separately, not folded into
+                # "the AI didn't decide": both `--decisions-attese` and this
+                # script's own count derive from the same truncated shortlist
+                # file, so counts can reconcile perfectly while a large chunk
+                # of the queue was silently dropped upstream.
                 if shortlist is None:
                     senza_shortlist.append({"gestionale_source_row": row, "supplier": supplier})
                     shortlist = {"candidates": []}
@@ -510,11 +492,11 @@ def main() -> int:
                     for candidato in shortlist.get("candidates", [])
                 }
                 decision = decision_index.get(key)
-                # Prima di guardare che cosa dice, si guarda **su che cosa l'ha
-                # detto**: una decisione presa su un altro caso non merita
-                # nessuno degli altri controlli, e chiamarla «riga inventata»
-                # manderebbe a cercare il guasto nel modello invece che nei
-                # file.
+                # Before checking what the decision says, check what case it
+                # was made on: a decision from another case doesn't deserve
+                # any of the other checks, and calling it a "hallucinated
+                # row" would point the reader at the model instead of the
+                # files.
                 stantia = False
                 senza_impronta = False
                 if decision is not None:
@@ -528,11 +510,10 @@ def main() -> int:
                             "gestionale_source_row": row,
                             "supplier": supplier,
                             "articolo": shortlist.get("description"),
-                            # Solo se dice qualcosa: nel caso che questa guardia
-                            # intercetta l'articolo cercato e' lo stesso e sono
-                            # cambiati i candidati, quindi due campi sempre
-                            # uguali sembrerebbero un difetto invece di
-                            # un'informazione.
+                            # Only included if it adds information: in the
+                            # case this check catches, the searched item is
+                            # the same and only the candidates changed, so two
+                            # always-equal fields would look like noise.
                             **(
                                 {"articolo_della_decisione": decision.get("ai_articolo_mostrato")}
                                 if decision.get("ai_articolo_mostrato") != shortlist.get("description")
@@ -542,11 +523,10 @@ def main() -> int:
                             "impronta_attesa": attesa,
                         })
                 if stantia:
-                    # Due cause distinte, perche' mandano a cercare il guasto in
-                    # due posti diversi: un'impronta che non c'e' e' un
-                    # produttore che non la scrive, una che non corrisponde e'
-                    # un file di un'altra run. Il messaggio in pagina le
-                    # confondeva.
+                    # Two distinct causes, since they point at different
+                    # places to look: a missing fingerprint is a producer
+                    # that doesn't write it, a mismatching one is a file from
+                    # another run.
                     result = scartata(
                         shortlist,
                         "Decisione AI scartata: non dichiara su quale caso è stata presa."
@@ -558,14 +538,14 @@ def main() -> int:
                 elif decision and decision["action"] == "ACCEPT":
                     source_row = decision.get("source_row")
                     candidate = mostrati.get(source_row)
-                    # Su un `EAN_AMBIGUO` la riga giusta non e' un'opinione: il
-                    # fornitore ha piu' righe con l'EAN del gestionale, e la
-                    # scelta sta fra quelle. Il modello pero' vede la shortlist,
-                    # che l'EAN non lo guarda mai (`build_semantic_shortlists`
-                    # ordina per token della descrizione): senza questo
-                    # controllo puo' scegliere una riga con un EAN che non
-                    # c'entra, e con `ALTA` finirebbe in ordine senza conferma.
-                    # I dati per verificarlo sono gia' qui.
+                    # On an EAN_AMBIGUO case the correct row isn't a matter of
+                    # opinion: the supplier has several rows with the
+                    # management software's EAN, and the choice must be
+                    # among those. The model only sees the shortlist, which is
+                    # never EAN-ranked (`build_semantic_shortlists` sorts by
+                    # description tokens), so without this check it could pick
+                    # an unrelated row, and an `ALTA` decision would go
+                    # straight onto the order.
                     ean_ammessi = {
                         c.get("source_row") for c in match.get("usable_candidates", [])
                     } if match["status"] == "EAN_AMBIGUO" else None
@@ -583,11 +563,9 @@ def main() -> int:
                             "EAN_NON_RISPETTATO",
                         )
                     elif candidate is None:
-                        # Il modello ha nominato una riga che non gli e' stata
-                        # mostrata. E' la regola piu' vecchia del modulo, e
-                        # adesso ha un esito suo invece di uno schianto: chi la
-                        # riceve deve poterla distinguere da un listino
-                        # slittato, perche' la cosa da fare e' diversa.
+                        # The model named a row it was never shown. This gets
+                        # its own outcome, distinct from a shifted price
+                        # list, since the two call for different fixes.
                         righe_inventate.append({
                             "gestionale_source_row": row,
                             "supplier": supplier,
@@ -601,9 +579,9 @@ def main() -> int:
                             "RIGA_NON_MOSTRATA",
                         )
                     else:
-                        # Il record completo sta nel listino normalizzato — la
-                        # shortlist non porta il moltiplicatore d'ordine — ma
-                        # deve essere lo stesso prodotto che il modello ha visto.
+                        # The full record lives in the normalized price list
+                        # — the shortlist doesn't carry the order multiplier
+                        # — but it must be the same product the model saw.
                         selected = normalized_index.get(supplier, {}).get(source_row)
                         atteso = identita(candidate)
                         trovato = identita(selected) if selected is not None else None
@@ -628,8 +606,9 @@ def main() -> int:
                                 "method": "SEMANTICO_AI" if match["status"] != "EAN_AMBIGUO" else "EAN_AI",
                                 "selected": selected,
                                 "confidence": confidenza,
-                                # Qui, e non nel client: e' la riga che attua la
-                                # decisione dell'11 agosto. Vedi il commento in testa.
+                                # Decided here, not in the client: this is the
+                                # line that implements the ALTA-skips-confirmation
+                                # rule described in the module docstring.
                                 "requires_user_confirmation": confidenza != CONFIDENZA_SENZA_CONFERMA,
                                 "rationale": decision.get("rationale", ""),
                                 "alternatives": shortlist.get("candidates", []),
@@ -646,10 +625,10 @@ def main() -> int:
                         "requires_user_confirmation": False,
                         "rationale": decision.get("rationale", "Nessun candidato equivalente."),
                         "alternatives": shortlist.get("candidates", []),
-                        # Il punteggio viaggia sempre, anche quando e' basso:
-                        # la soglia la applica chi mostra i dati, in un posto
-                        # solo. `None` vuol dire «shortlist senza punteggi»,
-                        # che non e' la stessa cosa di «punteggio zero».
+                        # The score is always included, even when low: the
+                        # threshold is applied by the consumer, in one place.
+                        # `None` means "shortlist with no scores", distinct
+                        # from a score of zero.
                         "ai_reject_best_score": punteggio,
                     }
                 else:
@@ -669,15 +648,15 @@ def main() -> int:
                         "alternatives": shortlist.get("candidates", []),
                     }
             resolved["suppliers"][supplier] = result
-        # Dopo le decisioni di tutti i fornitori del prodotto, non durante: la
-        # fonte puo' essere un fornitore che viene dopo nell'elenco.
+        # After all of the product's suppliers have a decision, not during:
+        # the source row can belong to a supplier later in the iteration.
         nuovi, ambigui = propaga_lo_stesso_codice(product, resolved, righe_per_codice)
         propagati.extend(nuovi)
         stesso_codice_ambiguo.extend(ambigui)
         for result in resolved["suppliers"].values():
             counts[result["status"]] = counts.get(result["status"], 0) + 1
-            # Contato qui e non alla decisione: un rifiuto che la regola 7 ha
-            # sostituito con una proposta non e' piu' un rifiuto da guardare.
+            # Counted here, not at decision time: a rejection rule 7 has since
+            # replaced with a proposal stops counting as a rejection to flag.
             punteggio = result.get("ai_reject_best_score")
             if (
                 result.get("method") == "AI_RIFIUTATO"
@@ -708,8 +687,8 @@ def main() -> int:
         "abbinamenti_per_stesso_codice": len(propagati),
         "stesso_codice_ambiguo": len(stesso_codice_ambiguo),
     }
-    # Gli esempi si troncano, i conteggi no: dieci righe bastano a capire che
-    # cosa e' successo, e il numero intero e' quello che conta.
+    # Examples are truncated, counts aren't: ten rows are enough to show what
+    # happened, and it's the full count that matters.
     if disallineamenti:
         riepilogo["disallineamenti"] = disallineamenti[:10]
     if righe_inventate:
@@ -727,33 +706,36 @@ def main() -> int:
     if senza_riscontro:
         riepilogo["coppie_senza_riscontro"] = [list(chiave) for chiave in senza_riscontro[:10]]
 
-    # Il file si scrive sempre: le coppie guaste sono gia' degradate a
-    # `DA_VERIFICARE`, quindi e' un artefatto onesto. Vedi il commento in testa.
+    # The file is always written: broken pairs are already degraded to
+    # DA_VERIFICARE, so it's an honest artifact. See the module docstring.
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(riepilogo, ensure_ascii=False, indent=2))
 
-    # Dal piu' grave: una riga fuori dal recinto o senza l'EAN dovuto dice che
-    # il modello ha risposto male, un listino disallineato che gli artefatti
-    # vengono da letture diverse, decisioni senza riscontro che i file non
-    # parlano della stessa run.
+    # Ordered from most severe: a row outside the shown set or missing the
+    # required EAN means the model answered badly; a misaligned price list
+    # means the artifacts came from different reads; unmatched decisions mean
+    # the files aren't from the same run.
     if righe_inventate or ean_traditi:
         return USCITA_RIGA_INVENTATA
     if disallineamenti:
         return USCITA_LISTINO_DISALLINEATO
-    # Una decisione presa su un altro caso, una senza riscontro e una coppia
-    # che una shortlist non ce l'ha mai avuta dicono la stessa cosa — gli
-    # artefatti non parlano dello stesso lavoro — e meritano lo stesso codice:
-    # chi lo riceve deve rifare i candidati e la fase AI, non rileggere il
-    # listino.
+    # A decision made on a different case, one with no matching pair, and a
+    # pair that never had a shortlist all say the same thing — the artifacts
+    # don't describe the same run — and get the same exit code: the caller
+    # needs to redo the candidates and the AI phase, not reread the price
+    # list.
     if di_un_altra_run or senza_riscontro or senza_shortlist:
         return USCITA_DECISIONI_NON_RICONCILIATE
     return USCITA_OK
 
 
 def codice_ean(valore: Any) -> str:
-    """Il codice a barre come si confronta qui: grezzo, come fa `build_matching`
-    per la strada nativa, e solo se ha la forma di un EAN vero. Vuoto se no."""
+    """A barcode as compared here: raw digits, only if shaped like a real EAN.
+
+    Same rule `build_matching` uses on its own EAN path. Empty string
+    otherwise.
+    """
 
     codice = str(valore or "").strip()
     if codice.isdigit() and len(codice) in LUNGHEZZE_EAN and codice.strip("0"):
@@ -762,10 +744,10 @@ def codice_ean(valore: Any) -> str:
 
 
 def indice_per_codice(normalized: Any) -> dict[str, dict[str, list[dict[str, Any]]]]:
-    """Per fornitore, le righe **utilizzabili** di ogni codice a barre.
+    """Per supplier, the usable rows for each barcode.
 
-    Utilizzabile con lo stesso predicato di `build_matching`: un omaggio, un
-    componente d'espositore o una riga senza prezzo non si propone a nessuno.
+    "Usable" with the same predicate as `build_matching`: a free-goods row, a
+    display component or a row with no price is never proposed.
     """
 
     indice: dict[str, dict[str, list[dict[str, Any]]]] = {}
@@ -790,19 +772,19 @@ def propaga_lo_stesso_codice(
     risolto: dict[str, Any],
     righe_per_codice: dict[str, dict[str, list[dict[str, Any]]]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """La regola 7: il codice di una riga accettata dall'AI vale anche altrove.
+    """Rule 7: an AI-accepted row's barcode also applies at other suppliers.
 
-    Modifica `risolto` sul posto e restituisce le coppie cambiate e quelle
-    saltate perche' ambigue, per il riepilogo. Non solleva mai: il file dei
-    risultati si scrive sempre.
+    Modifies `risolto` in place and returns the changed pairs and the ones
+    skipped as ambiguous, for the summary. Never raises: the results file is
+    always written.
     """
 
     codice_prodotto = str((prodotto.get("gestionale") or {}).get("ean") or "").strip()
     stati_ean = prodotto.get("suppliers") or {}
     esiti = risolto.get("suppliers") or {}
 
-    # Le fonti, fotografate prima di toccare qualcosa: una riga propagata non
-    # diventa fonte, e l'ordine dei fornitori non cambia il risultato.
+    # Sources snapshotted before anything is touched: a propagated row never
+    # becomes a source itself, and supplier order doesn't affect the result.
     fonti: dict[str, list[tuple[str, dict[str, Any]]]] = {}
     for fornitore, esito in esiti.items():
         selezionata = (esito or {}).get("selected")
@@ -841,14 +823,15 @@ def propaga_lo_stesso_codice(
             continue
         codice, riga = trovate[0]
         da_chi = sorted(chi for chi, _ in fonti[codice])
-        # La descrizione del primo in ordine alfabetico, non del primo trovato:
-        # la frase non deve dipendere dall'ordine dei fornitori nel file.
+        # The description from the alphabetically first source, not the
+        # first one found: the message must not depend on file order.
         come_la_scrive = dict(fonti[codice])[da_chi[0]].get("description") or ""
         esiti[fornitore] = {
             "status": "SEMANTICO_PROPOSTO",
             "method": METODO_STESSO_CODICE,
             "selected": riga,
-            # Mai `ALTA`: la prova la da' il modello su un altro listino.
+            # Never ALTA: the evidence comes from the model on a different
+            # price list.
             "confidence": "MEDIA",
             "requires_user_confirmation": True,
             "rationale": (
@@ -860,7 +843,7 @@ def propaga_lo_stesso_codice(
             "alternatives": esito.get("alternatives", []),
             "propagato_da": da_chi,
             "codice_propagato": codice,
-            # Quello che c'era prima, per risalire a chi aveva deciso che cosa.
+            # What was there before, to trace back who decided what.
             "prima": {
                 chiave: esito.get(chiave)
                 for chiave in ("status", "method", "confidence", "rationale")
@@ -877,18 +860,17 @@ def propaga_lo_stesso_codice(
 
 
 def scartata(shortlist: dict[str, Any], motivo: str, causa: str) -> dict[str, Any]:
-    """Una coppia la cui decisione AI e' stata buttata: torna al revisore.
+    """A pair whose AI decision was discarded: goes back to the reviewer.
 
-    Non `NON_TROVATO`, che vuol dire «l'AI ha guardato e ha detto di no»: qui
-    l'AI ha detto di si' e non ci si e' potuti fidare, il che e' un caso da
-    guardare, non un prodotto da togliere dal confronto.
+    Not `NON_TROVATO`, which means "the AI looked and said no": here the AI
+    said yes and the answer couldn't be trusted, which needs a human look, not
+    removal from the comparison.
 
-    `ai_decisione_scartata` non e' decorazione: e' il campo con cui
-    `build_review_data.py` conta questi casi in cima alla pagina. Senza, un
-    prodotto degradato e' indistinguibile in elenco da uno che l'AI non ha mai
-    valutato, e il vincolo del progetto — «cio' che viene scartato va contato
-    in un riepilogo visibile» — resterebbe soddisfatto solo su `stdout`, che
-    nessuno legge."""
+    `ai_decisione_scartata` isn't decoration: it's the field
+    `build_review_data.py` uses to count these cases at the top of the page.
+    Without it, a degraded product would be indistinguishable in the list
+    from one the AI never evaluated.
+    """
 
     return {
         "status": "DA_VERIFICARE",

@@ -3,17 +3,17 @@ $ErrorActionPreference = "Stop"
 try {
     [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 } catch {
-    # La console continuerà con la codifica predefinita di Windows.
+    # The console keeps Windows' default encoding.
 }
 
 $skillDir = $PSScriptRoot
 $launcherPath = Join-Path $skillDir "app\launcher.py"
 
 function Mostra-IlMotivo {
-    # Le righe che git ha scritto sullo standard error, stampate sotto la frase
-    # in italiano che dice che cosa e' successo. Sono in inglese e sono rumore
-    # su un PC dove nessuno guarda — ma sono l'unico modo di sapere perche' un
-    # giorno l'aggiornamento non e' passato.
+    # git's own stderr lines, printed under the Italian message that states
+    # what happened. They're in English and mostly noise on a PC no one
+    # watches — but they're the only way to know why an update once failed
+    # to apply.
     param($Righe)
 
     foreach ($riga in @($Righe)) {
@@ -23,8 +23,8 @@ function Mostra-IlMotivo {
 }
 
 function Trova-Git {
-    # Il git di questo PC, o $null. Prima quello installato al suo posto
-    # normale, poi quello nel PATH.
+    # This PC's git, or $null. Checks the normal install location first,
+    # then falls back to PATH.
     $git = "C:\Program Files\Git\cmd\git.exe"
     if (Test-Path -LiteralPath $git) { return $git }
     $cmd = Get-Command git -ErrorAction SilentlyContinue
@@ -33,19 +33,18 @@ function Trova-Git {
 }
 
 function Salva-IlRegistroImparato {
-    # Mette da parte references\adapters.json prima che il reset lo riporti
-    # indietro. Il nome porta la data e l'ora perche' due avvii ravvicinati non
-    # si cancellino la copia a vicenda; si tengono le ultime dieci, che sono
-    # meno di 200 KB in tutto.
+    # Sets references\adapters.json aside before the reset reverts it. The
+    # name carries the date and time so two nearby startups don't overwrite
+    # each other's copy; the last ten are kept, under 200 KB in total.
     #
-    # Se qualcosa qui non riesce, si avvisa e si va avanti: e' una rete di
-    # sicurezza, non una precondizione per avviare il programma.
+    # A failure here just warns and continues: this is a safety net, not a
+    # precondition for starting the program.
     param([string]$Repo)
 
-    # Il `catch` qui sotto prende qualcosa solo se l'errore e' terminante, e a
-    # renderlo tale e' questa preferenza. La funzione la dichiara da se' invece
-    # di ereditarla dalla riga 1 del file, perche' `Sync-DaGitHub` — che e' chi
-    # la chiama — la mette a "Continue" per potersi leggere gli errori di git.
+    # The `catch` below only catches something if the error is terminating,
+    # and this preference is what makes it so. The function sets it itself
+    # rather than inheriting it from line 1, because `Sync-DaGitHub` — its
+    # caller — sets it to "Continue" so it can read git's own error output.
     $ErrorActionPreference = "Stop"
 
     try {
@@ -70,38 +69,36 @@ function Salva-IlRegistroImparato {
 }
 
 function Test-ComparatoreAcceso {
-    # Vero se su questa porta risponde IL comparatore, non un programma
-    # qualunque che ha preso la porta.
+    # True if THIS comparator is answering on this port, not just some
+    # other program that happens to hold it.
     #
-    # ⚠ La differenza e' tutta la guardia. `Get-NetTCPConnection` — che e'
-    # quello che usava l'aggiornatore manuale — dice soltanto «qualcuno e' in
-    # ascolto», e su quel «qualcuno» ci sta anche un programma che col
-    # comparatore non c'entra niente. Fermare l'allineamento per lui vorrebbe
-    # dire che il PC del negozio smette di ricevere aggiornamenti finche' quel
-    # programma resta acceso: e' lo stesso difetto della guardia sull'albero
-    # sporco, gia' scartata per questa ragione.
+    # The check matters because `Get-NetTCPConnection` alone only says
+    # "someone is listening", and that someone can be an unrelated program.
+    # Skipping the sync for it would mean the store PC stops receiving
+    # updates for as long as that program stays running.
     #
-    # `/api/health` risponde `{"ok": true, ...}` e non chiede nessun token: e'
-    # la stessa rotta con cui `app/launcher.py` riconosce un server acceso.
+    # `/api/health` responds `{"ok": true, ...}` with no token required:
+    # it's the same route `app/launcher.py` uses to recognize a running
+    # server.
     #
-    # Nel dubbio si risponde «non e' acceso», cosi' l'allineamento si fa: se la
-    # sonda sbaglia, si torna al comportamento che c'era prima di questa
-    # guardia, che e' l'errore che costa meno.
+    # When in doubt this answers "not running", so the sync proceeds: a
+    # wrong guess here just falls back to the behavior from before this
+    # check existed, which is the cheaper mistake.
     #
-    # Si guarda in due passi, e il primo esiste per non pagare il secondo: la
-    # mattina normale sulla 8765 non c'e' nessuno, e scoprirlo con una
-    # richiesta HTTP vuol dire caricare lo stack di .NET a ogni avvio per
-    # sentirsi dire di no. `Get-NetTCPConnection` risponde subito e senza
-    # caricare niente; la domanda «chi sei» si fa solo se qualcuno c'e'
-    # davvero.
+    # Checked in two steps, and the first exists to avoid paying for the
+    # second: on a normal morning nothing is on port 8765, and finding that
+    # out with an HTTP request means loading the .NET stack on every
+    # startup just to be told no. `Get-NetTCPConnection` answers instantly
+    # without loading anything; the "who are you" question is only asked
+    # once something is actually there.
     param([int]$Porta)
 
     try {
         $inAscolto = Get-NetTCPConnection -LocalPort $Porta -State Listen -ErrorAction SilentlyContinue
     } catch {
-        # Il cmdlet non c'e' (Windows troppo vecchio, modulo assente): non e'
-        # un errore che valga la pena raccontare, e la risposta prudente e'
-        # «non e' acceso», cioe' allinea.
+        # The cmdlet isn't available (too old a Windows, missing module):
+        # not worth reporting, and the cautious answer is "not running",
+        # i.e. sync anyway.
         return $false
     }
     if (-not $inAscolto) { return $false }
@@ -115,62 +112,63 @@ function Test-ComparatoreAcceso {
 }
 
 function Sync-DaGitHub {
-    # Prima di avviare, allinea questa cartella all'ultima versione su GitHub.
-    # Questo PC non modifica il codice in locale: rincorre e basta. Se qualcosa
-    # va storto (offline, git assente), NON blocca l'avvio: parte com'e'.
+    # Before starting, aligns this folder with the latest version on
+    # GitHub. This PC never edits code locally: it only follows along. If
+    # something goes wrong (offline, git missing), this does NOT block
+    # startup: it launches as-is.
     param([string]$Repo)
 
-    # ⚠ Dentro questa funzione l'errore non e' terminante, ed e' di proposito.
-    # In cima al file c'e' $ErrorActionPreference = "Stop": con quello attivo,
-    # raccogliere lo standard error di un comando esterno con `2>&1` trasforma
-    # una riga qualunque scritta da git in un errore terminante — e git scrive
-    # li' anche quando ha funzionato. Il `try` attorno alla chiamata a questa
-    # funzione lo prenderebbe e salterebbe l'aggiornamento: cioe' il rimedio
-    # spegnerebbe proprio la cosa che deve proteggere. L'assegnazione vale solo
-    # qui dentro; `Salva-IlRegistroImparato` si rimette "Stop" da sola.
+    # Errors inside this function are non-terminating, on purpose. The top
+    # of the file sets $ErrorActionPreference = "Stop": with that active,
+    # capturing an external command's stderr via `2>&1` would turn any
+    # ordinary line git writes into a terminating error — and git writes
+    # there even on success. The `try` around this function's call would
+    # then catch it and skip the update, defeating the very thing it's
+    # meant to protect. This assignment only applies inside this function;
+    # `Salva-IlRegistroImparato` resets it to "Stop" on its own.
     $ErrorActionPreference = "Continue"
 
-    # ⚠ Se il comparatore sta gia' girando, i suoi sorgenti non si toccano.
-    # Un secondo doppio clic mentre e' in corso un ricalcolo cambierebbe i file
-    # sotto un processo vivo: la guardia di `versione_del_codice` se ne accorge
-    # e ferma la catena con una frase in italiano — quindi non si corrompe
-    # niente — ma la run si perde, e con lei le domande gia' pagate all'AI.
+    # If the comparator is already running, its sources aren't touched. A
+    # second double-click during a recompute would change files under a
+    # live process: `versione_del_codice`'s own guard notices and stops the
+    # pipeline with an Italian message — so nothing gets corrupted — but the
+    # run is lost, along with any AI answers already paid for.
     #
-    # Si salta l'allineamento e si va avanti: `app/launcher.py` trovera' il
-    # server acceso e riaprira' la finestra su quello, che e' quello che chi ha
-    # fatto doppio clic voleva. L'aggiornamento si fara' al primo avvio a
-    # programma chiuso.
+    # The sync is skipped and startup proceeds: `app/launcher.py` will find
+    # the running server and reopen the window on it, which is what the
+    # double-click was for. The update happens at the next startup with the
+    # program closed.
     #
-    # La porta e' la 8765 perche' e' la prima che il lanciatore prova ed e'
-    # quella del negozio. Se quel giorno il programma fosse finito su una porta
-    # piu' avanti, la guardia non scatta e si torna al comportamento di prima:
-    # non si perde niente che non si perdesse gia'.
+    # Port 8765 is checked because it's the first the launcher tries and the
+    # one the store uses. If the program had ended up on a later port that
+    # day, this guard simply doesn't trigger and behavior falls back to what
+    # it was before this check existed: nothing worse is lost than before.
     if (Test-ComparatoreAcceso -Porta 8765) {
         Write-Host "[SYNC] Il comparatore e' gia' acceso: non tocco i file mentre gira." -ForegroundColor Yellow
         Write-Host "       L'aggiornamento si fara' al prossimo avvio a programma chiuso." -ForegroundColor Yellow
         return
     }
 
-    # ⚠ Nessuna domanda a schermo, mai. Il repository e' privato: il giorno in
-    # cui le credenziali salvate scadono, git chiede di rifarle — e su Windows
-    # a chiederlo e' Git Credential Manager, che apre una finestra. Qui non c'e'
-    # nessuno a rispondere: e' il doppio clic del mattino, e la finestra
-    # resterebbe aperta prima ancora che il programma parta, con l'aria di un
-    # comparatore che non si avvia. Con queste tre, git rinuncia subito e
-    # l'avvio prosegue con la versione locale — cioe' esattamente quello che
-    # gia' fa quando la rete non risponde.
+    # No on-screen prompt, ever. The repository is private: the day saved
+    # credentials expire, git asks to redo them — and on Windows that means
+    # Git Credential Manager opening a window. There's no one to answer it:
+    # this runs on the morning double-click, and the window would sit open
+    # before the program even starts, looking like the comparator failed to
+    # launch. With these three settings git gives up immediately instead,
+    # and startup proceeds on the local version — exactly what already
+    # happens when the network doesn't respond.
     #
-    # Non e' una cosa osservata su quel PC: e' il modo in cui git si comporta
-    # quando le credenziali non bastano piu', e il costo di prevenirlo e' tre
-    # righe.
+    # This is how git behaves whenever credentials stop being enough, not
+    # something specific to one machine, and preventing it costs three
+    # lines.
     #
-    # `GIT_TERMINAL_PROMPT` resta impostata per il resto del processo, quindi
-    # vale anche per il `git` che `versione_del_codice` esegue piu' tardi. E'
-    # voluto: li' una domanda a schermo sarebbe altrettanto fuori posto.
+    # `GIT_TERMINAL_PROMPT` stays set for the rest of the process, so it
+    # also applies to the `git` call `versione_del_codice` makes later. That
+    # is intentional: a prompt there would be just as out of place.
     $env:GIT_TERMINAL_PROMPT = '0'
-    # Vanno sulle due sole chiamate che parlano con GitHub. Le altre — status,
-    # rev-parse, checkout, reset, log — restano sul disco e non hanno nessuno
-    # da autenticare.
+    # Applied only to the two calls that talk to GitHub. The others —
+    # status, rev-parse, checkout, reset, log — stay on disk and have
+    # nothing to authenticate.
     $senzaDomande = @('-c', 'credential.interactive=false', '-c', 'core.askPass=')
 
     $git = Trova-Git
@@ -180,11 +178,11 @@ function Sync-DaGitHub {
     }
 
     Write-Host "[SYNC] Controllo GitHub..." -ForegroundColor Gray
-    # `2>&1` e non `2>$null`: il motivo per cui un giorno l'aggiornamento non
-    # passa — credenziali scadute, repository divergente, disco pieno — non
-    # esisteva da nessuna parte, e la frase qui sotto non lo dice. Si tiene da
-    # parte e si stampa solo se il comando e' fallito, cosi' l'avvio riuscito
-    # resta pulito come prima.
+    # `2>&1`, not `2>$null`: the reason an update fails on a given day —
+    # expired credentials, a diverged repository, a full disk — needs to be
+    # recorded somewhere, since the message below doesn't state it. It's
+    # kept aside and printed only if the command failed, so a successful
+    # startup stays as clean as before.
     $erroreDelFetch = & $git @senzaDomande -C $Repo fetch --quiet --prune origin 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[SYNC] Nessuna connessione a GitHub: avvio la versione locale." -ForegroundColor Yellow
@@ -192,27 +190,27 @@ function Sync-DaGitHub {
         return
     }
 
-    # Il ramo canonico e' quello predefinito su GitHub: qualunque esso sia, si
-    # segue da solo, senza nomi di rami scritti a mano.
+    # The canonical branch is GitHub's default: whichever it is, this
+    # follows it automatically, with no branch name hardcoded.
     & $git @senzaDomande -C $Repo remote set-head origin --auto 2>$null | Out-Null
     $def = (& $git -C $Repo rev-parse --abbrev-ref origin/HEAD 2>$null)
     if (-not $def) { $def = "origin/main" }
     $ramo = $def -replace '^origin/', ''
 
-    # ⚠ Il registro degli adattatori e' l'unico file che il programma si
-    # riscrive da solo restando sotto git: quando impara un fornitore nuovo, o
-    # quando qualcuno conferma uno schema variato, la voce finisce in
-    # references\adapters.json. Il `reset --hard` qui sotto riporta i file
-    # tracciati a com'erano su GitHub, quindi se ne mangia il contenuto.
+    # The adapter registry is the only file the program rewrites itself
+    # while still under git: when it learns a new supplier, or someone
+    # confirms a changed schema, the entry lands in references\adapters.json.
+    # The `reset --hard` below reverts tracked files to their GitHub state,
+    # which overwrites it.
     #
-    # Qui NON si blocca l'allineamento: bloccarlo vorrebbe dire che il primo
-    # adattatore imparato spegne gli aggiornamenti per sempre. Si tiene una
-    # copia di quello che sta per essere riportato indietro, e lo si dice.
+    # The sync is NOT blocked for this: blocking it would mean the first
+    # learned adapter disables updates permanently. A copy of what's about
+    # to be reverted is kept instead, and reported.
     #
-    # La copia si fa solo quando c'e' davvero qualcosa da perdere — cioe'
-    # quando il file risulta modificato rispetto a GitHub. Farla a ogni avvio
-    # vorrebbe dire che il secondo avvio sovrascrive la copia buona con quella
-    # gia' azzerata dal primo.
+    # The copy is only made when there's actually something to lose — i.e.
+    # when the file differs from GitHub. Doing it on every startup would let
+    # a second startup overwrite the good copy with the one already reset by
+    # the first.
     $copiaRegistro = $null
     $registroSporco = & $git -C $Repo status --porcelain -- "references/adapters.json" 2>$null
     if ($registroSporco) {
@@ -220,14 +218,15 @@ function Sync-DaGitHub {
     }
 
     $prima = (& $git -C $Repo rev-parse HEAD 2>$null)
-    # Allineo la cartella al ramo predefinito. I dati di lavoro (app/data) sono
-    # fuori da git, quindi questo NON tocca stato, conferme, ordini, memoria AI.
+    # Aligns the folder with the default branch. Working data (app/data) is
+    # outside git, so this does NOT touch state, confirmations, orders, or
+    # AI memory.
     $erroreDelCheckout = & $git -C $Repo checkout -B $ramo --quiet "origin/$ramo" 2>&1
-    # L'esito del checkout non lo guardava nessuno: si controllava $LASTEXITCODE
-    # solo dopo il reset, che e' il comando successivo. Un checkout fallito non
-    # sposta il contenuto sul disco — il reset punta a "origin/$ramo", un
-    # riferimento esplicito — ma lascia il ramo locale con un nome sbagliato, e
-    # nessuno lo sapeva.
+    # The checkout's own result is not itself checked here: $LASTEXITCODE
+    # is only checked after the reset, the next command. A failed checkout
+    # doesn't move content on disk — the reset points at "origin/$ramo", an
+    # explicit ref — but it does leave the local branch with the wrong
+    # name, silently.
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[SYNC] Non sono riuscito a mettermi sul ramo ${ramo}: avvio la versione locale." -ForegroundColor Yellow
         Mostra-IlMotivo $erroreDelCheckout
@@ -235,12 +234,12 @@ function Sync-DaGitHub {
     }
     $erroreDelReset = & $git -C $Repo reset --hard --quiet "origin/$ramo" 2>&1
     if ($LASTEXITCODE -ne 0) {
-        # ⚠ Qui c'era scritto «avvio la versione locale», e non era vero: il
-        # `checkout -B` qui sopra e' gia' riuscito, quindi ramo e file sul disco
-        # sono gia' quelli di GitHub. Il reset serviva a togliere di mezzo
-        # eventuali modifiche locali rimaste, e a non riuscirci sono quelle a
-        # restare — non la versione di prima. Dirlo storto manda a cercare un
-        # problema dalla parte sbagliata.
+        # Saying "starting the local version" here would be wrong: the
+        # `checkout -B` above already succeeded, so the branch and files on
+        # disk are already GitHub's. The reset's job was clearing any
+        # remaining local changes, and if it fails those changes are what's
+        # left — not the previous version. Misstating that sends
+        # troubleshooting in the wrong direction.
         Write-Host "[SYNC] Il codice e' quello nuovo, ma qualcosa sul disco non si e' lasciato ripulire." -ForegroundColor Yellow
         Mostra-IlMotivo $erroreDelReset
         return
@@ -282,12 +281,12 @@ function Test-PythonCandidate {
     }
 
     try {
-        # ⚠ `openpyxl` fa parte della domanda, non e' un di piu'. Senza, il
-        # programma parte e poi muore al primo listino Excel, con un errore che
-        # non nomina mai la libreria che manca: sembra un guasto del
-        # comparatore. Meglio scartare qui un Python monco e provare il
-        # prossimo. La sonda del Mac (`.avvia-comune.sh`) chiedeva gia' tutte e
-        # due le cose; questa no, e l'asimmetria non aveva nessuna ragione.
+        # `openpyxl` is part of the requirement, not an extra. Without it
+        # the program starts and then dies on the first Excel price list,
+        # with an error that never names the missing library: it looks like
+        # a comparator failure. Better to reject an incomplete Python here
+        # and try the next candidate. The macOS probe (`comune.sh`) already
+        # checked for both; this one didn't, for no good reason.
         & $Executable @PrefixArguments -c "import sys, openpyxl; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)" *> $null
         return $LASTEXITCODE -eq 0
     } catch {
@@ -310,27 +309,27 @@ $candidates = @(
         IsCommand = $false
         Label = "runtime portabile dell'app"
     },
-    # I due posti in cui finisce un Python installato apposta su Windows: per
-    # tutti gli utenti, e per il solo utente. Vengono PRIMA dei due runtime di
-    # Codex, e la ragione sta scritta qui perche' non si perda.
+    # The two places a Python installed on purpose on Windows ends up: for
+    # all users, and for the current user only. These come BEFORE the two
+    # Codex runtimes, and the reason is recorded here so it isn't lost.
     #
-    # Fino al 19 agosto 2026 il PC del negozio girava con il Python della cache
-    # di Codex, che e' un altro programma: quella cartella Codex la rifa' da
-    # capo quando si aggiorna, e accanto a lei c'erano gia' due avanzi datati 13
-    # e 14 agosto. In due giorni era stata sostituita due volte. Il giorno in
-    # cui cambia nome, il comparatore non parte — in silenzio, probabilmente il
-    # mattino di un ordine — e non c'era nessun ripiego: su quel PC non esisteva
-    # nessun altro Python, `py` non era installato, e il `python` del PATH era
-    # il segnaposto da 0 byte del Microsoft Store.
+    # The store PC once ran on Codex's cache Python, which belongs to a
+    # different program: that Codex folder gets rebuilt from scratch on
+    # update, and stale leftovers from consecutive days had already been
+    # seen sitting next to it, replaced twice within two days. The day it
+    # changes name, the comparator fails to start — silently, possibly on
+    # an order morning — with no fallback: no other Python existed on that
+    # PC, `py` wasn't installed, and the `python` on PATH was the Microsoft
+    # Store's 0-byte placeholder.
     #
-    # Se qui non c'e' niente, questo blocco non trova nulla e non cambia
-    # assolutamente niente: si va avanti con Codex come prima. Il giorno in cui
-    # qualcuno installa Python, il programma smette di essere ospite da solo.
+    # If nothing is installed here, this block simply finds nothing and
+    # changes nothing: it falls through to Codex as before. The day someone
+    # installs Python, the program stops depending on a host it doesn't own.
     #
-    # ⚠ La versione e' scritta a mano. Passando alla 3.14, si aggiunge una
-    # coppia di righe qui sopra: e' voluto che sia esplicito invece che cercato
-    # con un modello, perche' questo file non lo prova nessun collaudo e chi
-    # sviluppa su Mac non ha PowerShell per accorgersi di un errore.
+    # The version is hardcoded. Moving to 3.14 means adding a pair of lines
+    # above: intentionally explicit rather than pattern-matched, since
+    # nothing tests this file and Mac-based development has no PowerShell
+    # to catch a mistake here.
     [pscustomobject]@{
         Executable = (Join-Path $env:ProgramFiles "Python313\python.exe")
         Arguments = @()

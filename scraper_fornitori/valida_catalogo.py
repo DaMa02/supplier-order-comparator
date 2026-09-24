@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
-"""Controlla e ripulisce il CSV scaricato da un sito fornitore.
+"""Check and clean the CSV downloaded from a supplier's site.
 
-E' la seconda meta' dello scheletro, e la piu' importante: uno scraper che
-arriva in fondo senza errori **non** vuol dire che il catalogo sia buono. Il
-sito puo' cambiare mentre lo si scarica, una sessione puo' scadere a meta', una
-pagina puo' tornare vuota. Qui si decide se il file e' utilizzabile.
+This is the second, and more important, half of the skeleton: a scraper that
+finishes without errors does not mean the catalog is good. The site can
+change while it's being downloaded, a session can expire halfway through, a
+page can come back empty. This is where it's decided whether the file is
+usable.
 
-Le colonne si leggono dall'intestazione del CSV: questo modulo non sa nulla di
-nessun fornitore. Servono solo i nomi di quattro colonne — prodotto, prezzo,
-pagina, EAN — che si dichiarano dalla riga di comando quando non sono quelli
-predefiniti.
+Columns are read from the CSV header: this module knows nothing about any
+particular supplier. It only needs the names of four columns — product,
+price, page, EAN — declared on the command line when they aren't the
+defaults.
 
-Chi blocca e chi avvisa, in breve:
+What blocks and what warns, in short:
 
-- **blocca** un catalogo vuoto, un'estrazione dichiarata incompleta, una
-  pagina mancante, righe senza descrizione o senza prezzo leggibile, e uno
-  scarto fra i conteggi piu' grande di quello ammesso;
-- **avvisa** e lascia passare uno scarto piccolo (il catalogo e' cambiato
-  durante l'estrazione), i duplicati identici tolti, le pagine in piu'.
+- blocks on an empty catalog, an extraction declared incomplete, a
+  missing page, rows with no description or no readable price, and a count
+  discrepancy bigger than the allowed threshold;
+- warns and lets through a small discrepancy (the catalog may have
+  changed during extraction), identical duplicates removed, extra pages.
 """
 
 from __future__ import annotations
@@ -41,16 +42,16 @@ COLONNA_EAN_PREDEFINITA = "ean"
 
 
 def leggi_prezzo(valore: str) -> Decimal | None:
-    """Legge un prezzo scritto all'italiana (1.234,56).
+    """Parse a price written in Italian format (1.234,56).
 
-    Un prezzo che non si legge non diventa zero: diventa `None`, e la riga
-    viene scartata. Zero e' un prezzo, e un prezzo inventato a partire da una
-    cella illeggibile e' esattamente il genere di errore che qui costa un
-    ordine.
+    A price that can't be parsed doesn't become zero: it becomes `None`, and
+    the row is discarded. Zero is a valid price, and a price invented from an
+    unreadable cell is exactly the kind of error that costs a wrong order.
     """
 
-    # "\u00a0" e' lo spazio unificatore: molti siti lo mettono fra il numero e
-    # la valuta, e nel file e' indistinguibile a occhio da uno spazio normale.
+    # "\u00a0" is the non-breaking space: many sites put it between the
+    # number and the currency, and it's indistinguishable by eye from a
+    # normal space in the file.
     testo = valore.strip().replace("\u00a0", "").replace(" ", "")
     if not testo:
         return None
@@ -104,7 +105,7 @@ def valida_catalogo(
     colonna_pagina: str = COLONNA_PAGINA_PREDEFINITA,
     colonna_ean: str = COLONNA_EAN_PREDEFINITA,
 ) -> dict[str, Any]:
-    """Ripulisce il catalogo e restituisce il rapporto che decide se attivarlo."""
+    """Clean the catalog and return the report that decides whether to activate it."""
 
     if scarto_massimo < 0:
         raise ValueError("lo scarto massimo non puo' essere negativo")
@@ -140,9 +141,9 @@ def valida_catalogo(
             scartate["prezzo_vuoto_o_illeggibile"] += 1
             continue
 
-        # La pagina e' la provenienza, non l'identita' del prodotto: due righe
-        # per il resto identiche sono un duplicato anche se il sito le ha
-        # restituite su due pagine diverse.
+        # The page is provenance, not product identity: two rows that are
+        # otherwise identical are a duplicate even if the site returned them
+        # on two different pages.
         chiave = tuple(riga[colonna].casefold() for colonna in colonne if colonna != colonna_pagina)
         if chiave in viste:
             scartate["duplicato_identico"] += 1

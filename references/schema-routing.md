@@ -1,124 +1,89 @@
-# Routing AI degli schemi e controllo errori
+# Schema routing and error handling
 
-## Principio
-
-Ogni run deve avere questa forma:
+## Principle
 
 ```text
-AI preflight sugli input → motore deterministico o LLM mirato → AI check e gestione errori
+profile every file → match against the adapter registry → known adapter, or a person maps it once → deterministic parsing and a numeric sanity check
 ```
 
-Il determinismo non deve partire assumendo che fogli, colonne e fornitori siano identici alla run precedente.
+Recognizing a supplier's file layout is deterministic, not AI-assisted. Phase 2 of the pipeline ("Recognition", `RICONOSCIMENTO` in `app/pipeline_jobs.py`) matches every uploaded file's profile against the adapter registry (`references/adapters.json` plus the entries learned locally) and either finds an adapter that reads it or stops the run for a person to map its columns, through the app's guided UI. AI in this codebase does real work elsewhere — matching products that share no EAN (pipeline phase 6) — but plays no part in recognizing a file's layout.
 
-## 1. AI preflight obbligatorio
+## 1. Profiling
 
-Inventariare in sola lettura tutti i file candidati nella cartella, inclusi listini aggiuntivi. Per ogni workbook raccogliere deterministicamente nomi fogli, dimensioni attive, righe iniziali, intestazioni, tipi di dato, formule, celle unite e distribuzione dei valori nelle colonne. L'AI confronta questo profilo con gli adattatori registrati e assegna uno stato:
+`scripts/inspect_sources.py` inventories every candidate `.xlsx`/`.xls`/`.csv` in the uploads folder, read-only: sheet names, header row, data start row, per-column value types, and a SHA-256 of the file. For each sheet it also calls `registro.riconosci()` (`scripts/registro.py`) and stores the result on the profile as `deterministic_hint`: a `state` (`SCHEMA_NOTO`, `SCHEMA_VARIATO` or `AMBIGUO`), the matched `adapter_id`, a confidence score, and the evidence for it. Filename similarity plays no part in this: a supplier renaming their own price list every week shouldn't become a new supplier.
 
-- `SCHEMA_NOTO`: firme e significato dei campi compatibili; usare l'adattatore deterministico;
-- `SCHEMA_VARIATO`: stesso fornitore ma colonne spostate, rinominate o struttura modificata; l'AI propone una nuova mappatura;
-- `NUOVO_FORNITORE`: nessun adattatore compatibile; l'AI propone identità e regole del nuovo schema;
-- `FILE_NON_PERTINENTE` o `AMBIGUO`: non entra nel confronto finché non è chiarito.
+## 2. Recognition
 
-La somiglianza del nome file è solo un indizio, mai una prova.
+`_fase_riconoscimento` turns each profile into a decision without ever calling an AI. For each file:
 
-Il flusso implementato usa:
+1. a matching entry in `decisioni_schemi.json` wins first, if there is one (§4);
+2. otherwise, `deterministic_hint.state == SCHEMA_NOTO` becomes a decision straight from the registry entry it matched — the same field mapping the adapter already declares.
 
-```powershell
-python scripts/inspect_sources.py <input...> --output <run>\input_profiles.json
-python scripts/apply_preflight_decisions.py --profiles <profili> --decisions <decisioni-ai> --output <run>\input_manifest.json
-python scripts/validate_input_manifest.py --manifest <manifest> --adapters references\adapters.json --output <report>
-python scripts/prepare_manifest_sources.py --manifest <manifest> --adapters references\adapters.json --output <run>\dati
-```
+Anything else stops the run with `SCHEMA_SCONOSCIUTO`: a layout the registry doesn't know at all (`AMBIGUO`), a known supplier whose layout doesn't match its stored signature anymore (`SCHEMA_VARIATO`), a document missing exactly one required header, or a file uploaded under the wrong role (a master export loaded as a supplier list, or the reverse). This is the first of the pipeline's three hard stops — the other two are a document that fails to parse and a price list that parses to zero orderable rows, `FORNITORE_SENZA_RIGHE` (§6). When two uploaded files resolve to the same supplier, only the more recently modified one enters the run; the other is reported, not silently dropped.
 
-L'inspector non compila da solo `ai_preflight`: il passaggio AI deve essere esplicito e auditabile.
+The surviving decisions are merged with the profiles by `scripts/apply_preflight_decisions.py` into `input_manifest.json`, under the field name `ai_preflight` — a name left over from an earlier design where this merge step was an AI call. Nothing in the current code fills that field with anything but a deterministic or hand-written decision.
 
-## 2. Scelta del percorso
+## 3. States
 
-Per `SCHEMA_NOTO`, eseguire il parser deterministico registrato.
+- `SCHEMA_NOTO` — `registro.riconosci()` found an adapter whose signature and deterministic checks all pass; its field mapping is used unchanged.
+- `SCHEMA_VARIATO` — from two places: `registro.riconosci()` returns it when a candidate identifies the supplier but fails a deterministic check (a shifted or an extra column that breaks position-based reading); the guided-mapping UI (`app/schema_mapping.py`) also writes it by default when the user maps columns for a supplier already in the registry.
+- `NUOVO_FORNITORE` — written only by the guided-mapping UI, when the user names a supplier that isn't in the registry yet. `registro.riconosci()` never produces it.
+- `AMBIGUO` — `registro.riconosci()`'s result when no adapter signature matches at all. On its own it becomes part of a `SCHEMA_SCONOSCIUTO` stop; a hand-written decision can also declare it directly, to exclude a file from parsing without going through the guided UI.
+- `FILE_NON_PERTINENTE` — reachable only by hand, through `decisioni_schemi.json`; no UI path produces it. Has the same effect as `AMBIGUO`: `validate_input_manifest.py` and `prepare_manifest_sources.py` skip the file.
 
-Per `SCHEMA_VARIATO`, l'AI deve mappare almeno foglio, riga iniziale, EAN, descrizione, codice, prezzo, sconto, confezione, disponibilità, IVA e colonna ordine. Se la modifica è soltanto l'ordine delle colonne e le intestazioni sono affidabili, creare una mappatura per nome intestazione. Se il significato commerciale di prezzo, sconto o quantità è ambiguo, richiedere conferma all'utente.
+## 4. The manual fallback: `decisioni_schemi.json`
 
-Se un campo non esiste davvero, dichiararlo invece di ometterlo silenziosamente: `ean_unavailable=true`, `supplier_code_unavailable=true`, `vat_unavailable=true` oppure `assume_available=true`. Per un XLSX fornitore `sheet`, `data_start_row` e `order_column` sono obbligatori; prezzo e fattore d'ordine devono essere mappati o avere un default esplicito. Il validatore rifiuta una `field_mapping` presente ma semanticamente incompleta.
+A hand-maintained JSON file (`NOME_DECISIONI_MANUALI` in `pipeline_jobs.py`), read by `_decisioni_manuali()`. Each entry names a `file_name` and, optionally, the `file_sha256` it applies to; without a hash it matches by name alone, the only remedy left once a decision was written by hand rather than confirmed on the page. A decision whose hash doesn't match the uploaded file anymore is set aside and reported, not silently reapplied to a different document. An entry missing a `rationale` gets one filled in automatically, since the validator (§6) requires it on every decision.
 
-Per `NUOVO_FORNITORE`, usare l'LLM per comprendere struttura e regole commerciali su un campione rappresentativo, poi salvare un adattatore dichiarativo o un parser testabile. Non processare l'intero file con interpretazione libera dell'LLM quando una mappatura stabile è stata definita.
+A manual decision overrides even a document the registry would otherwise flag as changed; the page then shows `DECISIONE_MANUALE_ATTIVA` until the registry manages to learn the mapping on its own, after which the note disappears. Confirmed `SCHEMA_VARIATO`/`NUOVO_FORNITORE` entries written here queue for learning (§7) exactly like ones confirmed through the guided UI.
 
-## 3. AI check dopo il deterministico
+## 5. A supplier the registry doesn't recognize
 
-Dopo ogni parser deterministico, l'AI deve leggere il report di audit e verificare:
+The Import page opens the guided mapping for that document directly; no JSON file is opened and no command is run.
 
-- copertura dell'intero range attivo;
-- conteggi righe/EAN e confronto con run precedente;
-- percentuali anomale di prezzo, EAN o confezione mancanti;
-- duplicati e variazioni improvvise della copertura EAN;
-- campioni di righe iniziali, centrali e finali;
-- prezzi netti e sconti fuori distribuzione;
-- colonne ordine effettivamente individuate;
-- errori o warning prodotti dal parser.
+1. the page shows the sheet and a preview of the rows;
+2. it proposes the supplier and the columns from the headers, never from the filename — a deterministic best guess scored against the registry's known adapters, not a model call;
+3. the user checks the essential columns — product, EAN, price, pieces per carton and order column; supplier code, VAT, unit and availability sit under "Altre colonne" (Other columns), collapsed by default;
+4. "Prova le colonne" (try the columns) re-reads the file with the same parser used by the comparison and shows how many rows are actually usable, plus a normalized sample;
+5. only after that check does "Conferma e riparti col confronto" (confirm and restart the comparison) become available. The pipeline restarts on its own and, once that run completes, stores the schema in the registry for the following weeks (§7).
 
-L'AI non sostituisce i conteggi con una stima: decide se il risultato è plausibile, se il parser va adattato o se serve intervento umano.
+The browser never sends file paths. It identifies the run and the profile the pipeline already produced; the server re-checks that the run is still the one that stopped, that every file belongs to the uploads folder, and that its SHA-256 matches what was shown in the preview. A column with no header is saved by number; one with a unique header is saved by name, so the registry can recognize it in future runs.
 
-## 3-bis. Un fornitore che il registro non conosce
+If the price list doesn't yet have an order column, the page lets the user pick the first empty column after the data. That choice becomes `order_write`; before creating the copy, the program re-checks the file's fingerprint, sheet, row count, that the header cell is still empty, and that the column has no stray text or formulas. The original file is never modified.
 
-È la prima delle tre fermate: `SCHEMA_SCONOSCIUTO`. La pagina Importa apre
-direttamente la configurazione guidata del documento coinvolto. Non si aprono
-file JSON e non si lanciano comandi.
+## 6. Validation and parsing
 
-Il percorso è questo:
+`validate_input_manifest.py` (phase 3, VALIDAZIONE) checks the manifest before anything is read at scale: a known `state` (§3), a `rationale`, the file still on disk with a matching hash, and, for `SCHEMA_VARIATO`/`NUOVO_FORNITORE`, a `field_mapping` complete enough to read with (`incomplete_mapping()`): for the master export, `ean`, `description` and `last_unit_price`; for a supplier, `description`, a price column, an order multiplier (a column or an explicit default), and, for each of EAN, supplier code, availability and VAT, either a column or an explicit flag saying it doesn't apply. Every role also needs the sheet (unless the file is a CSV) and where data starts; a supplier `.xlsx` also needs `order_column`. The registry-learning step (§7) reuses this same function rather than a second copy of the rules. Errors here stop the run (`MANIFEST_NON_VALIDO`); anything else is a non-blocking warning.
 
-1. la pagina mostra il foglio e un'anteprima delle righe;
-2. propone il fornitore e le colonne in base alle intestazioni, mai al nome del
-   file;
-3. l'utente controlla le colonne essenziali: prodotto, EAN, prezzo, pezzi per
-   collo e colonna ordine; codice fornitore, IVA, unità di misura e disponibilità
-   stanno in «Altre colonne», chiuso in partenza;
-4. «Controlla le colonne» rilegge il file con lo stesso parser del confronto e
-   mostra quante righe sono davvero utilizzabili e un campione normalizzato;
-5. soltanto dopo questa prova «Conferma e ricalcola» diventa disponibile. La
-   pipeline riparte da sola, costruisce il manifest e memorizza lo schema nel
-   registro per le settimane successive.
+`prepare_manifest_sources.py` (phase 4, PARSING) does the actual read: `FILE_NON_PERTINENTE`/`AMBIGUO` files are skipped, `SCHEMA_NOTO` uses the registry's own reader, `SCHEMA_VARIATO`/`NUOVO_FORNITORE` are read generically from the confirmed `field_mapping`. A supplier the manifest expected that parses to zero orderable rows stops the run (`FORNITORE_SENZA_RIGHE`) instead of quietly dropping out of the comparison.
 
-Il browser non invia percorsi. Identifica la run e il profilo già prodotti
-dalla pipeline; il servizio ricontrolla che la run sia ancora quella fermata,
-che ogni file appartenga alla cartella dei caricamenti e che lo SHA-256 sia
-quello mostrato nell'anteprima. Una colonna senza nome viene salvata per numero;
-una con intestazione unica viene salvata per nome, così il registro può
-riconoscerla in futuro.
+After parsing, a deterministic check that only warns (`_post_check` in `pipeline_jobs.py`) compares this run's row counts and median prices against the previous run, supplier by supplier: it warns when a supplier appeared or vanished, when its row count moved by more than 15%, or when its median price moved by more than 10%. A supplier with no usable median price at all is flagged separately and more loudly (`PREZZI_A_ZERO`), since it would otherwise win every line at €0.00.
 
-Se il listino non contiene ancora una colonna ordine, la pagina permette di
-scegliere la prima colonna vuota successiva ai dati. La conferma entra in
-`order_write`; prima di creare la copia il programma ricontrolla impronta del
-file, foglio, righe, cella d'intestazione ancora vuota e assenza di testo o
-formule nella colonna. L'originale non viene modificato.
+## 7. Persistence: learned adapters
 
-## 4. Persistenza
+Every run keeps an `input_manifest.json` with the classification, the observed signature, the chosen adapter, the mapping, the user confirmation and the post-check results. Once parsing and the comparison build have actually exercised the columns, the orchestrator learns from the run and saves `adattatori_imparati.json` in the run's folder, after a dry run that writes nowhere. The manual decision is then removed automatically, but only for the documents actually learned.
 
-Per ogni run resta un `input_manifest.json` con classificazione, firma osservata,
-adattatore scelto, mappatura, conferma utente e risultati del post-check. Dopo
-che parsing e costruzione hanno provato davvero le colonne, l'orchestratore
-esegue l'apprendimento e conserva `adattatori_imparati.json` nella cartella
-della run. La decisione temporanea viene rimossa automaticamente.
+What enters the registry:
 
-Che cosa entra nel registro:
+- only entries whose `ai_preflight.state` is `SCHEMA_VARIATO` or `NUOVO_FORNITORE` and whose `user_confirmation.status == "CONFIRMED"`: the page proposes a mapping, the user approves it, and nothing unapproved is learned;
+- only with a `field_mapping` that's complete according to `validate_input_manifest.incomplete_mapping` — the same checks the validator itself uses, not a second copy of them;
+- only if re-reading the document with the registry as just written classifies it as `SCHEMA_NOTO` with the learned adapter: an adapter that doesn't even recognize the file it was learned from is worse than none.
 
-- solo le voci con `ai_preflight.state` in `SCHEMA_VARIATO` o `NUOVO_FORNITORE` **e** `user_confirmation.status == "CONFIRMED"`: l'AI propone, l'utente approva, e ciò che non è stato approvato non entra;
-- solo con una `field_mapping` completa secondo `validate_input_manifest.incomplete_mapping`, cioè le stesse verifiche del validatore e non una seconda copia;
-- solo se il documento, riletto con il registro appena scritto, risulta `SCHEMA_NOTO` con l'adattatore imparato: un adattatore che non riconosce nemmeno il file da cui è stato imparato è peggio di niente.
+The fingerprint is computed from the profile stored in the manifest, not by reopening the file: the manifest is the auditable record, and it's what the user actually saw when confirming. The entry carries `learned_at`, `learned_from` (the file's name and SHA-256), `confirmed_by: "utente"`, and an incremented `schema_version`; the previous version is never lost, it moves to `previous_versions`. Supplier rules that don't live in the mapping — for example Larice's `row_markers`, which say that `SM` isn't purchasable merchandise — stay where they are.
 
-L'impronta si calcola dal profilo che sta nel manifest e non riaprendo il file: il manifest è il documento auditabile ed è quello che l'utente ha avuto davanti quando ha confermato. La voce porta `learned_at`, `learned_from` (nome e sha256 del file), `confirmed_by: "utente"` e uno `schema_version` incrementato; **la versione precedente non si perde mai**, finisce in `previous_versions`. Le regole del fornitore che non stanno nella mappatura — per esempio i `row_markers` di Larice, che dicono che `SM` non è merce acquistabile — restano dov'erano.
+Every entry that wasn't learned is reported with its reason, in Italian. The exit code is `0` when there's no error and `2` when an entry that should have been learned was rejected: a silent failure here would mean a supplier quietly going back to unknown with nothing to explain why. `--prova` computes and prints everything without writing anything.
 
-Ogni voce non imparata esce nel rapporto con il motivo scritto in italiano. L'uscita è `0` quando non c'è nessun errore e `2` quando una voce che doveva essere imparata è stata rifiutata: un fallimento silenzioso qui vorrebbe dire un fornitore che torna sconosciuto senza che nessuno sappia perché. `--prova` calcola e stampa tutto senza scrivere niente.
+The HTML comparison page derives its suppliers from the manifest and the results, so it isn't hardcoded to a fixed set. Writing a new `.xlsx` stays blocked until the order column and the copy rules have been confirmed and tested.
 
-Il comparatore HTML ricava i fornitori dal manifest e dai risultati, quindi non richiede tre blocchi fissi. La scrittura di un nuovo XLSX resta invece bloccata finché la colonna ordine e le regole di copia non sono state confermate e testate.
+## 8. Writing the order: `order_write`
 
-## 5. Come si scrive l'ordine: `order_write`
+An adapter that carries `order_write` declares that the tool knows how to build an order copy for that supplier; one without it declares the opposite, and the absence is stated: a supplier that reaches the comparison without this declaration produces the `FORNITORE_NON_COMPILABILE` warning, instead of silently dropping out of the writer's configuration.
 
-Un adattatore che porta `order_write` dichiara che di quel fornitore si sa creare la copia d'ordine; uno che non ce l'ha dichiara il contrario, e **l'assenza si dice**: un fornitore nel confronto senza questa dichiarazione produce l'avviso `FORNITORE_NON_COMPILABILE`, invece di sparire in silenzio dalla configurazione di scrittura. Prima l'elenco dei compilabili era una tupla dentro `app/launcher.py`: un fornitore imparato non sarebbe mai potuto diventare compilabile senza toccare il codice, e nessuno lo diceva (misurato il 12 agosto 2026: 102 prodotti assegnati a ACERO e avvertimenti vuoti).
+Fields, all optional except `order_column`:
 
-I campi, tutti facoltativi tranne `order_column`:
-
-- `order_column` — la lettera della colonna in cui si scrive la quantità ordinata. Obbligatoria: senza, non si sa dove scrivere.
-- `from_field_mapping` — `true` quando foglio e righe li dichiara già la `field_mapping` dell'adattatore (CIPRESSO, Noce). In quel caso la mappatura deve dichiarare **la stessa** colonna d'ordine: due colonne diverse vorrebbero dire scrivere in una cella che nessuno ha verificato, e il fornitore resta non attivato.
-- `sheet`, `header_row`, `data_start_row` — per gli adattatori con un lettore dedicato, che una `field_mapping` non ce l'hanno (BETULLA, Larice). ⚠ `"sheet": "FIRST"` qui vuol dire «il primo foglio del documento», perché lo dichiara il registro, cioè una persona che quel listino l'ha guardato; `"sheet": "FIRST"` dentro una `field_mapping` vuol dire invece che il foglio **non è stato identificato**, e allora il documento ne deve avere uno solo.
-- `expected_header` — il testo che deve stare nella cella d'intestazione di quella colonna. Si va a leggere davvero nel documento prima di attivare la scrittura: un listino con le colonne spostate prenderebbe l'ordine in una colonna qualsiasi.
-- `required_columns` — i campi che la mappatura deve dichiarare perché la scrittura si attivi.
-- `mode` — `patch_xls_in_posizione` per il `.xls` Noce, a cui si rimanda il **loro** file e non una conversione: la copia si scrive in posizione, quattro byte per cella.
+- `order_column` — the letter of the column the order quantity is written into. Mandatory: without it there's nowhere to write.
+- `from_field_mapping` — `true` when the sheet and rows are already declared by the adapter's own `field_mapping` (Cipresso, Noce). In that case the mapping must declare the same order column; two different columns would mean writing into a cell nobody has verified, and the supplier stays unactivated.
+- `sheet`, `header_row`, `data_start_row` — for adapters with a dedicated reader that has no `field_mapping` (Betulla, Larice). `"sheet": "FIRST"` here means "the workbook's first sheet", because it's declared by the registry, i.e. by someone who has actually looked at that price list; `"sheet": "FIRST"` inside a `field_mapping` means instead that the sheet hasn't been identified, which only works if the document has just one.
+- `expected_header` — the text that must be in that column's header cell. It's actually read from the document before writing is enabled: a price list with shifted columns would otherwise write the order into an arbitrary column.
+- `required_columns` — the fields the mapping must declare for writing to be enabled.
+- `mode` — `patch_xls_in_posizione` for Noce's `.xls`, which is returned as the supplier's own file rather than converted: the copy is patched in place, four bytes per cell.

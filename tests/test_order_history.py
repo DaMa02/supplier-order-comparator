@@ -1,21 +1,20 @@
-"""Storico degli ordini: merce ordinata e non ancora ricevuta.
+"""Tests for the order history: stock ordered but not yet received.
 
-Il problema reale: il fornitore non consegna, la merce non entra nel gestionale e
-la settimana dopo lo stesso articolo viene riordinato senza accorgersene.
+The real problem: a supplier fails to deliver, the item never enters the
+management software, and the next week the same item gets reordered without
+anyone noticing.
 
-Il test piu' importante di questo file e' quello sull'abbinamento per EAN: gli
-identificativi "product:<riga>" dipendono dalla posizione nell'esportazione
-settimanale, quindi product:198 di questa settimana non e' lo stesso articolo di
-product:198 della settimana scorsa.  Abbinare per identificativo produrrebbe
-avvisi sbagliati in silenzio, cioe' esattamente il difetto che questa funzione
-dovrebbe evitare.  Fanno eccezione gli identificativi che nascono dal contenuto
-e non dalla posizione — gli espositori, `display:composition:...` — perche' li'
-l'identificativo e' l'unica identita' disponibile: un EAN non ce l'hanno.
+The most important test in this file covers matching by EAN: `product:<row>`
+ids depend on the item's position in the weekly export, so this week's
+`product:198` isn't the same item as last week's. Matching by id would
+silently produce wrong warnings, exactly the bug this matching has to avoid.
+The exception is ids that come from content rather than position — displays,
+`display:composition:...` — because there an EAN isn't available and the id
+is the only stable identity.
 
-⚠ Una compilazione entra nello storico SOLO quando le copie dei listini sono
-sul disco: per questo le prove qui sotto compilano con `compila()`, che mette
-uno scrittore finto al posto del writer.  Un `store.compile()` nudo, senza
-copie, non registra piu' niente — ed e' il difetto D1 che questo file fissa.
+A compilation only enters the history once the price-list copies are on
+disk, so the tests below compile through `compila()`, which substitutes a
+fake writer. A bare `store.compile()`, without copies, records nothing.
 """
 
 from __future__ import annotations
@@ -46,22 +45,23 @@ SERVER_SPEC.loader.exec_module(SERVER)
 ReviewStore = SERVER.ReviewStore
 order_history = SERVER.order_history
 
-# Due articoli realmente diversi: l'olio e' quello ordinato la settimana scorsa,
-# il tonno e' l'articolo che questa settimana occupa la riga 198.
+# Two genuinely different items: the oil was ordered last week, the tuna is
+# the item that occupies row 198 this week.
 EAN_OLIO = "8009580477747"
 EAN_TONNO = "8004567890123"
 EAN_RISO = "8001234567890"
 
-# answeredAt: senza di esso un "non ancora arrivata" non sopravvive a un F5 e la
-# domanda ricompare. askAgainAt: quando la domanda torna, deciso dal servizio.
-# unit: l'unita' con cui si era ordinato (colli o espositori), che puo' differire
-# da quella dello stesso codice nella settimana corrente.
+# answeredAt: without it, a "not arrived yet" answer wouldn't survive a page
+# refresh and the question would reappear. askAgainAt: when the question
+# comes back, decided by the service. unit: the unit the order was placed in
+# (cartons or displays), which can differ from the current week's unit for
+# the same code.
 PENDING_SUMMARY_KEYS = {
     "orderId", "supplier", "supplierName", "createdAt", "answeredAt", "askAgainAt", "lineCount", "totalNet",
 }
 PENDING_PRODUCT_KEYS = {"orderId", "supplier", "supplierName", "orderedAt", "quantity", "unit"}
-# L'identificativo dell'espositore nasce dalla composizione, non dalla riga:
-# e' l'unico caso in cui confrontare l'identificativo fra due settimane e' lecito.
+# A display's id comes from its composition, not from its row: the only case
+# where comparing ids across weeks is valid.
 ID_ESPOSITORE = "display:composition:8000000000001:6|8000000000002:6"
 
 
@@ -114,7 +114,7 @@ def gestionale_product(
 
 
 def espositore(product_id: str) -> dict[str, object]:
-    """Un espositore come lo costruisce il confronto: senza EAN, mai."""
+    """A display as the comparison builds it: it never has an EAN."""
 
     return {
         "id": product_id,
@@ -158,7 +158,7 @@ def review_document(products: list[dict[str, object]], *, run_id: str) -> dict[s
 
 
 def week_one_review() -> dict[str, object]:
-    """Settimana scorsa: l'olio sta sulla riga 198 dell'esportazione."""
+    """Last week: the oil sits on row 198 of the export."""
 
     return review_document(
         [
@@ -175,7 +175,7 @@ def week_one_review() -> dict[str, object]:
 
 
 def week_two_review() -> dict[str, object]:
-    """Questa settimana: l'olio è sceso alla riga 42, la 198 è un altro articolo."""
+    """This week: the oil moved to row 42, and row 198 is a different item."""
 
     return review_document(
         [
@@ -231,13 +231,13 @@ def history_entry(
 
 
 class ScrittoreFinto:
-    """Il writer sostituito da qualcosa che mette davvero le copie sul disco.
+    """A stand-in writer that actually puts copies on disk.
 
-    Serve perche' dal 13 agosto 2026 lo storico registra soltanto le
-    compilazioni riuscite davvero: senza copie non c'e' ordine.  Le copie sono
-    `.xls` come quella di Noce — il confronto cella per cella di
-    `scarta_copie_infedeli` guarda solo i `.xlsx` — perche' qui si prova che
-    cosa entra nello storico, non la fedelta' della copia, che ha le sue prove.
+    The history only records compilations that produced real copies; without
+    copies there's no order. The copies are `.xls`, like a real supplier
+    file — the cell-by-cell check in `scarta_copie_infedeli` only looks at
+    `.xlsx` — because these tests cover what enters the history, not copy
+    fidelity, which has its own tests.
     """
 
     def __init__(self, sorgente: Path, *, senza_copia: tuple[str, ...] = ()) -> None:
@@ -268,7 +268,7 @@ class ScrittoreFinto:
 
 
 class HistoryStoreTestCase(unittest.TestCase):
-    """Cartelle separate per ogni run, un solo archivio storico condiviso."""
+    """A separate folder per run, sharing one history archive."""
 
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -295,7 +295,7 @@ class HistoryStoreTestCase(unittest.TestCase):
         )
 
     def compila(self, store, snapshot: dict[str, object], *, senza_copia: tuple[str, ...] = ()) -> dict[str, object]:
-        """Una compilazione che arriva fino alle copie sul disco."""
+        """Runs a compilation all the way through to copies on disk."""
 
         scrittore = ScrittoreFinto(self.listino, senza_copia=senza_copia)
         with mock.patch.object(store, "writer_configuration_issues", return_value=[]), \
@@ -303,7 +303,7 @@ class HistoryStoreTestCase(unittest.TestCase):
             return store.compile(snapshot)
 
     def order_id_of(self, supplier: str = "larice") -> str:
-        """L'identificativo dell'unico ordine di quel fornitore nello storico."""
+        """The id of that supplier's single order in the history."""
 
         voci = [item for item in self.read_history_file()["orders"] if item["supplier"] == supplier]
         self.assertEqual(len(voci), 1, voci)
@@ -337,19 +337,19 @@ class HistoryStoreTestCase(unittest.TestCase):
 
 
 class EanMatchingTests(HistoryStoreTestCase):
-    """L'abbinamento si fa sull'EAN, mai sull'identificativo di riga."""
+    """Matching happens on the EAN, never on the row id."""
 
     def test_warning_follows_the_ean_when_the_row_number_moves(self) -> None:
-        # Settimana scorsa: 12 colli di olio ordinati, l'olio era product:198.
+        # Last week: 12 cartons of oil ordered, oil was product:198.
         first_week = self.make_store(week_one_review(), run_dir="settimana-31")
         self.compila(first_week, self.snapshot("run-2026-31", {"product:198": ("larice", 12)}))
 
         stored = self.read_history_file()["orders"][0]
-        # La trappola deve essere reale: l'ordine porta con se' product:198...
+        # The trap has to be real: the order carries product:198 with it...
         self.assertEqual(stored["lines"][0]["productId"], "product:198")
         self.assertEqual(stored["lines"][0]["ean"], EAN_OLIO)
 
-        # Questa settimana l'olio e' su product:42 e product:198 e' il tonno.
+        # This week the oil is on product:42, and product:198 is the tuna.
         second_week = self.make_store(week_two_review(), run_dir="settimana-32")
         review = second_week.review()
         olio = self.product_by_id(review, "product:42")
@@ -357,7 +357,7 @@ class EanMatchingTests(HistoryStoreTestCase):
         self.assertEqual(olio["ean"], EAN_OLIO)
         self.assertEqual(tonno["ean"], EAN_TONNO)
 
-        # L'avviso deve seguire l'articolo (EAN), non il numero di riga.
+        # The warning must follow the item (EAN), not the row number.
         self.assertEqual(len(olio["pendingOrders"]), 1)
         self.assertEqual(tonno["pendingOrders"], [])
         pending = olio["pendingOrders"][0]
@@ -366,12 +366,12 @@ class EanMatchingTests(HistoryStoreTestCase):
         self.assertEqual(pending["supplier"], "larice")
         self.assertEqual(pending["supplierName"], "LARICE")
         self.assertEqual(pending["orderedAt"], stored["createdAt"])
-        # Unita' d'ordine: colli, non pezzi (12 colli da 6 pezzi non fanno 72).
+        # Order unit: cartons, not pieces (12 cartons of 6 isn't 72).
         self.assertEqual(pending["quantity"], 12)
 
     def test_attach_pending_orders_ignores_the_product_identifier(self) -> None:
-        # Stessa trappola senza server: finche' c'e' un EAN, il modulo non deve
-        # mai guardare un identificativo di riga (product:<riga>).
+        # Same trap without the server: as long as an EAN exists, the module
+        # must never look at a row id (product:<row>).
         history = {
             "schema_version": 1,
             "orders": [history_entry("run-2026-31:larice", "2026-08-03T09:00:00+00:00", ean=EAN_OLIO)],
@@ -410,7 +410,7 @@ class EanMatchingTests(HistoryStoreTestCase):
 
 
 class EmptyEanTests(HistoryStoreTestCase):
-    """Un EAN vuoto non abbina mai nulla: meglio nessun avviso che uno falso."""
+    """An empty EAN never matches: no warning beats a false one."""
 
     def test_empty_ean_on_both_sides_does_not_match(self) -> None:
         history = {
@@ -422,8 +422,8 @@ class EmptyEanTests(HistoryStoreTestCase):
             {"id": "product:9", "ean": "   "},
             {"id": "product:10"},
             {"id": "product:11", "ean": None},
-            # Stesso identificativo salvato nella riga d'ordine: senza EAN non
-            # deve comunque abbinare nulla.
+            # Same id stored on the order line: still must not match without
+            # an EAN.
             {"id": "product:198", "ean": ""},
         ]
 
@@ -440,8 +440,8 @@ class EmptyEanTests(HistoryStoreTestCase):
         products = [
             {"id": "display-senza-ean", "ean": ""},
             {"id": "product:10"},
-            # L'articolo che occupa la riga 198 di questa settimana non ha EAN:
-            # nessun avviso, anche se l'ordine ricorda proprio "product:198".
+            # This week's item on row 198 has no EAN: no warning, even though
+            # the order remembers exactly "product:198".
             {"id": "product:198", "ean": ""},
         ]
 
@@ -451,11 +451,11 @@ class EmptyEanTests(HistoryStoreTestCase):
             self.assertEqual(product["pendingOrders"], [], product["id"])
 
     def test_display_without_ean_is_recorded_but_never_signalled(self) -> None:
-        """Un espositore con un identificativo di comodo non abbina niente.
+        """A display with an arbitrary id matches nothing.
 
-        `display-solbao` non e' un identificativo che nasce dalla composizione:
-        senza EAN e senza identita' stabile l'avviso non si puo' dare a nessuno,
-        e soprattutto non deve finire su un altro articolo.
+        `display-solbao` isn't an id derived from composition: with no EAN
+        and no stable identity, the warning can't attach to anything, and
+        above all it must not land on some other item.
         """
 
         review = week_one_review()
@@ -468,15 +468,15 @@ class EmptyEanTests(HistoryStoreTestCase):
 
         again = self.make_store(week_one_review(), run_dir="settimana-32")
         review_again = again.review()
-        # L'espositore senza EAN non deve far comparire avvisi su altri articoli.
+        # A display without an EAN must not make warnings appear on other items.
         self.assertEqual(self.product_by_id(review_again, "product:198")["pendingOrders"], [])
 
     def test_un_espositore_ordinato_si_rivede_la_settimana_dopo(self) -> None:
-        """D3: l'espositore non ha un EAN, e per questo spariva dagli avvisi.
+        """A display has no EAN, so without this case it would drop out of warnings.
 
-        Il suo identificativo nasce dalla composizione — non dalla riga del
-        foglio — quindi la settimana dopo indica lo stesso espositore ed e'
-        l'unica identita' che abbia.
+        Its id comes from composition, not from the sheet row, so the id
+        still points to the same display the next week; it's the only
+        identity it has.
         """
 
         review = week_one_review()
@@ -484,8 +484,8 @@ class EmptyEanTests(HistoryStoreTestCase):
         store = self.make_store(review, run_dir="settimana-31")
         self.compila(store, self.snapshot("run-2026-31", {ID_ESPOSITORE: ("larice", 2)}))
 
-        # La settimana dopo l'olio si e' spostato di riga: l'espositore no,
-        # perche' il suo nome non dipende dalla posizione.
+        # The next week the oil moved row; the display didn't, because its id
+        # doesn't depend on position.
         settimana_dopo = week_two_review()
         settimana_dopo["products"].append(espositore(ID_ESPOSITORE))
         dopo = self.make_store(settimana_dopo, run_dir="settimana-32")
@@ -495,11 +495,11 @@ class EmptyEanTests(HistoryStoreTestCase):
         self.assertEqual(len(avvisi), 1, "l'espositore ordinato deve restare visibile")
         self.assertEqual(avvisi[0]["quantity"], 2)
         self.assertEqual(avvisi[0]["unit"], "espositori")
-        # E nessun altro articolo deve ereditare l'avviso dell'espositore.
+        # No other item must inherit the display's warning.
         self.assertEqual(self.product_by_id(prodotti, "product:198")["pendingOrders"], [])
 
     def test_un_identificativo_di_riga_non_abbina_mai_neanche_senza_ean(self) -> None:
-        """La trappola dell'olio e del tonno vale anche per le righe senza EAN."""
+        """The oil-vs-tuna trap also applies to rows with no EAN."""
 
         history = {
             "schema_version": 1,
@@ -524,7 +524,7 @@ class EmptyEanTests(HistoryStoreTestCase):
 
 
 class RecordingTests(HistoryStoreTestCase):
-    """Registrazione al termine di una compile() riuscita."""
+    """Recording at the end of a successful compile()."""
 
     def test_compile_records_one_pending_order_per_supplier(self) -> None:
         review = week_one_review()
@@ -544,8 +544,8 @@ class RecordingTests(HistoryStoreTestCase):
         history = self.read_history_file()
         self.assertEqual(history["schema_version"], 1)
         orders = {entry["orderId"]: entry for entry in history["orders"]}
-        # L'identificativo nasce dalla cartella della compilazione: due
-        # compilazioni della stessa run non si sovrascrivono piu'.
+        # The id derives from the compilation's output folder, so two
+        # compilations of the same run get distinct entries.
         self.assertEqual(set(orders), {f"{esito['cartella']}:larice", f"{esito['cartella']}:betulla"})
         larice = orders[f"{esito['cartella']}:larice"]
         self.assertEqual(larice["supplier"], "larice")
@@ -562,7 +562,7 @@ class RecordingTests(HistoryStoreTestCase):
         self.assertEqual(orders[f"{esito['cartella']}:betulla"]["totalNet"], 55.0)
 
     def test_second_compile_of_the_same_run_updates_instead_of_duplicating(self) -> None:
-        """D2: la seconda compilazione sostituisce la domanda, non la duplica."""
+        """A second compilation replaces the open question, doesn't duplicate it."""
 
         store = self.make_store(week_one_review(), run_dir="settimana-31")
 
@@ -576,16 +576,16 @@ class RecordingTests(HistoryStoreTestCase):
         self.assertNotEqual(orders[0]["orderId"], prima["orderId"])
         self.assertEqual(orders[0]["lines"][0]["quantity"], 20)
         self.assertEqual(orders[0]["totalNet"], 298.0)
-        # I 60 giorni decorrono dalla compilazione che e' rimasta in piedi:
-        # e' quella che l'utente ha mandato al fornitore.
+        # The 60-day expiry counts from the compilation that survived: it's
+        # the one the user actually sent to the supplier.
         self.assertGreaterEqual(orders[0]["createdAt"], prima["createdAt"])
-        # Una sola voce, e visibile soltanto da una run diversa da quella compilata.
+        # One entry only, and visible only from a run other than the one just compiled.
         self.assertEqual(store.history_pending()["pending"], [])
         settimana_dopo = self.make_store(week_two_review(), run_dir="settimana-32")
         self.assertEqual(len(settimana_dopo.history_pending()["pending"]), 1)
 
     def test_una_compilazione_gia_risposta_non_viene_sostituita(self) -> None:
-        """D2: la sostituzione vale solo per le domande ancora senza risposta."""
+        """Replacement only applies to questions still without an answer."""
 
         store = self.make_store(week_one_review(), run_dir="settimana-31")
         prima = self.compila(store, self.snapshot("run-2026-31", {"product:198": ("larice", 12)}))
@@ -602,12 +602,12 @@ class RecordingTests(HistoryStoreTestCase):
         )
         self.assertEqual(orders[f"{prima['cartella']}:larice"]["status"], "ricevuto")
         self.assertEqual(orders[f"{seconda['cartella']}:larice"]["status"], "in_attesa")
-        # E la domanda non si duplica: quella chiusa non torna a chiedere.
+        # The question doesn't duplicate either: a closed one doesn't come back.
         pendenti = settimana_dopo.history_pending()["pending"]
         self.assertEqual([voce["orderId"] for voce in pendenti], [f"{seconda['cartella']}:larice"])
 
     def test_lo_storico_nel_formato_vecchio_resta_leggibile(self) -> None:
-        """D2: gli ordini scritti come `<run>:<fornitore>` continuano a valere."""
+        """Orders written as `<run>:<supplier>` (the old id format) still work."""
 
         self.write_history_file([
             history_entry("run-2026-30:larice", "2026-07-27T09:00:00+00:00", ean=EAN_OLIO),
@@ -616,12 +616,12 @@ class RecordingTests(HistoryStoreTestCase):
 
         pendenti = store.history_pending()["pending"]
         self.assertEqual([voce["orderId"] for voce in pendenti], ["run-2026-30:larice"])
-        # Si risponde, e la risposta arriva alla voce vecchia senza toccare altro.
+        # Answering it updates the old-format entry without touching anything else.
         store.answer_history_order({"orderId": "run-2026-30:larice", "received": True})
         self.assertEqual(self.read_history_file()["orders"][0]["status"], "ricevuto")
 
     def test_una_compilazione_vecchia_della_stessa_run_viene_sostituita(self) -> None:
-        """La voce nel formato vecchio non diventa un doppione della domanda."""
+        """An old-format entry doesn't become a duplicate open question."""
 
         self.write_history_file([
             history_entry("run-2026-31:larice", "2026-08-03T09:00:00+00:00", ean=EAN_OLIO),
@@ -634,14 +634,15 @@ class RecordingTests(HistoryStoreTestCase):
         self.assertEqual([entry["orderId"] for entry in orders], [f"{esito['cartella']}:larice"])
 
     def test_un_fornitore_consegnato_prima_non_sparisce_dalla_ricompilazione(self) -> None:
-        """B-1 della revisione R4: l'ordine LARICE gia' mandato non si cancella.
+        """An order already sent for one supplier isn't removed by a later
+        recompile of another supplier.
 
-        Si compila LARICE + BETULLA e si mandano i due listini; ci si accorge di
-        un errore su BETULLA; si azzera LARICE e si ricompila il solo BETULLA.  La
-        vecchia regola toglieva la voce LARICE perche' «non piu' nel piano» —
-        ma dopo D1 ogni voce e' un documento consegnato davvero, e la settimana
-        dopo il programma non avrebbe chiesto della merce LARICE ne' segnalato
-        l'olio come gia' ordinato.
+        Scenario: both suppliers are compiled and their price lists sent; an
+        error is found on one of them; the other is zeroed out and only that
+        one is recompiled. The first supplier's entry represents a document
+        that was genuinely sent and must not be removed just because that
+        supplier is absent from the recompiled plan, or the app would neither
+        ask about that stock nor flag the item as already ordered.
         """
 
         review = week_one_review()
@@ -672,12 +673,11 @@ class RecordingTests(HistoryStoreTestCase):
         self.assertIn(f"{prima['cartella']}:larice", pendenti)
 
     def test_una_risposta_non_ancora_arrivata_viene_superata_dalla_riconsegna(self) -> None:
-        """M-2/I-5 della revisione R4: dopo un «no», la riconsegna sostituisce.
+        """After a "not yet arrived" answer, a redelivery replaces the open question.
 
-        La risposta «non ancora arrivata» parlava di una compilazione che la
-        riconsegna dello STESSO fornitore ha superato: tenerla accanto alla
-        nuova lasciava due domande per la stessa settimana e colli sommati
-        due volte.
+        The "not arrived" answer referred to a compilation that a redelivery
+        from the SAME supplier has now superseded: keeping both around left
+        two open questions for the same week, with cartons counted twice.
         """
 
         store = self.make_store(week_one_review(), run_dir="settimana-31")
@@ -701,8 +701,8 @@ class RecordingTests(HistoryStoreTestCase):
         store = self.make_store(week_one_review(), run_dir="settimana-31")
         esito = self.compila(store, self.snapshot("run-2026-31", {"product:198": ("larice", 12)}))
 
-        # La run che ha appena compilato non si autosegnala: la domanda comparira'
-        # la settimana dopo, quando il confronto caricato e' un altro.
+        # The run that just compiled doesn't flag itself: the question shows
+        # up the following week, once a different comparison is loaded.
         self.assertEqual(store.history_pending()["pending"], [])
 
         settimana_dopo = self.make_store(week_two_review(), run_dir="settimana-32")
@@ -717,7 +717,7 @@ class RecordingTests(HistoryStoreTestCase):
         self.assertEqual(entry["lineCount"], 1)
         self.assertEqual(entry["totalNet"], 178.8)
         self.assertTrue(entry["createdAt"])
-        # Mai risposta: la domanda e' dovuta adesso, non fra una settimana.
+        # Never answered: the question is due now, not in a week.
         self.assertEqual(entry["askAgainAt"], "")
 
     def test_history_lives_outside_the_run_folder_and_survives_a_reset(self) -> None:
@@ -725,7 +725,7 @@ class RecordingTests(HistoryStoreTestCase):
         self.compila(store, self.snapshot("run-2026-31", {"product:198": ("larice", 12)}))
         self.assertTrue(self.history_path.is_file())
 
-        # Reset della run: la cartella di lavoro viene ricostruita da zero.
+        # Run reset: the working folder is rebuilt from scratch.
         shutil.rmtree(self.root / "current")
 
         self.assertTrue(self.history_path.is_file())
@@ -755,11 +755,11 @@ class RecordingTests(HistoryStoreTestCase):
         self.assertEqual(leftovers, [])
 
     def test_una_compilazione_fermata_non_diventa_un_ordine(self) -> None:
-        """D1: senza copie dei listini non c'e' nessun ordine da ricordare.
+        """Without price-list copies on disk, there's no order to remember.
 
-        Era il difetto piu' grave dello storico: `record_order_history` stava
-        prima della scrittura, e una compilazione fermata dai `writer_issues`
-        lasciava comunque la domanda «e' arrivata?» di merce mai ordinata.
+        `record_order_history` must run after the write step: recording
+        before it would leave an "has it arrived?" question for stock that
+        was blocked by `writer_issues` and never actually ordered.
         """
 
         store = self.make_store(week_one_review(), run_dir="settimana-31")
@@ -773,13 +773,13 @@ class RecordingTests(HistoryStoreTestCase):
         self.assertEqual(esito["status"], "PLAN_READY")
         self.assertTrue(esito["writerIssues"])
         self.assertFalse(self.history_path.exists(), "una compilazione fermata non lascia niente nello storico")
-        # E nemmeno un avviso sui prodotti la settimana dopo.
+        # Nor any product warning the following week.
         settimana_dopo = self.make_store(week_two_review(), run_dir="settimana-32")
         self.assertEqual(settimana_dopo.history_pending()["pending"], [])
         self.assertEqual(self.product_by_id(settimana_dopo.review(), "product:42")["pendingOrders"], [])
 
     def test_un_writer_che_non_parte_non_lascia_ordini(self) -> None:
-        """D1: il writer che fallisce a metà non è un ordine mandato."""
+        """A writer that fails partway through isn't an order that was sent."""
 
         store = self.make_store(week_one_review(), run_dir="settimana-31")
 
@@ -794,7 +794,7 @@ class RecordingTests(HistoryStoreTestCase):
         self.assertFalse(self.history_path.exists())
 
     def test_il_fornitore_senza_copia_non_entra_e_non_cancella(self) -> None:
-        """Una copia scartata vale come non consegnata, ma non tocca il passato."""
+        """A discarded copy counts as undelivered, but doesn't touch past entries."""
 
         review = week_one_review()
         review["products"].append(
@@ -810,19 +810,19 @@ class RecordingTests(HistoryStoreTestCase):
         ordinati = {"product:198": ("larice", 12), "product:200": ("betulla", 5)}
 
         prima = self.compila(store, self.snapshot("run-2026-31", ordinati))
-        # Seconda compilazione: la copia BETULLA non viene creata.
+        # Second compilation: the copy for the other supplier isn't created.
         seconda = self.compila(store, self.snapshot("run-2026-31", ordinati), senza_copia=("betulla",))
 
         orders = {entry["orderId"]: entry for entry in self.read_history_file()["orders"]}
         self.assertIn(f"{seconda['cartella']}:larice", orders)
         self.assertNotIn(f"{seconda['cartella']}:betulla", orders)
-        # L'ordine BETULLA della prima compilazione era vero e resta.
+        # The first compilation's order for that supplier was real and stays.
         self.assertIn(f"{prima['cartella']}:betulla", orders)
         self.assertNotIn(f"{prima['cartella']}:larice", orders)
 
 
 class AnswerTests(HistoryStoreTestCase):
-    """Una sola risposta per l'intero ordine: le consegne parziali non esistono."""
+    """A single answer for the whole order: partial deliveries aren't modeled."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -851,12 +851,12 @@ class AnswerTests(HistoryStoreTestCase):
         self.assertEqual([item["orderId"] for item in result["pending"]], [self.order_id])
         entry = self.read_history_file()["orders"][0]
         self.assertEqual(entry["status"], "in_attesa")
-        # La risposta viene registrata: la domanda non si ripete subito.
+        # The answer is recorded: the question doesn't repeat right away.
         self.assertTrue(entry["answeredAt"])
         self.assertEqual(len(self.product_by_id(self.second_week.review(), "product:42")["pendingOrders"]), 1)
 
     def test_dopo_un_no_la_domanda_torna_la_settimana_dopo(self) -> None:
-        """D4: «non ancora arrivata» non archivia la domanda, la rimanda."""
+        """A "not arrived yet" answer doesn't close the question, it postpones it."""
 
         self.second_week.answer_history_order({"orderId": self.order_id, "received": False})
 
@@ -868,7 +868,7 @@ class AnswerTests(HistoryStoreTestCase):
         self.assertEqual(order_history.REASK_DAYS, 7)
 
     def test_non_arrivera_piu_chiude_la_domanda_senza_dire_che_e_arrivata(self) -> None:
-        """D4: l'unico modo di chiudere senza scrivere il falso."""
+        """The only way to close an order without recording a false "received"."""
 
         result = self.second_week.answer_history_order({"orderId": self.order_id, "closed": True})
 
@@ -878,7 +878,7 @@ class AnswerTests(HistoryStoreTestCase):
         self.assertEqual(entry["status"], order_history.STATUS_CLOSED)
         self.assertNotEqual(entry["status"], order_history.STATUS_RECEIVED)
         self.assertTrue(entry["answeredAt"])
-        # Chiuso: niente domanda e niente avvisi sui prodotti.
+        # Closed: no more question, no more product warnings.
         self.assertEqual(self.second_week.history_pending()["pending"], [])
         self.assertEqual(self.product_by_id(self.second_week.review(), "product:42")["pendingOrders"], [])
 
@@ -931,7 +931,7 @@ class CancellazioneCompilazioneTests(unittest.TestCase):
 
 
 class ExpiryTests(HistoryStoreTestCase):
-    """Dopo 60 giorni la domanda non ha più senso e non va riproposta."""
+    """After 60 days, the question is stale and shouldn't be asked again."""
 
     def test_expiry_uses_the_given_moment_not_the_wall_clock(self) -> None:
         frozen = datetime(2026, 8, 10, 9, 0, tzinfo=timezone.utc)
@@ -991,7 +991,7 @@ class ExpiryTests(HistoryStoreTestCase):
         self.assertEqual(len(self.product_by_id(review, "product:198")["pendingOrders"]), 1)
 
     def test_la_scadenza_si_dice_in_pagina_e_non_in_silenzio(self) -> None:
-        """D4: un ordine che scade è una domanda che sparisce: va detto."""
+        """An order expiring means a question just vanishes; that must be shown."""
 
         now = datetime.now(tz=timezone.utc)
         self.write_history_file([
@@ -1007,13 +1007,13 @@ class ExpiryTests(HistoryStoreTestCase):
         self.assertFalse(avviso["blocking"], "è un avviso, non una fermata")
         self.assertIn("LARICE", avviso["message"])
         self.assertIn("60 giorni", avviso["message"])
-        # La data dell'ordine sta nella frase, in italiano leggibile.
+        # The order date is embedded in the message, in readable Italian (UI text).
         ordinato = order_history.parse_moment(self.read_history_file()["orders"][0]["createdAt"])
         self.assertIn(SERVER.consegna.data_leggibile(ordinato.astimezone()), avviso["message"])
         self.assertEqual(avviso["orders"][0]["orderId"], "run-vecchia:larice")
 
     def test_una_scadenza_vecchia_smette_di_occupare_la_pagina(self) -> None:
-        """L'avviso non resta in pagina per sempre: dopo un mese ha detto la sua."""
+        """The warning doesn't stay on the page forever; after a month it's served its purpose."""
 
         now = datetime.now(tz=timezone.utc)
         vecchia = history_entry("run-vecchia:larice", (now - timedelta(days=200)).isoformat(), ean=EAN_OLIO)
@@ -1027,7 +1027,7 @@ class ExpiryTests(HistoryStoreTestCase):
         self.assertNotIn("ORDINI_SCADUTI_SENZA_RISPOSTA", codici)
 
     def test_uno_storico_vecchio_senza_data_di_scadenza_non_inventa_avvisi(self) -> None:
-        """Compatibilita': gli archivi scritti prima non hanno `expiredAt`."""
+        """Compatibility: archives written before this field existed have no `expiredAt`."""
 
         vecchia = history_entry("run-vecchia:larice", "2026-01-02T09:00:00+00:00", ean=EAN_OLIO)
         vecchia["status"] = order_history.STATUS_EXPIRED
@@ -1040,7 +1040,7 @@ class ExpiryTests(HistoryStoreTestCase):
 
 
 class HistoryFailureTests(HistoryStoreTestCase):
-    """Lo storico è un promemoria: se si rompe, la compilazione resta valida."""
+    """The history is a reminder: if it breaks, the compilation is still valid."""
 
     def test_compile_succeeds_even_if_the_history_cannot_be_written(self) -> None:
         store = self.make_store(week_one_review(), run_dir="settimana-31")
@@ -1048,8 +1048,8 @@ class HistoryFailureTests(HistoryStoreTestCase):
         with mock.patch.object(order_history, "save_history", side_effect=OSError("disco non disponibile")):
             result = self.compila(store, self.snapshot("run-2026-31", {"product:198": ("larice", 12)}))
 
-        # Dalla Fase 6d il piano vive nella cartella datata della compilazione,
-        # non piu' in `outputs`: e' la risposta stessa a dire quale.
+        # The plan lives in the compilation's own dated folder, not in
+        # `outputs`; the response itself says which one.
         plan_path = self.root / "settimana-31" / "ordini" / result["cartella"] / "final_order_plan.json"
         self.assertTrue(plan_path.is_file(), "Il piano ordini deve esistere anche senza storico")
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
@@ -1070,7 +1070,7 @@ class HistoryFailureTests(HistoryStoreTestCase):
         self.assertTrue(result["ok"])
         self.assertTrue((self.root / "settimana-31" / "ordini" / result["cartella"] / "final_order_plan.json").is_file())
         self.assertTrue(result["historyIssues"])
-        # L'archivio danneggiato non viene sovrascritto: nessun dato va perso.
+        # The damaged archive is not overwritten: no data is lost.
         self.assertEqual(self.history_path.read_text(encoding="utf-8"), "{ questo non è JSON")
 
     def test_review_stays_usable_when_the_archive_is_unreadable(self) -> None:
@@ -1093,7 +1093,7 @@ class SilentHandler(SERVER.AppHandler):
 
 
 class HistoryHttpTests(HistoryStoreTestCase):
-    """Le due rotte usate dalla pagina 2."""
+    """The two routes the page uses."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -1172,7 +1172,7 @@ class HistoryHttpTests(HistoryStoreTestCase):
         self.assertEqual(status, 400)
         self.assertFalse(payload["ok"])
         self.assertTrue(str(payload["message"]).strip())
-        # L'ordine buono resta in elenco: nessuna risposta e' stata registrata.
+        # The valid order stays in the list: no answer was recorded.
         self.assertEqual(
             [item["orderId"] for item in self.call("GET", "/api/history/pending")[1]["pending"]],
             [self.ordine],
@@ -1186,33 +1186,31 @@ class HistoryHttpTests(HistoryStoreTestCase):
 
 
 class PendingOrdersInterfaceTests(unittest.TestCase):
-    """Controlli minimi sulla pagina: testi italiani, niente window.confirm."""
+    """Minimal checks on the page: Italian UI text, no `window.confirm`."""
 
     @classmethod
     def setUpClass(cls) -> None:
         cls.app_js = (SKILL_ROOT / "app" / "static" / "app.js").read_text(encoding="utf-8")
 
     def test_the_two_buttons_are_explicit_and_do_not_use_a_browser_dialog(self) -> None:
-        # ⚠ In stile frase come tutti gli altri comandi del programma: erano gli
-        # unici tre scritti in maiuscolo, e il pulsante della compilazione era
-        # gia' stato tolto dal maiuscolo di proposito, con il commento che lo
-        # dice. Quello che conta e' che ci siano e che dicano la risposta per
-        # esteso, non che gridino.
+        # Sentence-case labels, consistent with every other button in the app.
+        # What matters is that they exist and spell out the answer, not that
+        # they shout in uppercase.
         self.assertIn("Sì, ricevuta", self.app_js)
         self.assertIn("No, non ancora", self.app_js)
         self.assertIn('data-action="history-received"', self.app_js)
         self.assertIn('data-action="history-not-received"', self.app_js)
-        # Niente finestra del browser: la risposta si da' con due pulsanti grandi.
+        # No browser dialog: the answer is given with two large buttons.
         card = self.app_js.split("function renderPendingOrderCard")[1].split("\n}\n")[0]
         answer_flow = self.app_js.split("async function answerPendingOrder")[1].split("\n}\n")[0]
         self.assertNotIn("window.confirm(", card)
         self.assertNotIn("window.confirm(", answer_flow)
 
     def test_the_show_filter_offers_the_already_ordered_choice(self) -> None:
-        # Le voci di «Mostra» sono dichiarate in un posto solo e si disegnano da
-        # quello: qui si controlla la dichiarazione. Che la voce compaia davvero
-        # — e solo quando c'e' un ordine in sospeso — lo prova
-        # `IlFiltroMostraSoloQuelloCheServe`, che esegue `app.js` in Node.
+        # The "Show" filter options are declared in one place and rendered
+        # from there: this checks the declaration. That the option actually
+        # appears — and only when there's a pending order — is covered by
+        # `IlFiltroMostraSoloQuelloCheServe`, which runs `app.js` under Node.
         self.assertIn('pending: { etichetta: "Già ordinati"', self.app_js)
         self.assertIn("pendingOrdersFor(product).length > 0", self.app_js)
 
@@ -1222,7 +1220,7 @@ class PendingOrdersInterfaceTests(unittest.TestCase):
 
 
 class HistoryCorrectionTests(unittest.TestCase):
-    """Difetti trovati in revisione: ognuno ha qui la sua prova."""
+    """Each bug found in review gets its own regression test here."""
 
     @staticmethod
     def plan(run_id: str, righe: list[dict[str, object]]) -> dict[str, object]:
@@ -1242,12 +1240,12 @@ class HistoryCorrectionTests(unittest.TestCase):
         }
 
     def test_supplier_removed_on_recompile_keeps_the_order_already_created(self) -> None:
-        """Omettere un fornitore non cancella il listino gia' creato prima.
+        """Dropping a supplier from a recompile keeps the order already created for it.
 
-        Dopo D1 una voce entra nello storico soltanto quando sul disco esiste
-        davvero la copia del listino.  La ricompilazione seguente non puo'
-        sapere se quella copia sia gia' stata mandata: cancellarla farebbe
-        sparire un ordine reale e riordinare la merce la settimana dopo.
+        A history entry only exists once its price-list copy really is on
+        disk. A later recompile can't know whether that copy was already
+        sent: deleting it would make a real order vanish and lead to the
+        stock being reordered the following week.
         """
 
         history = order_history.empty_history()
@@ -1257,23 +1255,23 @@ class HistoryCorrectionTests(unittest.TestCase):
         ]))
         self.assertEqual(len(history["orders"]), 2)
 
-        # L'utente sposta tutto su LARICE e ricompila la stessa run. La copia
-        # BETULLA della compilazione precedente potrebbe essere gia' stata
-        # inviata e deve quindi restare nello storico.
+        # The user moves everything to one supplier and recompiles the same
+        # run. The other supplier's copy from the previous compilation might
+        # already have been sent, so it must remain in the history.
         order_history.record_plan(history, self.plan("run-A", [
             self.riga("larice", "8000000000001", 12),
         ]))
 
         fornitori = {entry["supplier"] for entry in history["orders"]}
         self.assertEqual(fornitori, {"larice", "betulla"})
-        # La merce BETULLA continua correttamente a risultare gia' ordinata.
+        # That other supplier's stock still correctly shows as already ordered.
         prodotti = [{"id": "product:9", "ean": "8000000000002"}]
         order_history.attach_pending_orders(prodotti, history)
         self.assertEqual(len(prodotti[0]["pendingOrders"]), 1)
         self.assertEqual(prodotti[0]["pendingOrders"][0]["supplier"], "betulla")
 
     def test_current_run_orders_are_not_asked_back_immediately(self) -> None:
-        """Appena compilato, l'ordine non deve essere riproposto come domanda."""
+        """Right after compiling, the order must not immediately reappear as a question."""
 
         history = order_history.empty_history()
         order_history.record_plan(history, self.plan("run-corrente", [
@@ -1285,7 +1283,7 @@ class HistoryCorrectionTests(unittest.TestCase):
         order_history.attach_pending_orders(prodotti, history, exclude_run_id="run-corrente")
         self.assertEqual(prodotti[0]["pendingOrders"], [])
 
-        # Una run diversa vede invece l'ordine della settimana precedente.
+        # A different run, however, sees the previous week's order.
         self.assertEqual(len(order_history.pending_summary(history, exclude_run_id="run-successiva")), 1)
 
     def test_answer_no_is_reported_so_the_question_is_not_repeated(self) -> None:
@@ -1322,7 +1320,7 @@ class HistoryCorrectionTests(unittest.TestCase):
         self.assertEqual(history["orders"][0]["status"], order_history.STATUS_EXPIRED)
 
     def test_notice_keeps_the_unit_used_when_the_order_was_placed(self) -> None:
-        """Un espositore ordinato resta un espositore, anche se oggi è un prodotto."""
+        """An ordered display stays a display, even if today it's a product."""
 
         history = order_history.empty_history()
         order_history.record_plan(history, self.plan("run-A", [
@@ -1333,7 +1331,7 @@ class HistoryCorrectionTests(unittest.TestCase):
 
 
 class RegoleDellaRevisioneR4Tests(unittest.TestCase):
-    """Le regole corrette dopo la revisione avversariale del cantiere R4."""
+    """Rules fixed after an adversarial review of the order-history module."""
 
     ADESSO = datetime(2026, 8, 13, 12, 0, tzinfo=timezone.utc)
 
@@ -1347,7 +1345,7 @@ class RegoleDellaRevisioneR4Tests(unittest.TestCase):
                            "unit": "colli", "orderUnitPriceNet": 5.0, "productId": ""}]}
 
     def test_record_plan_casefolda_piano_e_consegnati(self) -> None:
-        """I-1: un fornitore con una maiuscola non resta fuori dallo storico."""
+        """A supplier id with different casing isn't left out of the history."""
 
         history = order_history.empty_history()
         piano = {"run_id": "run-x", "orders": [
@@ -1361,7 +1359,8 @@ class RegoleDellaRevisioneR4Tests(unittest.TestCase):
         self.assertEqual([voce["orderId"] for voce in registrati], ["2026-08-13_1200:larice"])
 
     def test_la_scadenza_conta_dall_ultima_risposta(self) -> None:
-        """I-3: chi risponde «non ancora» ogni settimana non scade come chi tace."""
+        """Someone who answers "not yet" every week doesn't expire the same way
+        as someone who never answers."""
 
         history = {"schema_version": 1, "orders": [
             self._voce("vecchio-risposto:larice",
@@ -1391,7 +1390,7 @@ class RegoleDellaRevisioneR4Tests(unittest.TestCase):
         self.assertEqual(scaduti[0]["answeredAt"], "2026-06-01T09:00:00+00:00")
 
     def test_un_no_su_un_ordine_scaduto_non_lo_resuscita(self) -> None:
-        """M-4: la risposta si registra, lo stato resta scaduto, niente avviso nuovo."""
+        """The answer is recorded, but the status stays expired and raises no new warning."""
 
         history = {"schema_version": 1, "orders": [
             self._voce("x:larice", created="2026-05-01T09:00:00+00:00",
@@ -1409,7 +1408,7 @@ class RegoleDellaRevisioneR4Tests(unittest.TestCase):
                          "un «si', ricevuta» invece chiude davvero, com'è giusto")
 
     def test_la_finestra_dell_avviso_e_di_trenta_giorni_di_numero(self) -> None:
-        """I-6: trenta giorni scritti come numero, non derivati dalla costante."""
+        """The 30-day notice window checked as a literal number, not derived from the constant."""
 
         def scaduto(order_id: str, giorni_fa: int) -> dict:
             momento = (self.ADESSO - timedelta(days=giorni_fa)).isoformat()
@@ -1427,13 +1426,13 @@ class RegoleDellaRevisioneR4Tests(unittest.TestCase):
                          "29 giorni dentro la finestra, 31 fuori: numeri, non la costante")
 
     def test_l_identita_unmatched_non_abbina(self) -> None:
-        """M-7: solo `display:composition:` nasce dal contenuto."""
+        """Only `display:composition:` ids are derived from content."""
 
         self.assertEqual(order_history.match_key("", "display:unmatched:larice:pippo:6"), "")
         self.assertEqual(order_history.match_key("", ID_ESPOSITORE), f"prodotto:{ID_ESPOSITORE}")
 
     def test_un_ean_condiviso_non_attribuisce_i_colli_a_tutti(self) -> None:
-        """I-4: il codice condiviso si dichiara, non si somma su chi non ha ordinato."""
+        """A shared EAN is disclosed, not summed onto products nobody ordered."""
 
         history = {"schema_version": 1, "orders": [
             self._voce("x:larice", created="2026-08-01T09:00:00+00:00"),
@@ -1449,7 +1448,7 @@ class RegoleDellaRevisioneR4Tests(unittest.TestCase):
         self.assertEqual(prodotti[0]["pendingOrders"][0]["sharedWith"], 2)
         self.assertEqual(prodotti[1]["pendingOrders"][0]["sharedWith"], 2)
         self.assertEqual(prodotti[2]["pendingOrders"], [])
-        # Con un codice tutto suo la voce non porta nessuna condivisione.
+        # An item with a code all its own carries no sharing marker.
         da_solo = [{"id": "product:9", "ean": EAN_OLIO}]
         order_history.attach_pending_orders(da_solo, history)
         self.assertNotIn("sharedWith", da_solo[0]["pendingOrders"][0])

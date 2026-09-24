@@ -1,28 +1,27 @@
-"""Due difetti della revisione del 6 settembre 2026, dal lato della pagina.
+"""Client-side behavior of the review page, exercised end to end.
 
-Prove **eseguite**: `app.js` gira davvero dentro Node, sul banco di
-`test_interfaccia_pagina1` — lo stesso DOM finto e lo stesso `fetch` che
-registra le chiamate. Si guarda che cosa la pagina MANDA al servizio, non che
-cosa c'e' scritto nel sorgente: una prova che cerca una sottostringa sopravvive
-alla mutazione che toglie il comportamento, ed e' precisamente la trappola del
-§12 di `Lavori aperti` — il corpo di una funzione estratto a mano si puo'
-troncare in silenzio, e da li' in poi ogni `assertNotIn` passa perche' il testo
-non c'e' piu'.
+`app.js` runs for real inside Node, on the harness from
+`test_interfaccia_pagina1` — the same fake DOM and the same `fetch` that
+records calls. These tests check what the page SENDS to the service, not
+what the source contains: a test that greps for a substring survives a
+mutation that removes the behavior, since a hand-extracted function body can
+be silently truncated and every `assertNotIn` would then pass simply
+because the text is gone.
 
-* **R1** — l'abbinamento a mano manda la run del confronto. `productId` e
-  `sourceRow` sono posizionali: su un confronto rifatto indicano altri due
-  articoli, e il servizio non ha modo di accorgersene se la pagina non gli dice
-  su quale confronto ha premuto l'utente.
-* **Il salvataggio prima della rilettura** — «È questo» rilegge il confronto
-  dal servizio e sostituisce quello in pagina: prima si salva, o la quantità
-  scritta un momento fa sparisce senza che nessuno lo dica. Lo stesso vale per
-  le altre cinque funzioni che rileggono il confronto dopo aver cambiato lo
-  stato sul servizio — sconto di testata, compilazione eliminata, listino
-  eliminato, documenti caricati, colonne salvate.
-* **R4** — scelta la colonna «Disponibilita», la pagina chiede anche QUALI
-  valori significano disponibile e li manda nella conferma. Senza, il lettore
-  parte da «disponibile» e la colonna scelta non ha nessun effetto: le righe con
-  NO restano ordinabili e possono vincere il confronto.
+* Manual matching sends the comparison's run id. `productId` and
+  `sourceRow` are positional: after the comparison is recomputed they can
+  point at two different items, and the service has no way to notice unless
+  the page also tells it which run the user was looking at.
+* Saving before reloading — "È questo" reloads the comparison from the
+  service and replaces the one in the page; without saving first, a
+  quantity written a moment ago disappears with nothing saying so. The same
+  applies to the five other actions that reload the comparison after
+  changing state on the service: supplier discount, deleted compilation,
+  deleted price list, uploaded documents, saved columns.
+* Once the "Disponibilita" column is picked, the page also asks WHICH
+  values mean available and sends them with the confirmation. Without that,
+  the reader defaults to "disponibile" and the chosen column has no effect:
+  rows marked NO stay orderable and can win the comparison.
 """
 
 from __future__ import annotations
@@ -34,10 +33,10 @@ from test_interfaccia_pagina1 import REVISIONE, BancoDiProva
 
 
 class LAbbinamentoAMano(BancoDiProva):
-    """R1 — «È questo» dice anche SU QUALE confronto è stato premuto."""
+    """"È questo" also states WHICH comparison it was pressed on."""
 
     def corpo_della_richiesta(self, revisione: dict) -> dict:
-        """Il corpo JSON che la pagina manda a `/api/matches/abbina`."""
+        """The JSON body the page sends to `/api/matches/abbina`."""
 
         corpo = self.esegui(
             """
@@ -62,21 +61,22 @@ class LAbbinamentoAMano(BancoDiProva):
     def test_labbinamento_manda_la_run_del_confronto(self) -> None:
         corpo = self.corpo_della_richiesta(REVISIONE)
 
-        # `REVISIONE` porta `run.id == "R1"`: e' quella la run su cui l'utente
-        # ha premuto, ed e' quella che il servizio deve poter rifiutare se nel
-        # frattempo il confronto e' stato rifatto.
+        # `REVISIONE` carries `run.id == "R1"`: that's the run the user acted
+        # on, and the service must be able to reject it if the comparison was
+        # recomputed in the meantime.
         self.assertEqual(corpo.get("runId"), "R1")
-        # E il resto della richiesta resta quello di prima.
+        # The rest of the request is unchanged.
         self.assertEqual(corpo.get("productId"), "p1")
         self.assertEqual(corpo.get("supplierId"), "cipresso")
         self.assertEqual(corpo.get("sourceRow"), 10)
 
     def test_senza_run_manda_una_stringa_vuota_non_salta_il_campo(self) -> None:
-        """Un confronto senza run non fa saltare il campo: lo manda vuoto.
+        """A comparison with no run doesn't drop the field: it sends it empty.
 
-        Il servizio distingue «non me l'hai detto» da «non coincide» solo se il
-        campo c'e' sempre. Un `undefined` sparisce da `JSON.stringify` e le due
-        cose tornerebbero indistinguibili.
+        The service can only tell "you didn't say" apart from "doesn't
+        match" if the field is always present. An `undefined` value
+        vanishes from `JSON.stringify`, which would make the two
+        indistinguishable.
         """
 
         senza_run = {**REVISIONE}
@@ -86,18 +86,18 @@ class LAbbinamentoAMano(BancoDiProva):
 
 
 class LAbbinamentoSalvaPrimaDiChiedere(BancoDiProva):
-    """6 settembre 2026 — «È questo» salva prima di rileggere il confronto.
+    """"È questo" saves before reloading the comparison.
 
-    Lo stesso buco di `addCatalogProduct`, sulla rotta accanto: finito
-    l'abbinamento la pagina fa `loadReview()`, e quella rilettura SOSTITUISCE il
-    confronto in pagina. Una quantità scritta meno di 450 ms fa — o rimasta
-    indietro perché un salvataggio è fallito e sta per riprovare — non è ancora
-    sul disco, e la rilettura se la porta via: il salvataggio dopo consolida il
-    numero vecchio, cioè un ordine sbagliato, senza che niente lo dica.
+    Same gap as `addCatalogProduct` on the neighboring route: once matching
+    finishes, the page calls `loadReview()`, and that reload REPLACES the
+    comparison in the page. A quantity written less than 450 ms ago — or
+    still pending because a save failed and is about to retry — isn't on
+    disk yet, and the reload discards it; the next save then writes back the
+    old number, i.e. a wrong order, with nothing pointing it out.
     """
 
     def esegui_labbinamento(self, salvataggio: str) -> dict:
-        """Preme «È questo» con un `saveState` che risponde come dico io."""
+        """Presses "È questo" with a `saveState` that returns a controlled result."""
 
         esito = self.esegui(
             f"""
@@ -127,18 +127,18 @@ class LAbbinamentoSalvaPrimaDiChiedere(BancoDiProva):
         return json.loads(esito)
 
     def test_col_salvataggio_fallito_la_richiesta_non_parte(self) -> None:
-        """Se il numero scritto non è sul disco, non si va a rileggere niente.
+        """If the written number isn't on disk yet, nothing gets reloaded.
 
-        E la frase finisce dove la finestra dei listini la fa vedere, cioè in
-        `state.listino.errore`: un abbinamento che non è avvenuto e non lo dice
-        è peggio del difetto che si sta correggendo.
+        The message lands in `state.listino.errore`, where the price-list
+        window shows it: a match that didn't happen and doesn't say so
+        would be worse than the bug this fixes.
         """
 
         esito = self.esegui_labbinamento("false")
 
         self.assertIsNone(esito["corpo"], "la richiesta è partita col salvataggio non riuscito")
         self.assertIn("non sono ancora state salvate", esito["errore"])
-        # Nessun «Abbinato.» sotto gli occhi: non è successo.
+        # No "Abbinato." shown: it didn't happen.
         self.assertEqual(esito["esito"], "")
 
     def test_col_salvataggio_riuscito_la_richiesta_parte_come_prima(self) -> None:
@@ -154,7 +154,7 @@ class LAbbinamentoSalvaPrimaDiChiedere(BancoDiProva):
 
 
 class LaColonnaDisponibilita(BancoDiProva):
-    """R4 — la colonna da sola non dice niente: servono i suoi valori."""
+    """The column alone says nothing: its values also need declaring."""
 
     DOCUMENTO = {
         "profileId": "d1",
@@ -190,7 +190,7 @@ class LaColonnaDisponibilita(BancoDiProva):
         )
 
     def test_senza_la_colonna_il_campo_non_c_e(self) -> None:
-        """Senza colonna non c'è niente da dichiarare, e chiederlo sarebbe rumore."""
+        """Without a column there's nothing to declare, and asking would be noise."""
 
         self.assertNotIn('data-schema-field="availableValues"', self.scheda())
 
@@ -199,15 +199,15 @@ class LaColonnaDisponibilita(BancoDiProva):
 
         self.assertIn("Valori che significano disponibile", html)
         self.assertIn('data-schema-field="availableValues"', html)
-        # Il segnaposto è un esempio, non un valore predefinito: inventarne uno
-        # nel codice sarebbe la regola cablata che il progetto non vuole.
+        # The placeholder is an example, not a default value: hardcoding one
+        # would reintroduce the fixed rule this project avoids.
         self.assertIn('placeholder="SI"', html)
 
     def test_quello_che_scrivi_torna_nel_campo(self) -> None:
         self.assertIn('value="SI, S"', self.scheda(colonna=5, valori="SI, S"))
 
     def test_la_conferma_manda_i_valori_scritti(self) -> None:
-        """Dal tasto premuto al corpo della richiesta, senza tappe intermedie."""
+        """From the button press to the request body, with no intermediate steps."""
 
         corpo = self.esegui(
             """
@@ -221,10 +221,10 @@ class LaColonnaDisponibilita(BancoDiProva):
         self.assertEqual(mappatura.get("availableValues"), "SI, S")
 
     def test_senza_valori_il_campo_viaggia_lo_stesso_vuoto(self) -> None:
-        """È la dichiarazione che manca: il servizio la rifiuta, e lo dice lui.
+        """The declaration is missing, and it's the service's job to reject it, not the page's.
 
-        Se la pagina saltasse il campo, «non me l'hai detto» e «non ci sono
-        valori» sarebbero la stessa cosa e nessuno dei due si potrebbe dire.
+        If the page dropped the field, "you didn't say" and "there are no
+        values" would collapse into the same thing, and neither could be told apart.
         """
 
         corpo = self.esegui(
@@ -236,26 +236,26 @@ class LaColonnaDisponibilita(BancoDiProva):
 
 
 class LeCinqueRilettureSalvanoPrima(BancoDiProva):
-    """6 settembre 2026 — le altre cinque funzioni che rileggevano il confronto.
+    """The other five actions that reload the comparison after a state change.
 
-    Stesso buco di «È questo», stessa correzione, cinque rotte diverse: sconto
-    di testata, compilazione eliminata, listino eliminato, documenti caricati,
-    colonne salvate. Tutte e cinque mandano una richiesta che cambia lo stato
-    sul servizio e SUBITO DOPO rileggono il confronto, sostituendo quello in
-    pagina: una quantità scritta meno di 450 ms fa — o rimasta indietro perché
-    un salvataggio è fallito e sta per riprovare — la rilettura se la porta via,
-    e il salvataggio dopo consolida il numero vecchio. Cioè un ordine sbagliato,
-    senza che niente lo dica.
+    Same gap as "È questo", same fix, five different routes: supplier
+    discount, deleted compilation, deleted price list, uploaded documents,
+    saved columns. All five send a request that changes state on the
+    service and immediately reload the comparison, replacing the one in the
+    page: a quantity written less than 450 ms ago — or still pending
+    because a save failed and is about to retry — gets discarded by the
+    reload, and the next save then writes back the old number: a wrong
+    order, with nothing pointing it out.
 
-    Prove **eseguite**: `saveState` viene sostituito nel contesto (le sue tre
-    strade — niente da salvare, salvato, fallito — qui non interessano: conta
-    solo che cosa risponde) e si guarda se la richiesta PARTE. Una prova che
-    cercasse la guardia nel sorgente passerebbe anche con la guardia messa dopo
-    la richiesta, che è esattamente il modo di sbagliare questa correzione.
+    `saveState` is stubbed in the page context (its three outcomes —
+    nothing to save, saved, failed — don't matter here, only the return
+    value does), and each test checks whether the request FIRES. A test
+    that grepped the source for the guard would also pass with the guard
+    placed after the request, which is exactly the wrong way to fix this.
     """
 
     def esegui_azione(self, azione: str, *, salvataggio: str, risposte: dict | None = None) -> dict:
-        """Fa girare `azione` con un `saveState` che risponde come dico io."""
+        """Runs `azione` with a `saveState` that returns a controlled result."""
 
         esito = self.esegui(
             f"""
@@ -285,27 +285,26 @@ class LeCinqueRilettureSalvanoPrima(BancoDiProva):
         return json.loads(esito)
 
     def corpo(self, esito: dict, rotta: str):
-        """Il corpo JSON mandato a `rotta`, o `None` se non è partito niente."""
+        """The JSON body sent to `rotta`, or `None` if nothing was sent."""
 
         for indirizzo, corpo in zip(esito["rotte"], esito["corpi"]):
             if rotta in indirizzo:
                 return json.loads(corpo) if corpo else {}
         return None
 
-    # -- Lo sconto di testata di un fornitore -------------------------------
+    # -- Supplier discount ---------------------------------------------------
 
     SCONTO = 'await applicaScontoFornitore("cipresso", 10);'
     RISPOSTE_SCONTO = {"/api/suppliers/discount": {"ok": True, "reassigned": 0}}
 
     def test_lo_sconto_col_salvataggio_fallito_non_parte(self) -> None:
-        """Lo sconto riassegna i prodotti e la pagina rilegge tutto: prima si salva."""
+        """The discount reassigns products and the page reloads everything: save must happen first."""
 
         esito = self.esegui_azione(self.SCONTO, salvataggio="false", risposte=self.RISPOSTE_SCONTO)
 
         self.assertIsNone(self.corpo(esito, "/api/suppliers/discount"),
                           "lo sconto è partito col salvataggio non riuscito")
-        # La funzione dice le sue cose col messaggio a scomparsa: è lì che
-        # l'utente deve leggere perché lo sconto non è stato applicato.
+        # The toast message is where the user reads why the discount wasn't applied.
         self.assertTrue(any("non sono ancora state salvate" in avviso for avviso in esito["avvisi"]),
                         esito["avvisi"])
 
@@ -314,7 +313,7 @@ class LeCinqueRilettureSalvanoPrima(BancoDiProva):
 
         self.assertEqual(self.corpo(esito, "/api/suppliers/discount"), {"supplierId": "cipresso", "percent": 10})
 
-    # -- La compilazione eliminata dallo storico ----------------------------
+    # -- Compilation deleted from history ------------------------------------
 
     COMPILAZIONE = 'await deleteCompilation("2026-08-10 lunedì");'
     RISPOSTE_COMPILAZIONE = {
@@ -327,7 +326,7 @@ class LeCinqueRilettureSalvanoPrima(BancoDiProva):
 
         self.assertIsNone(self.corpo(esito, "/api/ordini/elimina"),
                           "la compilazione è stata eliminata col salvataggio non riuscito")
-        # Il riquadro dello storico ha un campo suo, ed è lì che la frase va.
+        # The history panel has its own error field; the message goes there.
         self.assertIn("non sono ancora state salvate", esito["errori"]["compilazioni"])
 
     def test_la_compilazione_col_salvataggio_riuscito_si_elimina_come_prima(self) -> None:
@@ -336,7 +335,7 @@ class LeCinqueRilettureSalvanoPrima(BancoDiProva):
         self.assertEqual(self.corpo(esito, "/api/ordini/elimina"), {"cartella": "2026-08-10 lunedì"})
         self.assertEqual(esito["errori"]["compilazioni"], "")
 
-    # -- Il listino caricato, tolto dai documenti ---------------------------
+    # -- Uploaded price list removed from documents --------------------------
 
     LISTINO = 'await deleteUploadedList("LISTINO CIPRESSO.xlsx");'
     RISPOSTE_LISTINO = {"/api/uploads/elimina": {"ok": True, "message": "Listino eliminato.", "pipeline": {"stato": "IN_ATTESA"}}}
@@ -354,7 +353,7 @@ class LeCinqueRilettureSalvanoPrima(BancoDiProva):
         self.assertEqual(self.corpo(esito, "/api/uploads/elimina"), {"name": "LISTINO CIPRESSO.xlsx"})
         self.assertEqual(esito["errori"]["runtime"], "")
 
-    # -- I documenti caricati ----------------------------------------------
+    # -- Uploaded documents ---------------------------------------------------
 
     CARICAMENTO = """
       // Il minimo perché `uploadFiles` arrivi alla richiesta: un file scelto,
@@ -379,7 +378,7 @@ class LeCinqueRilettureSalvanoPrima(BancoDiProva):
         self.assertIsNone(self.corpo(esito, "/api/upload"),
                           "i documenti sono partiti col salvataggio non riuscito")
         self.assertIn("non sono ancora state salvate", esito["errori"]["runtime"])
-        # E il messaggio di riuscita non compare: non è successo niente.
+        # And the success message doesn't show: nothing happened.
         self.assertEqual(esito["messaggioDelCaricamento"], "")
 
     def test_i_documenti_col_salvataggio_riuscito_partono_come_prima(self) -> None:
@@ -391,7 +390,7 @@ class LeCinqueRilettureSalvanoPrima(BancoDiProva):
         self.assertEqual(corpo["files"][0]["role"], "suppliers")
         self.assertEqual(esito["messaggioDelCaricamento"], "1 documento caricato.")
 
-    # -- Le colonne di un documento, salvate --------------------------------
+    # -- A document's columns, saved ------------------------------------------
 
     COLONNE = """
       state.schemaMapping.data = {
@@ -421,8 +420,8 @@ class LeCinqueRilettureSalvanoPrima(BancoDiProva):
 
         self.assertIsNone(self.corpo(esito, "/api/schemas/documento/salva"),
                           "le colonne sono state salvate col salvataggio non riuscito")
-        # La schermata della mappatura ha il suo campo d'errore: la frase va lì,
-        # sotto gli occhi di chi ha appena premuto Conferma.
+        # The mapping screen has its own error field; that's where the
+        # message goes, right where the user just clicked Conferma.
         self.assertIn("non sono ancora state salvate", esito["errori"]["colonne"])
 
     def test_le_colonne_col_salvataggio_riuscito_si_salvano_come_prima(self) -> None:

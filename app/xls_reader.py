@@ -1,28 +1,22 @@
-"""Lettore dei file Excel 97-2003 (.xls) scritto con la sola libreria standard.
+"""Reader for legacy Excel 97-2003 (.xls) files, stdlib only.
 
-PERCHE' ESISTE QUESTO MODULO
-Noce non manda piu' i dati dal sito: manda un .xls e basta, e non ha il
-.xlsx.  Se questo lettore non esistesse, quel fornitore resterebbe fuori dal
-confronto.  Per lo stesso motivo qui dentro non entra nessuna dipendenza
-esterna e non si chiama Excel: il programma deve funzionare sul computer
-dell'utente cosi' com'e'.
+Some suppliers only provide `.xls`, never `.xlsx`, so this reader exists to
+keep them in the comparison without adding a third-party dependency (the
+tool has to run as-is on the user's machine, without Excel installed).
 
-COSA C'E' DENTRO UN .xls: DUE STRATI, UNO DENTRO L'ALTRO
-1. Il contenitore OLE2 (Compound File Binary).  E' un piccolo file system:
-   intestazione, mappa dei settori (FAT), elenco dei flussi (il direttorio),
-   piu' una seconda mappa in miniatura (mini-FAT) per i flussi piccoli.  Il
-   libro di lavoro sta nel flusso chiamato "Workbook".
-2. I record BIFF8 dentro quel flusso: una sequenza di blocchi
-   (codice, lunghezza, dati) che descrivono fogli, testi condivisi, formati e
-   celle.
+A `.xls` file is two nested layers:
+1. An OLE2 container (Compound File Binary): a small file system with a
+   header, a sector map (FAT), a directory of streams, and a mini-FAT for
+   streams below a size threshold. The workbook lives in the "Workbook"
+   stream.
+2. BIFF8 records inside that stream: a sequence of (code, length, data)
+   blocks describing sheets, shared strings, formats and cells.
 
-COSA RESTITUISCE
-Il valore gia' calcolato che Excel ha memorizzato nel file (non la formula) e
-il grassetto del carattere.  Il grassetto non e' un vezzo estetico: sui listini
-Noce il prezzo in offerta e' segnalato anche cosi' ("i prezzi offerta sono
-in grassetto"), quindi buttarlo via significherebbe perdere l'informazione.
+This reader returns the value Excel already computed and stored (not the
+formula), plus whether the cell font is bold. Bold is kept because on some
+supplier price lists it is how a promotional price is marked.
 
-Il file di partenza viene soltanto letto: mai riscritto, mai spostato.
+The source file is only ever read, never rewritten or moved.
 """
 
 from __future__ import annotations
@@ -36,37 +30,36 @@ __all__ = ["XlsError", "XlsSheet", "read_workbook", "read_sheet_values"]
 
 
 class XlsError(Exception):
-    """Il file non si riesce a leggere, con la spiegazione del perché."""
+    """The file can't be read; the message explains why."""
 
 
 @dataclass
 class XlsSheet:
-    """Un foglio del libro di lavoro.
+    """A sheet of the workbook.
 
-    ``rows[r][c]`` e' sempre una coppia ``(valore, grassetto)``: le righe sono
-    dense e le celle mancanti valgono ``(None, False)``, cosi' chi legge non
-    deve difendersi da un IndexError a ogni accesso.
+    ``rows[r][c]`` is always a ``(value, bold)`` pair: rows are dense and
+    missing cells are ``(None, False)``, so callers never need to guard
+    against an IndexError.
     """
 
     name: str
     rows: list[list[tuple[object, bool]]] = field(default_factory=list)
 
 
-# La cella vuota e' un oggetto solo, condiviso da tutta la griglia: e'
-# immutabile, quindi si puo' riusare senza rischi e senza sprecare memoria su
-# un foglio da diciassettemila righe.
+# A single shared, immutable empty-cell object: safe to reuse across the
+# whole grid without allocating one per missing cell on large sheets.
 _CELLA_VUOTA: tuple[object, bool] = (None, False)
 
 
 # ---------------------------------------------------------------------------
-# Strato 1: il contenitore OLE2
+# Layer 1: the OLE2 container
 # ---------------------------------------------------------------------------
 
 _FIRMA_OLE2 = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 _FIRMA_ZIP = b"PK\x03\x04"
 
-# Nella mappa dei settori i valori oltre questa soglia non sono settori veri:
-# sono marcatori (fine catena, settore libero, settore di servizio).
+# Sector-map values above this threshold aren't real sectors: they're
+# markers (end of chain, free sector, reserved).
 _MASSIMO_SETTORE_REGOLARE = 0xFFFFFFFA
 
 _VOCE_FLUSSO = 2
@@ -74,11 +67,10 @@ _VOCE_RADICE = 5
 
 
 class _ContenitoreOle2:
-    """Lo strato esterno del .xls: un piccolo file system dentro un file.
+    """The outer layer of a .xls file: a small file system inside a file.
 
-    Senza questo strato non si legge nemmeno un record: i dati del libro di
-    lavoro non stanno in fondo al file in ordine, stanno sparsi in settori che
-    solo la FAT sa rimettere in fila.
+    Workbook data isn't laid out sequentially; it's scattered across sectors
+    that only the FAT can reassemble in order.
     """
 
     def __init__(self, dati: bytes) -> None:
@@ -107,13 +99,13 @@ class _ContenitoreOle2:
 
         self._fat = self._costruisci_fat(numero_fat, primo_difat)
         self._voci = self._leggi_direttorio(primo_direttorio, versione_maggiore)
-        # Il mini-stream e la mini-FAT servono solo per i flussi sotto la
-        # soglia: il "Workbook" di un listino vero e' grande e sta nei settori
-        # normali, ma i flussi piccoli esistono lo stesso e vanno letti.
+        # The mini-stream and mini-FAT only matter for streams below the
+        # threshold; a real workbook stream is large and lives in normal
+        # sectors, but small streams still exist and must be readable.
         self._mini_fat = self._costruisci_mini_fat(primo_mini_fat, numero_mini_fat)
         self._mini_stream = self._costruisci_mini_stream()
 
-    # -- lettura grezza dei settori ----------------------------------------
+    # -- raw sector access ---------------------------------------------------
 
     def _settore(self, numero: int) -> bytes:
         inizio = (numero + 1) * self._dimensione_settore
@@ -121,8 +113,8 @@ class _ContenitoreOle2:
             raise XlsError("Il file indica un settore oltre la sua fine: è incompleto o rovinato.")
         blocco = self._dati[inizio : inizio + self._dimensione_settore]
         if len(blocco) < self._dimensione_settore:
-            # L'ultimo settore puo' essere tagliato: si completa con zeri
-            # invece di far fallire tutta la lettura per pochi byte di coda.
+            # The last sector can be truncated; pad with zeros instead of
+            # failing the whole read for a few trailing bytes.
             blocco += b"\x00" * (self._dimensione_settore - len(blocco))
         return blocco
 
@@ -144,12 +136,12 @@ class _ContenitoreOle2:
             corrente = mappa[corrente]
         return catena
 
-    # -- le due mappe -------------------------------------------------------
+    # -- the two maps ---------------------------------------------------------
 
     def _costruisci_fat(self, numero_fat: int, primo_difat: int) -> list[int]:
-        # I primi 109 riferimenti stanno nell'intestazione; se non bastano si
-        # continua nella catena dei settori DIFAT, dove l'ultimo intero di ogni
-        # settore e' il puntatore al successivo.
+        # The first 109 references live in the header; if that's not enough,
+        # continue through the DIFAT sector chain, where the last integer of
+        # each sector points to the next one.
         elenco = [n for n in struct.unpack_from("<109I", self._dati, 76) if n <= _MASSIMO_SETTORE_REGOLARE]
         visti: set[int] = set()
         settore = primo_difat
@@ -186,7 +178,7 @@ class _ContenitoreOle2:
                 return self._flusso_grande(settore, dimensione)
         return b""
 
-    # -- lettura dei flussi -------------------------------------------------
+    # -- stream reading --------------------------------------------------------
 
     def _flusso_grande(self, primo: int, dimensione: int) -> bytes:
         pezzi = [self._settore(numero) for numero in self._catena(primo, self._fat, "dei settori")]
@@ -210,13 +202,13 @@ class _ContenitoreOle2:
             if tipo not in (1, _VOCE_FLUSSO, _VOCE_RADICE):
                 continue
             (lunghezza_nome,) = struct.unpack_from("<H", blocco, 64)
-            # La lunghezza e' in byte e comprende lo zero finale del testo.
+            # Length is in bytes and includes the trailing null terminator.
             fine_nome = max(0, min(64, lunghezza_nome - 2))
             nome = blocco[:fine_nome].decode("utf-16-le", "replace")
             (settore, dimensione) = struct.unpack_from("<IQ", blocco, 116)
             if versione_maggiore < 4:
-                # Nei file versione 3 la meta' alta della dimensione non e'
-                # affidabile: Excel non la azzera sempre.
+                # In version-3 files the high half of the size isn't
+                # reliable; Excel doesn't always zero it.
                 dimensione &= 0xFFFFFFFF
             voci.append((nome, tipo, settore, dimensione))
         if not voci:
@@ -238,7 +230,7 @@ class _ContenitoreOle2:
             "forse è un documento di un altro programma."
         )
 
-    # -- dove stanno i byte, dentro il file --------------------------------
+    # -- byte offsets within the file -----------------------------------------
 
     def _segmenti_grandi(self, primo: int, dimensione: int) -> list[tuple[int, int]]:
         segmenti: list[tuple[int, int]] = []
@@ -252,9 +244,9 @@ class _ContenitoreOle2:
         return segmenti
 
     def _segmenti_mini(self, primo: int, dimensione: int) -> list[tuple[int, int]]:
-        # Il mini-stream vive dentro i settori grandi della voce radice: un
-        # mini settore sta sempre **tutto** dentro un settore grande, perche' la
-        # dimensione grande e' un multiplo di quella mini.
+        # The mini-stream lives inside the root entry's large sectors; a
+        # mini sector always fits entirely within one large sector because
+        # the large sector size is a multiple of the mini one.
         radice = next(
             (voce for voce in self._voci if voce[1] == _VOCE_RADICE),
             None,
@@ -280,13 +272,12 @@ class _ContenitoreOle2:
         return segmenti
 
     def segmenti(self, *nomi_ammessi: str) -> list[tuple[int, int]]:
-        """Dove stanno, dentro il file, i byte del flusso: `(posizione, quanti)`.
+        """Byte offsets of the stream's data within the file: `(offset, length)`.
 
-        Serve per scrivere **in posizione**: i byte del libro di lavoro non
-        stanno in fila in fondo al file, stanno sparsi in settori, e senza
-        questa mappa una modifica finirebbe nel posto sbagliato.  La somma delle
-        lunghezze e' esattamente la dimensione dichiarata del flusso, quindi chi
-        la usa puo' controllare di aver capito bene prima di toccare un byte.
+        Needed to write in place: workbook bytes aren't contiguous, they're
+        scattered across sectors, so an in-place edit needs this map to land
+        in the right spot. The lengths sum to the stream's declared size,
+        which callers can use to sanity-check the map before writing.
         """
 
         cercati = {nome.casefold() for nome in nomi_ammessi}
@@ -305,7 +296,7 @@ class _ContenitoreOle2:
 
 
 # ---------------------------------------------------------------------------
-# Strato 2: i record BIFF8
+# Layer 2: BIFF8 records
 # ---------------------------------------------------------------------------
 
 _BOF = 0x0809
@@ -333,8 +324,8 @@ _STRING = 0x0207
 
 _TIPO_FOGLIO_DATI = 0x00
 
-# I codici d'errore che Excel memorizza in un byte, tradotti nel testo che
-# l'utente vede nella cella.
+# Error codes Excel stores as a single byte, mapped to the text the user
+# sees in the cell.
 _ERRORI = {
     0x00: "#NULL!",
     0x07: "#DIV/0!",
@@ -347,7 +338,7 @@ _ERRORI = {
 
 
 class _ScorriRecord:
-    """Scorre i record del flusso: (codice, lunghezza, dati) uno dopo l'altro."""
+    """Walks the stream's records: (code, length, data) one after another."""
 
     def __init__(self, flusso: bytes, posizione: int = 0) -> None:
         self._flusso = flusso
@@ -371,12 +362,11 @@ class _ScorriRecord:
 
 
 def _numero(valore: float) -> float | int:
-    """Riporta a intero i numeri che sono interi.
+    """Collapse whole-number floats down to int.
 
-    I codici, i pezzi per cartone e le quantita' d'ordine sono numeri interi e
-    devono restare tali; e' anche quello che restituisce il lettore dei .xlsx,
-    quindi le due strade di lettura danno lo stesso tipo di dato e i confronti
-    non si sporcano di ".0".
+    Codes, pieces-per-carton and order quantities are integers and must stay
+    that way; the `.xlsx` reader returns the same type, so values from both
+    readers compare cleanly without a stray ".0".
     """
     if not math.isfinite(valore):
         return valore
@@ -385,21 +375,21 @@ def _numero(valore: float) -> float | int:
 
 
 def _decodifica_rk(rk: int) -> float | int:
-    """I quattro modi in cui Excel comprime un numero in quattro byte.
+    """Decode Excel's 4-byte packed number (the four RK cases).
 
-    Due bit di coda dicono tutto: uno sceglie fra intero e virgola mobile,
-    l'altro dice se il numero va diviso per cento.  Sbagliarli non fa saltare
-    la lettura, fa comparire prezzi cento volte piu' grandi: per questo i
-    quattro casi sono scritti tutti, uno per uno.
+    Two trailing bits decide everything: one picks integer vs. float, the
+    other whether to divide by 100. Getting a case wrong doesn't crash the
+    read, it silently produces a price 100x too large, so all four cases
+    are handled explicitly.
     """
     if rk & 0x02:
-        # Intero con segno su 30 bit.
+        # 30-bit signed integer.
         valore: float = rk >> 2
         if valore >= 1 << 29:
             valore -= 1 << 30
     else:
-        # I 30 bit alti di un numero IEEE a doppia precisione; i restanti
-        # 34 bit bassi Excel li butta via perche' sono zero.
+        # High 30 bits of an IEEE double; Excel drops the low 34 bits
+        # because they're zero.
         (valore,) = struct.unpack("<d", struct.pack("<Q", (rk & 0xFFFFFFFC) << 32))
     if rk & 0x01:
         valore = valore / 100.0
@@ -407,17 +397,17 @@ def _decodifica_rk(rk: int) -> float | int:
 
 
 def _testo_da_caratteri(dati: bytes, offset: int, quanti: int, bandiere: int) -> tuple[str, int]:
-    """Legge i caratteri di una stringa BIFF8 e dice dove finisce.
+    """Read a BIFF8 string's characters and return where it ends.
 
-    La bandiera dice se il testo e' compresso a un byte per carattere (il byte
-    basso di UTF-16, cioe' latin-1) oppure disteso in UTF-16 a due byte.
+    The flag byte says whether the text is packed one byte per character
+    (the low byte of UTF-16, i.e. latin-1) or full two-byte UTF-16.
     """
-    if bandiere & 0x08:  # testo con formattazioni interne
+    if bandiere & 0x08:  # rich-text run formatting
         (numero_tratti,) = struct.unpack_from("<H", dati, offset)
         offset += 2
     else:
         numero_tratti = 0
-    if bandiere & 0x04:  # coda fonetica (giapponese), si salta
+    if bandiere & 0x04:  # phonetic (Asian) text, skipped
         (lunghezza_fonetica,) = struct.unpack_from("<I", dati, offset)
         offset += 4
     else:
@@ -436,7 +426,7 @@ def _testo_da_caratteri(dati: bytes, offset: int, quanti: int, bandiere: int) ->
 
 
 def _stringa_breve(dati: bytes, offset: int) -> str:
-    """Stringa con il contatore su un byte: la usano i nomi dei fogli."""
+    """String with a 1-byte length counter, used for sheet names."""
     quanti = dati[offset]
     bandiere = dati[offset + 1]
     testo, _fine = _testo_da_caratteri(dati, offset + 2, quanti, bandiere)
@@ -444,7 +434,7 @@ def _stringa_breve(dati: bytes, offset: int) -> str:
 
 
 def _stringa_lunga(dati: bytes, offset: int) -> str:
-    """Stringa con il contatore su due byte: LABEL, STRING e simili."""
+    """String with a 2-byte length counter, used by LABEL, STRING, etc."""
     (quanti,) = struct.unpack_from("<H", dati, offset)
     bandiere = dati[offset + 2]
     testo, _fine = _testo_da_caratteri(dati, offset + 3, quanti, bandiere)
@@ -452,14 +442,13 @@ def _stringa_lunga(dati: bytes, offset: int) -> str:
 
 
 def _leggi_sst(blocchi: list[bytes]) -> list[str]:
-    """Ricompone la tabella dei testi condivisi spezzata sui record CONTINUE.
+    """Reassemble the shared-string table split across CONTINUE records.
 
-    QUI SBAGLIANO QUASI TUTTI.  La tabella non entra in un record solo, quindi
-    Excel la taglia; il taglio puo' cadere in mezzo a una parola e ogni pezzo
-    successivo RICOMINCIA con un byte di bandiere che puo' cambiare la
-    codifica, da un byte a due byte, a meta' della stessa stringa.  Chi lo
-    ignora non se ne accorge subito: il testo diventa spazzatura solo in fondo
-    al file, dove nessuno guarda.
+    The table rarely fits in one record, so Excel splits it, possibly mid
+    string; each continuation restarts with its own flag byte, which can
+    switch the encoding (1-byte vs. 2-byte) partway through the same
+    string. Getting this wrong doesn't fail loudly: the text turns to
+    garbage only near the end of the table, where it's easy to miss.
     """
     if not blocchi:
         return []
@@ -477,17 +466,16 @@ def _leggi_sst(blocchi: list[bytes]) -> list[str]:
         return blocchi[indice_blocco]
 
     def avanza_se_finito() -> None:
-        # Quando un blocco e' esaurito si passa al successivo: qui non c'e'
-        # nessun byte di bandiere da consumare, perche' comincia una stringa
-        # nuova con la sua intestazione.
+        # Move to the next block once the current one is exhausted; no flag
+        # byte to consume here, a new string starts with its own header.
         nonlocal indice_blocco, posizione
         while indice_blocco < len(blocchi) - 1 and posizione >= len(blocchi[indice_blocco]):
             indice_blocco += 1
             posizione = 0
 
     def leggi(quanti: int) -> bytes:
-        # Lettura che attraversa i blocchi: serve per le intestazioni e per le
-        # code (formattazioni, testo fonetico), che non portano bandiere.
+        # Cross-block read, used for headers and trailing data (rich-text
+        # runs, phonetic text), which carry no flag byte of their own.
         nonlocal indice_blocco, posizione
         raccolti = bytearray()
         while quanti > 0:
@@ -504,8 +492,8 @@ def _leggi_sst(blocchi: list[bytes]) -> list[str]:
 
     testi: list[str] = []
     for _indice in range(unici):
-        # leggi() salta da solo i blocchi esauriti: qui comincia una stringa
-        # nuova con la sua intestazione, senza byte di bandiere davanti.
+        # leggi() skips exhausted blocks on its own; a new string starts
+        # here with its own header, no flag byte in front.
         intestazione = leggi(3)
         if len(intestazione) < 3:
             break
@@ -544,9 +532,9 @@ def _leggi_sst(blocchi: list[bytes]) -> list[str]:
                     break
             if indice_blocco >= len(blocchi) - 1:
                 break
-            # Si passa al pezzo successivo della stringa: il primo byte non e'
-            # testo, e' la bandiera che dice come sono scritti i caratteri che
-            # restano.  Puo' essere diversa da quella di partenza.
+            # Moving to the string's next chunk: the first byte isn't text,
+            # it's the flag for how the remaining characters are encoded,
+            # which can differ from the string's initial flag.
             indice_blocco += 1
             bandiere_nuove = blocchi[indice_blocco][:1]
             if not bandiere_nuove:
@@ -564,24 +552,22 @@ def _leggi_sst(blocchi: list[bytes]) -> list[str]:
 
 
 class _Formati:
-    """Dalla cella al grassetto: cella -> indice XF -> record XF -> font."""
+    """Maps a cell to bold: cell -> XF index -> XF record -> font."""
 
     def __init__(self) -> None:
         self._grassetto_font: list[bool] = []
         self._font_di_xf: list[int] = []
 
     def aggiungi_font(self, dati: bytes) -> None:
-        # Il grassetto sta nel peso del carattere: 400 e' normale, 700 e'
-        # grassetto.  Nei BIFF vecchi c'era anche un bit dedicato dentro le
-        # opzioni, e nel listino Noce i due segnali coincidono (i font in
-        # grassetto hanno peso 700 e anche quel bit acceso), ma dal BIFF5 in poi
-        # il bit e' dichiarato inutilizzato e gli altri programmi che scrivono
-        # .xls possono lasciarlo spento: fa fede il peso.
+        # Bold is carried by font weight: 400 is regular, 700 is bold.
+        # Older BIFF also had a dedicated bold bit in the options field,
+        # but since BIFF5 it's declared unused and other .xls writers may
+        # leave it off, so weight is authoritative.
         peso = struct.unpack_from("<H", dati, 6)[0] if len(dati) >= 8 else 400
         if len(self._grassetto_font) == 4:
-            # Excel non usa mai il font numero 4: salta da 3 a 5.  Si mette un
-            # segnaposto, altrimenti tutti i font successivi risulterebbero
-            # spostati di uno e il grassetto finirebbe sulle celle sbagliate.
+            # Excel never uses font index 4, it jumps from 3 to 5. Insert a
+            # placeholder, otherwise every later font would be off by one
+            # and bold would land on the wrong cells.
             self._grassetto_font.append(False)
         self._grassetto_font.append(peso >= 700)
 
@@ -682,8 +668,8 @@ def _leggi_foglio(scorri: _ScorriRecord, globali: _Globali, nome: str) -> XlsShe
             (riga, colonna, indice_xf, grezzo) = struct.unpack_from("<HHHI", dati, 0)
             segna(riga, colonna, _decodifica_rk(grezzo), indice_xf)
         elif codice == _MULRK:
-            # Un record solo che descrive piu' celle affiancate della stessa
-            # riga: ignorarlo vuol dire perdere righe intere di numeri.
+            # A single record describing several adjacent cells in the same
+            # row; skipping it loses whole rows of numbers.
             (riga, prima_colonna) = struct.unpack_from("<HH", dati, 0)
             quante = (len(dati) - 6) // 6
             for passo in range(quante):
@@ -706,10 +692,10 @@ def _leggi_foglio(scorri: _ScorriRecord, globali: _Globali, nome: str) -> XlsShe
             (riga, colonna, indice_xf) = struct.unpack_from("<HHH", dati, 0)
             memorizzato = dati[6:14]
             if len(memorizzato) == 8 and memorizzato[6:8] == b"\xff\xff":
-                # Il risultato non e' un numero: il primo byte dice che cos'e'.
+                # Result isn't a number; the first byte says what it is.
                 specie = memorizzato[0]
                 if specie == 0:
-                    # Testo: sta nel record STRING che segue subito dopo.
+                    # Text: carried in the STRING record right after this one.
                     formula_in_attesa = (riga, colonna, formati.grassetto(indice_xf))
                     segna(riga, colonna, "", indice_xf)
                 elif specie == 1:
@@ -736,10 +722,10 @@ def _leggi_foglio(scorri: _ScorriRecord, globali: _Globali, nome: str) -> XlsShe
 
 
 def read_workbook(path: Path) -> list[XlsSheet]:
-    """Legge un .xls e restituisce i suoi fogli, valori e grassetto.
+    """Read a .xls file and return its sheets, values and bold flags.
 
-    Il file viene soltanto aperto in lettura: non si riscrive e non si sposta,
-    perche' l'originale del fornitore deve restare com'e' arrivato.
+    The file is opened read-only: never rewritten or moved, since the
+    original file as received from the supplier must stay untouched.
     """
     percorso = Path(path)
     try:
@@ -750,15 +736,15 @@ def read_workbook(path: Path) -> list[XlsSheet]:
     contenitore = _ContenitoreOle2(dati)
     flusso = contenitore.flusso("Workbook", "Book")
 
-    # Un record tagliato a meta' fa saltare struct: l'utente deve leggere che
-    # il file e' rovinato, non un messaggio in inglese sul numero di byte.
+    # A record cut in half makes struct raise; surface it as a corrupted
+    # file rather than a raw byte-offset error.
     try:
         globali = _leggi_globali(_ScorriRecord(flusso))
 
         fogli: list[XlsSheet] = []
         for nome, posizione, tipo in globali.fogli:
             if tipo != _TIPO_FOGLIO_DATI:
-                # Grafici e fogli macro non hanno una griglia di celle da leggere.
+                # Charts and macro sheets have no cell grid to read.
                 continue
             if not 0 <= posizione < len(flusso):
                 raise XlsError(f"Il foglio «{nome}» dichiara una posizione che non esiste nel file.")
@@ -776,25 +762,24 @@ def read_workbook(path: Path) -> list[XlsSheet]:
 
 
 def apri_contenitore(dati: bytes) -> _ContenitoreOle2:
-    """Il contenitore OLE2 di un `.xls` gia' letto in memoria.
+    """Open the OLE2 container of a `.xls` file already read into memory.
 
-    Esiste per `app/xls_writer.py`, che deve scrivere dentro lo stesso file
-    che questo modulo legge: il piccolo file system del `.xls` e' scritto qui
-    una volta sola, e riscriverlo altrove vorrebbe dire due copie della stessa
-    regola che prima o poi divergono.
+    Exposed for `app/xls_writer.py`, which writes into the same file this
+    module reads: the `.xls` file-system logic lives here once, instead of
+    a second copy that could drift out of sync.
     """
 
     return _ContenitoreOle2(dati)
 
 
 def posizioni_fogli(flusso: bytes) -> list[tuple[str, int, int]]:
-    """Nome, posizione nel flusso e tipo di ogni foglio, senza leggere le celle."""
+    """Name, stream position and type of each sheet, without reading cells."""
 
     return list(_leggi_globali(_ScorriRecord(flusso)).fogli)
 
 
 def read_sheet_values(path: Path, sheet_index: int = 0) -> list[list[object]]:
-    """Come read_workbook, ma di ogni cella tiene soltanto il valore."""
+    """Like read_workbook, but keeps only each cell's value."""
     fogli = read_workbook(path)
     if not fogli:
         raise XlsError("Il file non contiene nessun foglio di dati.")

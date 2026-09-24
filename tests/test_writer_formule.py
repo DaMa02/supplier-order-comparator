@@ -1,26 +1,24 @@
-"""Una formula nella colonna d'ordine non deve arrivare al fornitore.
+"""A formula in the order column must never reach the supplier.
 
-R7 della revisione del 6 settembre 2026.  Il foglio dice gia' di no alle
-formule nelle celle in cui **scrive** — `scriviNumero` e `svuota` si fermano —
-ma una formula su una riga che nessuno ordina non la toccava nessuno: restava
-nella copia, il confronto cella per cella vedeva formula contro formula e non
-trovava differenze, ed Excel all'apertura la calcolava.  Nell'ordine
-consegnato al fornitore comparivano colli che nessuno ha chiesto.
+The sheet already refuses formulas in cells it *writes* (`scriviNumero` and
+`svuota` stop), but a formula on a row nobody orders was never touched: it
+stayed in the copy, the cell-by-cell comparison saw formula against formula
+and found no difference, and Excel recalculated it on open. The delivered
+order then listed cartons nobody asked for.
 
-Il caso vive solo nei file **generati da programma**: un `.xlsx` salvato da
-Excel il risultato memorizzato ce l'ha sempre, e con quello dentro la
-compilazione si fermava gia'.
+This only happens in files *generated programmatically*: a `.xlsx` saved by
+Excel always carries a cached result, and that alone stops the compilation.
 
-⚠ Il listino di prova lo scrive openpyxl e poi gli si toglie il `<v></v>`
-vuoto: openpyxl 3.1.5 la formula la scrive **con** un valore in cache vuoto,
-che il writer legge come lo zero di una quantita' e che quindi lo fermava lo
-stesso.  Senza quel ritocco questa prova passerebbe anche con il difetto
-dentro.
+The test price list is written by openpyxl and then has its empty `<v></v>`
+stripped: openpyxl 3.1.5 writes the formula *with* an empty cached value,
+which the writer reads as a quantity of zero and that alone would stop it
+too. Without this adjustment the test would pass even with the defect
+present.
 
-In coda c'e' lo stesso buco nel `.xls` di Noce, che ha una storia diversa:
-li' al fornitore non e' mai arrivato niente, perche' il controllo preventivo
-prima di compilare guarda tutta la colonna.  Era `compila_ordine` da solo a
-guardarne meta'.
+The same gap exists in Noce's `.xls`, for a different reason: there the
+order never reached the supplier, because the pre-compilation check scans
+the whole column. It was `compila_ordine` alone that only checked half of
+it.
 """
 
 from __future__ import annotations
@@ -50,19 +48,20 @@ from test_writer_ordini import node_disponibile  # noqa: E402
 
 WRITER = SKILL_ROOT / "scripts" / "write_supplier_orders.mjs"
 
-# Quello che openpyxl scrive per `=5`: la formula e il posto del risultato,
-# vuoto.  Un gestionale che genera il listino il posto non lo mette proprio.
+# What openpyxl writes for `=5`: the formula plus an empty placeholder for
+# the result. A management-software export that generates the price list
+# never adds that placeholder.
 _FORMULA_DI_OPENPYXL = "<f>5</f><v></v>"
 
 
 def listino_con_una_formula(percorso: Path, ritocca: Callable[[str], str]) -> Path:
-    """Il listino di prova, tre righe.
+    """Test price list, three rows.
 
-    | riga | A (EAN)       | B (DESCRIZIONE) | C (ordine)                  |
-    |------|---------------|-----------------|-----------------------------|
-    | 1    | EAN           | DESCRIZIONE     | ORDINE                      |
-    | 2    | 8000000000002 | PRODOTTO DUE    | `=5` — e il piano non la ordina |
-    | 3    | 8000000000003 | PRODOTTO TRE    | 4 — la riga che il piano ordina |
+    | row | A (EAN)       | B (DESCRIZIONE) | C (order)                       |
+    |-----|---------------|-----------------|----------------------------------|
+    | 1   | EAN           | DESCRIZIONE     | ORDINE                           |
+    | 2   | 8000000000002 | PRODOTTO DUE    | `=5` — not ordered by the plan   |
+    | 3   | 8000000000003 | PRODOTTO TRE    | 4 — the row the plan orders      |
     """
 
     libro = Workbook()
@@ -76,8 +75,8 @@ def listino_con_una_formula(percorso: Path, ritocca: Callable[[str], str]) -> Pa
 
     with zipfile.ZipFile(percorso) as contenitore:
         parti = {nome: contenitore.read(nome) for nome in contenitore.namelist()}
-    # Con lxml openpyxl scrive `<v></v>`, senza (la CI su Windows) `<v />`:
-    # e' lo stesso elemento vuoto, e il ritocco qui sotto cerca la prima forma.
+    # With lxml openpyxl writes `<v></v>`; without it (Windows CI) `<v />`:
+    # same empty element, and the patch below matches the first form.
     foglio_xml = parti["xl/worksheets/sheet1.xml"].decode("utf-8").replace("<f>5</f><v />", _FORMULA_DI_OPENPYXL)
     assert _FORMULA_DI_OPENPYXL in foglio_xml, foglio_xml
     parti["xl/worksheets/sheet1.xml"] = ritocca(foglio_xml).encode("utf-8")
@@ -141,33 +140,33 @@ class UnaFormulaNellaColonnaDOrdine(unittest.TestCase):
         self.assertIn("formula", detto)
         self.assertIn("C2", detto)
         self.assertIn("non viene creato", detto)
-        # Nessuna copia sul disco: l'ordine non si consegna a meta'.
+        # No copy on disk: the order is never delivered half-done.
         prodotte = sorted(percorso.name for percorso in self.uscita.glob("*.xlsx")) if self.uscita.is_dir() else []
         self.assertEqual(prodotte, [], prodotte)
 
     def test_senza_il_valore_in_cache_e_su_una_riga_non_ordinata_ferma_lo_stesso(self) -> None:
-        """Il difetto R7: la copia usciva con la formula dentro."""
+        """The bug: the copy was written with the formula still inside."""
 
         self.pretendi_che_si_fermi(self.compila(lambda xml: xml.replace(_FORMULA_DI_OPENPYXL, "<f>5</f>")))
 
     def test_con_il_valore_in_cache_si_fermava_gia(self) -> None:
-        """Il caso che il difetto non aveva: qui la formula vale una quantita',
-        l'azzeramento la prende in mano e il foglio dice di no.  Vale la pena
-        fissarlo, perche' e' il confine fra i due comportamenti."""
+        """The case the bug didn't have: here the formula evaluates to a
+        quantity, the zeroing step handles it, and the sheet still refuses
+        it. Worth pinning down: it's the boundary between the two behaviors."""
 
         self.pretendi_che_si_fermi(self.compila(lambda xml: xml.replace(_FORMULA_DI_OPENPYXL, "<f>5</f><v>5</v>")))
 
 
 class UnaFormulaNellaColonnaDOrdineDelXls(unittest.TestCase):
-    """Lo stesso buco nel `.xls` di Noce, dove la copia la fa `app/xls_writer.py`.
+    """Same gap in Noce's `.xls`, where the copy is written by `app/xls_writer.py`.
 
-    Al fornitore non ci e' mai arrivata: il controllo preventivo che
-    `app/server.py` fa prima di compilare (`controlla_colonna_ordine`) tutta la
-    colonna d'ordine la guardava gia', e con una formula dentro la compilazione
-    non parte.  Ma `compila_ordine`, da solo, si fermava all'ultima riga che il
-    piano tocca: una formula piu' sotto passava, l'azzeramento la saltava — non
-    e' un numero a lunghezza fissa — e restava nella copia.  I due controlli
-    adesso dicono la stessa cosa.
+    It never reached the supplier: the pre-compilation check in
+    `app/server.py` (`controlla_colonna_ordine`) scans the whole order
+    column, so a formula anywhere in it blocks compilation. `compila_ordine`
+    alone only reaches the last row the plan touches: a formula further down
+    passes through it, since the zeroing step skips rows outside the plan
+    (not a fixed-length scan), and stays in the copy. Both checks agree on
+    rejecting it.
     """
 
     def setUp(self) -> None:
@@ -176,8 +175,8 @@ class UnaFormulaNellaColonnaDOrdineDelXls(unittest.TestCase):
         self.cartella = Path(temporanea.name)
 
     def test_una_formula_sotto_l_ultima_riga_ordinata_ferma_la_compilazione(self) -> None:
-        # La formula sta nella riga 4 della colonna d'ordine; il piano ordina
-        # soltanto la riga 3.
+        # The formula sits in row 4 of the order column; the plan only
+        # orders row 3.
         celle = banco_noce.foglio_di_prova(
             guasto=banco_xls.formula(3, banco_noce.COLONNA_ORDINE, banco_xls.formula_numero(9.0)),
         )

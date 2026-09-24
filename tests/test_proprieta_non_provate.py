@@ -1,25 +1,24 @@
 #!/usr/bin/env python3
-"""Le quattro proprietà che il codice dichiara e nessun test dimostrava.
+"""Four properties the code claims in comments that no test protected.
 
-Vengono dal revisore d'integrità dei test del 14 agosto 2026 — quello che ha
-reso di più, perché le mutazioni verdi trovano i test che *sembrano* coprire e
-non coprono. Erano rimaste in coda come «minori», e minori lo sono: nessuna di
-loro è un difetto. Sono quattro affermazioni scritte nei commenti del programma
-che, se domani smettessero di essere vere, la suite non se ne accorgerebbe.
+Each one is a statement written in the program's own comments that, if it
+stopped being true tomorrow, the suite would not notice. None is a bug; they
+were simply uncovered.
 
-1. **`active_rows` richiude il documento.** Il commento dice perché conta: «su
-   Windows quel listino non si può più eliminare né sostituire», e
-   `catalog_search` chiama quei lettori **dentro** il servizio, non in un
-   sottoprocesso che muore. È un difetto già successo una volta.
-2. **Il writer dichiara il nome leggibile del fornitore**, non l'identificativo
-   tecnico: è il modo in cui `NUOVO_FORNITORE` è finito sotto gli occhi
-   dell'utente.
-3. **`copia_fedele` con quantità zero.** Il ramo è oggi irraggiungibile — chi
-   costruisce il piano scarta le righe a zero colli — ma il commento dichiara
-   quale regola vale se ci arrivasse, e vale la pena che sia quella scritta.
-4. **Un espositore senza pezzi dichiarati vale un pezzo**, ed è il ripiego
-   prudente: fa sembrare l'offerta più cara, non più conveniente. Con un numero
-   negativo la prudenza deve valere uguale.
+1. `active_rows` closes the document after reading it. This matters
+   because a file left open can't be deleted or replaced on Windows, and
+   `catalog_search` calls these readers inside the service process, not
+   in a subprocess that exits and releases the handle for free.
+2. The writer declares the supplier's display name, not its internal
+   identifier: this is what keeps a raw id like `NUOVO_FORNITORE` out of
+   user-facing text.
+3. `copia_fedele` with quantity zero: the branch is unreachable today —
+   whoever builds the order plan discards zero-carton rows — but the
+   comment states which rule applies if it were reached, and that rule is
+   worth protecting.
+4. A display with no declared unit count counts as one unit. This is
+   the conservative fallback: it makes the offer look more expensive, never
+   cheaper. A negative count must fall back the same way.
 """
 
 from __future__ import annotations
@@ -42,16 +41,15 @@ from build_review_data import display_offer  # noqa: E402
 
 
 class UnListinoLettoSiPuoAncoraCancellare(unittest.TestCase):
-    """La proprietà vera di `active_rows`: richiude il documento dopo averlo letto.
+    """The property `active_rows` must have: it closes the document after reading it.
 
-    Le prime due prove la misurano cancellando o sostituendo il file, cioè
-    come si misura su **Windows**: lì un file rimasto aperto non si può più
-    né eliminare né sostituire, e sono la prova del gesto vero quando girano
-    sul PC del negozio. Su macOS (e su Linux) `unlink()` e `replace()`
-    riescono comunque su un file aperto, quindi **fuori da Windows queste due
-    prove non possono fallire**, indipendentemente da come si comporta
-    davvero `active_rows`. La quarta prova, sotto, misura la stessa proprietà
-    in modo indipendente dal sistema operativo.
+    The first two tests check this by deleting or replacing the file, which
+    is how it matters on Windows: there, a file left open can't be deleted
+    or replaced, and this is the real-world case that occurs on the store
+    PC. On macOS and Linux `unlink()` and `replace()` succeed on an open
+    file regardless, so outside Windows these two tests can't fail no
+    matter what `active_rows` actually does. The fourth test below checks
+    the same property in an OS-independent way.
     """
 
     def setUp(self) -> None:
@@ -80,8 +78,8 @@ class UnListinoLettoSiPuoAncoraCancellare(unittest.TestCase):
         self.assertFalse(percorso.exists())
 
     def test_e_si_sostituisce_con_quello_della_settimana_dopo(self) -> None:
-        """È il gesto vero: il listino nuovo prende il posto del vecchio mentre
-        il servizio è acceso e quel documento l'ha già letto."""
+        """The real-world case: a new price list replaces the old one while
+        the service is running and has already read that file."""
 
         percorso = self.listino()
         nuovo = self.listino("listino_nuovo.xlsx")
@@ -92,9 +90,9 @@ class UnListinoLettoSiPuoAncoraCancellare(unittest.TestCase):
         self.assertTrue(percorso.is_file())
 
     def test_le_righe_sono_gia_tutte_lette_non_un_generatore(self) -> None:
-        """Un generatore pigro passa i test che lo scorrono subito e lascia il
-        file aperto per tutta la vita del processo: è esattamente il difetto di
-        prima, e si vede solo guardando che cosa viene restituito."""
+        """A lazy generator passes tests that iterate it right away while
+        leaving the file open for the rest of the process's life — the same
+        bug as above, visible only by checking the return type."""
 
         percorso = self.listino()
 
@@ -103,13 +101,13 @@ class UnListinoLettoSiPuoAncoraCancellare(unittest.TestCase):
         self.assertIsInstance(righe, list)
 
     def test_il_documento_resta_chiuso_dopo_la_lettura(self) -> None:
-        """Misura la chiusura senza dipendere da un comportamento di Windows.
+        """Checks the close without depending on Windows-specific behavior.
 
-        `_archive` è l'oggetto `zipfile.ZipFile` con cui openpyxl tiene aperto
-        l'.xlsx (che è tecnicamente uno zip): finché il documento è aperto il
-        suo `fp` — il lettore sul file — è vivo; una volta chiuso torna
-        `None`. È un attributo privato, e lo si usa perché openpyxl non
-        espone un modo pubblico per chiedere se un workbook è ancora aperto.
+        `_archive` is the `zipfile.ZipFile` openpyxl uses to keep the .xlsx
+        (which is technically a zip) open: while the document is open its
+        `fp` — the underlying file handle — is not `None`; once closed it
+        is. This is a private attribute, used because openpyxl exposes no
+        public way to ask whether a workbook is still open.
         """
 
         percorso = self.listino()
@@ -120,13 +118,13 @@ class UnListinoLettoSiPuoAncoraCancellare(unittest.TestCase):
 
 
 class IlNomeCheIlWriterDichiara(unittest.TestCase):
-    """Il nome leggibile del fornitore viaggia **dentro la regola di
-    scrittura**, e viene dal registro.
+    """The supplier's display name travels inside the write rule, sourced
+    from the adapter registry.
 
-    Serve perché il writer Node non legge il registro — la configurazione è il
-    suo unico ingresso dichiarato — e senza questo si ritrovava a stampare
-    l'identificativo tecnico, con l'underscore, nei messaggi e nei nomi dei file
-    d'ordine: è così che `NUOVO_FORNITORE` è finito sotto gli occhi dell'utente.
+    This matters because the Node writer never reads the registry — the
+    rule object is its only declared input — so without this it would print
+    the raw internal id, underscore and all, in messages and order file
+    names: that's how `NUOVO_FORNITORE` ended up in front of the user.
     """
 
     def setUp(self) -> None:
@@ -155,9 +153,9 @@ class IlNomeCheIlWriterDichiara(unittest.TestCase):
         return percorso
 
     def scrivi_registro(self, display_name: str | None) -> dict:
-        """Scrive l'adattatore nel registro. `display_name=None` lo dichiara
-        senza quella chiave — è il caso del fornitore imparato che il
-        registro non ha ancora imparato a chiamare per nome."""
+        """Write the adapter to the registry. `display_name=None` omits that
+        key — the case of a learned adapter the registry has no display
+        name for yet."""
 
         import json
 
@@ -193,25 +191,23 @@ class IlNomeCheIlWriterDichiara(unittest.TestCase):
         self.assertEqual(regola["display_name"], "Fornitore Nuovo")
 
     def test_senza_display_name_dichiarato_la_regola_porta_il_nome_leggibile(self) -> None:
-        """Il ripiego misurato nel punto in cui conta davvero: `source_rule()`.
+        """The fallback name, checked at the point where it actually matters: `source_rule()`.
 
-        La prova che stava qui prima (`assertNotIn("_", …)`) non poteva
-        fallire mai: usava la stessa preparazione della prova sopra, che
-        asserisce già l'uguaglianza esatta con `"Fornitore Nuovo"` — e
-        quell'uguaglianza implica da sola l'assenza del trattino. Era verde
-        per costruzione ogni volta che la prima lo era.
+        A version of this test relying on `assertNotIn("_", …)` could
+        never fail: it reused the same setup as the test above, whose exact
+        equality against `"Fornitore Nuovo"` already implies the absence of
+        an underscore. It was green by construction whenever the other test
+        was.
 
-        Il ripiego vero — che scatta quando il registro **non dichiara**
-        un `display_name` — è già provato altrove, a livello del solo nome:
-        `tests/test_web_app.py`, classe `IlRegistroEUnaVeritaSolaTests`
-        (`test_senza_dichiarazione_l_underscore_non_arriva_all_utente`), e
-        `tests/test_registro_impronte.py`, classe
-        `IlNomeDelFornitoreInOgniFrase`
-        (`test_chi_non_e_dichiarato_non_esce_con_gli_underscore` e
-        `test_le_frasi_del_lanciatore_usano_la_stessa_regola`). Quello che
-        mancava è lo stesso caso attraverso `source_rule()`: è l'unico punto
-        in cui il nome esce dentro la regola consegnata al writer Node, ed è
-        lì che `NUOVO_FORNITORE` era finito sotto gli occhi dell'utente.
+        The real fallback — which fires when the registry has no
+        `display_name` — is already covered elsewhere, at the level of the
+        name alone: `tests/test_web_app.py`
+        (`IlRegistroEUnaVeritaSolaTests`) and
+        `tests/test_registro_impronte.py` (`IlNomeDelFornitoreInOgniFrase`).
+        What was missing is the same case exercised through `source_rule()`
+        itself: the one place the name flows into the rule handed to the
+        Node writer, which is where `NUOVO_FORNITORE` ended up in front of
+        the user.
         """
 
         adattatore = self.scrivi_registro(None)
@@ -225,8 +221,9 @@ class IlNomeCheIlWriterDichiara(unittest.TestCase):
 
 
 class LaCopiaConQuantitaZero(unittest.TestCase):
-    """Il ramo `attesa == 0`: oggi non ci arriva nessuno, e la regola che vale
-    se ci arrivasse è dichiarata nel codice. Se cambiasse, adesso si vede."""
+    """The `attesa == 0` branch: unreachable today, but the rule that would
+    apply if it were reached is stated in the code. This test catches a
+    silent change to that rule."""
 
     def setUp(self) -> None:
         temporanea = tempfile.TemporaryDirectory()
@@ -257,8 +254,8 @@ class LaCopiaConQuantitaZero(unittest.TestCase):
         self.assertEqual(esito.quante_rifiutate, 0)
 
     def test_il_piano_chiede_zero_e_la_copia_mostra_altro(self) -> None:
-        """La copia deve mostrare quello che il piano chiede: si ferma, invece
-        di partire con una cella che non corrisponde."""
+        """The copy must match what the plan asked for: it stops rather than
+        ship with a cell that disagrees with the plan."""
 
         originale, copia = self.coppia(5)
 
@@ -270,10 +267,10 @@ class LaCopiaConQuantitaZero(unittest.TestCase):
 
 
 class UnEspositoreSenzaPezziDichiarati(unittest.TestCase):
-    """Il ripiego prudente: senza pezzi dichiarati l'espositore vale **un**
-    pezzo, così l'offerta sembra più cara e non più conveniente. Un numero
-    negativo è un dato altrettanto inutilizzabile, e deve ricevere la stessa
-    prudenza — non un fattore negativo, che ribalterebbe il confronto."""
+    """The conservative fallback: with no declared unit count, a display
+    counts as one unit, so the offer looks more expensive rather than
+    cheaper. A negative count is equally unusable data and must get the
+    same fallback, not a negative factor that would flip the comparison."""
 
     BASE = {
         "supplier": "larice",

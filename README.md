@@ -12,7 +12,7 @@ Built for a real household & personal-care store, where it is in weekly producti
 
 ![Choosing products and suppliers](docs/screenshots/compare.png)
 
-> Supplier names, products, barcodes and prices in this repository are fictional or anonymized. The code comments and the UI are in Italian, the language of the people who use and maintain the tool.
+> Supplier names, products, barcodes and prices in this repository are fictional or anonymized. The UI, the identifiers and the LLM prompts are in Italian, the language of the people who use the tool; comments and documentation are in English.
 
 ---
 
@@ -79,15 +79,31 @@ The line between code and model is explicit ([`references/decision-boundaries.md
 |---|---|---|
 | file recognition, full-sheet scanning, EAN normalization and matching, prices, discounts, VAT, pack sizes, totals, minimum-order thresholds, writing | judging whether a shortlisted candidate is *commercially the same product* when no EAN matches (brand, size, variant) | confirming AI matches below high confidence, choosing quantities, sending orders |
 
-### 3. AI where judgment is needed, and nowhere else
+### 3. Semantic matching: a deterministic shortlist, the model only as judge
 
-Only products that EAN matching can't resolve reach the model, and only together with a shortlist of pre-ranked candidates. The model (any model on OpenRouter, chosen in the settings) answers `ACCEPT`, `REJECT` or `UNRESOLVED`. `DA_VERIFICARE` ("to be checked") is a legitimate outcome, never forced into a guess. Several safeguards keep those answers honest:
+EAN barcodes settle most products. The rest (no EAN in the supplier's list, or one EAN on several rows) go through three stages with deliberately narrow jobs ([`references/matching-policy.md`](references/matching-policy.md)).
 
-- **A second, adversarial pass** tries to refute every acceptance before it counts ([`references/prompts/`](references/prompts)).
-- **A case fingerprint.** Each decision carries a hash of exactly what the model saw (item plus every candidate). A decision from another week's run, or one without a fingerprint, is refused and the item goes back to *to be checked*.
+**Shortlist, in code.** [`scripts/build_semantic_shortlists.py`](scripts/build_semantic_shortlists.py) normalizes descriptions (uppercase, accents stripped, stop words removed, aliases such as `DEODORANTE → DEO`), pulls candidates from a per-supplier inverted token index and ranks them with a fixed formula:
+
+```
+score = 0.45 · token Jaccard + 0.35 · sequence similarity + 0.20 · size/pack agreement
+        − 0.35 when the sizes or pack counts conflict
+```
+
+Sizes and pack counts come from a hand-written parser that reads both `500 ML` and `ML.500`, `18PZ` and `X 18`, and deliberately ignores what it could misread (weight ranges, size grades like `5°MIS.`, formulas like `2X13=26`, ages): a false conflict penalizes exactly the right row, while an unread number changes nothing. Every row that shares the item's EAN is forced into the shortlist, because on 1,160 cases with a known answer, description scoring alone missed the right row 146 times.
+
+**Judgment, by the model.** [`app/ai_client.py`](app/ai_client.py) sends each case with its shortlist to a model on OpenRouter (chosen in the settings), which answers `ACCEPT`, `REJECT` or `UNRESOLVED` for one candidate under a strict JSON schema. The model never searches the catalog and never sees EANs or prices: only descriptions and scores. It can reject every candidate, and `DA_VERIFICARE` ("to be checked") is a legitimate outcome, never forced into a guess.
+
+**Safeguards around the answers:**
+
+- **An adversarial second pass** tries to refute every acceptance before it counts ([`references/prompts/`](references/prompts)).
+- **A case fingerprint.** Each decision carries a hash of exactly what the model saw (item plus every candidate, in order). The merge step ([`scripts/merge_match_decisions.py`](scripts/merge_match_decisions.py)) recomputes it, and a decision from another week's run, or one without a fingerprint, is refused: the item goes back to *to be checked*.
 - **Provenance.** Model, prompt version and adversarial-prompt version are stored with every decision.
-- **An answer memory** keyed by the fingerprint, so an unchanged case isn't paid for twice, plus hard caps on spend and on the number of calls per run.
-- **Confidence-gated confirmation.** An `ACCEPT` at high confidence that survives the adversarial pass goes straight into the comparison, because a person reviews the orders before sending them anyway. Everything else waits for a human decision. On a benchmark of three independent runs of 150 cases each, high-confidence acceptances were wrong zero times. Confirmations and explicit "not the same product" rejections are remembered across weeks by product identity (EAN + normalized name), not by row number.
+- **An answer memory**, so an unchanged case isn't paid for twice. Its key hashes the model, the prompt *text* (not just its version label, so editing a prompt in place can't serve stale answers) and the full case.
+- **Hard caps** on spend and on calls per run, with the expected cost of in-flight calls reserved up front so a parallel batch can't overshoot the budget together.
+- **Typed failure states.** No key, network error, spending cap, invalid schema, or a reasoning model that spent its whole token budget thinking and returned nothing (`TRONCATA`): each becomes a declared state and the item stays *to be checked*, never a silent "no match".
+- **Confidence-gated confirmation.** An `ACCEPT` at high confidence that survives the adversarial pass goes straight into the comparison, because a person reviews the orders before sending them anyway. Everything else waits for a human decision. With the adversarial pass, three independent runs of a 150-case benchmark produced zero wrong high-confidence acceptances. A match propagated to another supplier through a shared EAN is capped at medium confidence and always asks.
+- **Memory by product, not by row.** Confirmations and explicit "not the same product" rejections are stored in an append-only SQLite history keyed by product identity (supplier, EAN, normalized name), because row positions don't survive a week: between two real exports, 449 of 457 row-based ids pointed to a different item.
 
 ### 4. Displays, promotions and thresholds
 
@@ -102,6 +118,21 @@ The order quantities are written into a **copy** of each supplier's original fil
 - After writing an `.xlsx` copy, [`app/copia_fedele.py`](app/copia_fedele.py) re-reads the original and the copy and **verifies that every cell outside the order column is unchanged**. A copy that fails the check is discarded, not delivered.
 
 All state files are written atomically (temp file → `fsync` → `os.replace`), so a crash can't leave a half-written file behind.
+
+## Built for a non-technical weekly user
+
+The person who runs the comparison every week is not a developer, so most of the interface work went into making each step obvious and each mistake recoverable. All of it lives in [`app/static/app.js`](app/static/app.js) and [`app/server.py`](app/server.py) unless noted.
+
+- **A three-step flow that is always visible.** "Importa i dati" → "Scegli prodotti e fornitori" → "Riepilogo e compilazione" (import, choose, summary and order files), each step marked done as it completes (`renderStepper`).
+- **Import feedback in plain words.** Every uploaded file gets a card saying which format it was recognized as, which columns were read, and how many rows were set aside and why (`motivoDiScarto`). When the documents change after a comparison, a banner says which suppliers' prices moved and leads back to the recompute step.
+- **Unknown files are taught once.** A guided mapping (header row, columns, live preview and validation) turns an unrecognized layout into a learned adapter, used automatically from the next week on (`renderSchemaMappingWizard`, [`app/schema_mapping.py`](app/schema_mapping.py)).
+- **Minimum orders tracked while quantities are edited.** Each supplier's running total is checked against its minimum order as quantities change ("Mancano € … al minimo d'ordine", € … short of the minimum).
+- **Moving a whole order to another supplier, with a preview.** "Sposta tutto su un altro fornitore" shows the resulting spend, pieces, minimum orders and threshold free goods gained or lost before anything changes.
+- **Nothing silently dropped.** Products that no supplier can provide go into a separate "Prodotti da reperire" (to be sourced) file, written only when there is something in it ([`app/da_reperire.py`](app/da_reperire.py)). Products the reorder list missed can be added from a search across all price lists ("+ Aggiungi un prodotto").
+- **Answers that stick.** Confirming or rejecting a proposed match is remembered by product, so the same question doesn't come back next week. Excluding a product, zeroing quantities or moving an order can be undone with one click ("Rimetti nell’ordine", put it back), and deleting a file asks first.
+- **Work is never lost.** Edits are saved automatically, each save carries a version so a stale tab can't overwrite newer work, and starting a new weekly comparison restores the previous state if anything fails on the way.
+- **The loop is closed.** Orders compiled in earlier weeks and not yet marked as received come back at the top of the page with a one-click "Sì, ricevuta" (yes, received).
+- **Failures are explained, not hidden.** When the AI step, the catalog search or a save can't run, the page says what is unavailable and what still works. The launcher updates the program on start-up, falls back to the local copy when offline, and `--check` prints a readiness diagnosis.
 
 ## Screenshots
 
@@ -124,8 +155,8 @@ All state files are written atomically (temp file → `fsync` → `os.replace`),
 
 - **Zero-install deployment.** The only runtime dependencies are Python with `openpyxl` (the single line in `requirements.txt`) and Node for the `.xlsx` writer, with no npm packages at runtime. The Windows launcher ([`AVVIA_COMPARATORE.ps1`](AVVIA_COMPARATORE.ps1)) checks the runtimes, updates the program from its git remote on start-up, and opens the browser. `--check` prints the diagnosis without starting anything.
 - **CI on Windows.** The full suite runs on `windows-latest` with the same Python and Node versions as the store PC, because that is where the code actually runs. The browser tests run on Ubuntu ([`.github/workflows/prove.yml`](.github/workflows/prove.yml)).
-- **No framework.** The server is the standard library's `ThreadingHTTPServer` with about 30 JSON routes. The UI is plain HTML, CSS and ES modules.
-- **Local only.** The comparison app binds to `127.0.0.1`. Apart from the launcher's git update, its only outbound call is to OpenRouter, and only if an API key is configured. The scraper skeleton described below is a separate, stand-alone tool. Without one, EAN matching, displays, promotions and writing all still work, and the AI step is reported as skipped.
+- **No framework.** The server is the standard library's `ThreadingHTTPServer` with a few dozen JSON routes. The UI is plain HTML, CSS and ES modules.
+- **Local only.** The comparison app binds to `127.0.0.1`. Apart from the launcher's git update, its only outbound call is to OpenRouter, and only if an API key is configured. Without a key, EAN matching, displays, promotions and writing all still work, and the AI step is reported as skipped. The scraper skeleton described below is a separate, stand-alone tool.
 
 ## Try it
 

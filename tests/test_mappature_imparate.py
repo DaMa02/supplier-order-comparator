@@ -1,17 +1,17 @@
-"""Le quattro cose che la revisione del 6 settembre 2026 ha trovato qui.
+"""Regression coverage for the learned-adapter path: what the program knows
+about a supplier it has learned, and who tells it.
 
-Stanno insieme perche' partono tutte dallo stesso punto — che cosa il
-programma sa di un fornitore imparato, e chi glielo racconta:
-
-* **R12** chi legge il registro lo legge da `registro`. Il preparatore ne
-  apriva un file solo, e per un id imparato (`betulla_v1__locale`) non trovava
-  niente; il catalogo si leggeva lo spedito per conto suo;
-* **R11** una variante di BETULLA o di LARICE imparata dalla mappatura guidata
-  indica le colonne **per nome**, e i lettori dedicati leggono per posizione:
-  la settimana dopo il ricalcolo si fermava;
-* **R4** la colonna «Disponibilita» si poteva mappare, e nessuno la leggeva:
-  le righe con «NO» restavano ordinabili;
-* **R5** un prezzo scritto «1.25» diventava 125, senza dirlo a nessuno.
+- Anything that reads the adapter registry reads it through `registro`, not by
+  opening a registry file directly; a learned id (e.g. `betulla_v1__locale`)
+  only exists in the learned file, not the shipped one.
+- A BETULLA/LARICE variant learned from the guided mapping page names its
+  columns by header text, while the dedicated readers expect column
+  positions; the learned mapping must be resolved to positions before reaching
+  them.
+- An "Availability" column can be mapped, and its values must be interpreted
+  (a row marked unavailable must not stay orderable).
+- A price written "1.25" (dot, two decimals) must not be read as 125 by the
+  Italian-number parser.
 """
 
 from __future__ import annotations
@@ -46,14 +46,14 @@ REGISTRO_VERO = json.loads((ROOT / "references" / "adapters.json").read_text(enc
 BETULLA_SPEDITO = next(voce for voce in REGISTRO_VERO["adapters"] if voce["id"] == "betulla_v1")
 GESTIONALE_SPEDITO = next(voce for voce in REGISTRO_VERO["adapters"] if voce["id"] == "gestionale_v1")
 
-# L'intestazione vera del listino BETULLA: le obbligatorie che il registro
-# dichiara (`cessione`, `codart`, `ean`, `ordine`, `pzct`) devono esserci
-# davvero, altrimenti a fermare la lettura sarebbe un altro controllo.
+# The real BETULLA price-list header: the required columns declared by the
+# registry (`cessione`, `codart`, `ean`, `ordine`, `pzct`) must actually be
+# present, or a different check would stop the read instead.
 INTESTAZIONE_BETULLA = ["EAN", "CodArt", "ORDINE", "Descr.Commerciale", "PzCt", "Cessione", "Pedana", "Iva"]
 RIGA_BETULLA = ["8000000000001", "1300634", None, "VAPO Emanatore", 12, 3.98, 9.99, 22]
 
-# La mappatura come la scrive la pagina quando l'intestazione e' univoca:
-# per NOME, non per lettera (`schema_mapping.specifica_colonna`).
+# The mapping as the page writes it when the header is unambiguous: by
+# column NAME, not by letter (`schema_mapping.specifica_colonna`).
 COLONNE_PER_NOME = {
     "ean": "EAN",
     "supplier_code": "CodArt",
@@ -75,7 +75,7 @@ def salva(percorso: Path, righe: list[list[object]], foglio: str = "Listino") ->
 
 
 def betulla_imparato() -> dict:
-    """La voce che `impara_adattatore` scrive confermando una variante di BETULLA."""
+    """The entry `impara_adattatore` writes when a BETULLA variant is confirmed."""
 
     return {
         "id": "betulla_v1__locale",
@@ -104,7 +104,8 @@ def betulla_imparato() -> dict:
 
 
 class IlRegistroSiLeggeDaRegistro(unittest.TestCase):
-    """R12 — i due file li fonde `registro`, e nessuno se li apre per conto suo."""
+    """`registro` merges the shipped and learned registry files; nothing else
+    opens either one directly."""
 
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -120,8 +121,9 @@ class IlRegistroSiLeggeDaRegistro(unittest.TestCase):
             )
 
     def test_la_mappatura_spedita_non_guarda_quella_imparata(self) -> None:
-        # E' la ragione per cui il catalogo la vuole: la mappatura confermata
-        # in pagina si costruisce da zero e non porta `exclude_rows`.
+        # This is why the catalog wants the shipped mapping specifically: a
+        # mapping confirmed in the page is built from scratch and carries no
+        # `exclude_rows`.
         self.scrivi_registri(
             [{"id": "noce_xls_v1", "field_mapping": {"columns": {"ean": 1}, "exclude_rows": [{"column": 2}]}}],
             [{"id": "noce_xls_v1", "field_mapping": {"columns": {"ean": 9}}}],
@@ -133,8 +135,8 @@ class IlRegistroSiLeggeDaRegistro(unittest.TestCase):
         self.assertTrue(spedita.get("exclude_rows"))
 
     def test_un_registro_che_non_si_legge_non_ha_mappature_spedite(self) -> None:
-        # La stessa risposta di prima: un registro rotto non deve trasformare
-        # il visualizzatore in una pagina di errori.
+        # Same fallback as above: a broken registry must not turn the catalog
+        # viewer into an error page.
         self.assertEqual(registro.mappatura_spedita("betulla_v1", self.root / "manca.json"), {})
         (self.root / "rotto.json").write_text("{", encoding="utf-8")
         self.assertEqual(registro.mappatura_spedita("betulla_v1", self.root / "rotto.json"), {})
@@ -156,7 +158,7 @@ class IlRegistroSiLeggeDaRegistro(unittest.TestCase):
 
 
 class IlPreparatoreEIlRegistroImparato(unittest.TestCase):
-    """R12 e R11 — la fase 3 su un BETULLA imparato la settimana prima."""
+    """Pipeline phase 3 reading a BETULLA adapter learned in an earlier run."""
 
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -164,7 +166,7 @@ class IlPreparatoreEIlRegistroImparato(unittest.TestCase):
         self.root = Path(self.temp.name)
 
     def esegui(self, imparato: dict, decisione: dict) -> dict:
-        """Fa girare la fase 3 su un gestionale e un BETULLA, e rende l'audit."""
+        """Run phase 3 on a management export and a BETULLA file, return the audit."""
 
         master = salva(self.root / "gestionale.xlsx", [
             ["C", "8000000000001", "", "Prodotto Alfa", "PZ", 1, 1, "2,50", "", 22],
@@ -192,9 +194,10 @@ class IlPreparatoreEIlRegistroImparato(unittest.TestCase):
         return json.loads((uscita / "normalized_sources.json").read_text(encoding="utf-8"))
 
     def test_il_preparatore_trova_l_adattatore_imparato(self) -> None:
-        # Il fornitore lo dice l'adattatore, non la decisione: leggendo il solo
-        # file spedito, `betulla_v1__locale` non c'era e la fase 3 si fermava con
-        # «supplier_id mancante» su un documento che il registro conosce.
+        # The adapter, not the AI decision, names the supplier: reading only
+        # the shipped file, `betulla_v1__locale` doesn't exist there, and
+        # phase 3 would fail with "missing supplier_id" on a file the
+        # registry actually recognizes.
         imparato = betulla_imparato()
         imparato["field_mapping"]["columns"] = {"unit_price_net": "F", "description": "D"}
 
@@ -207,9 +210,9 @@ class IlPreparatoreEIlRegistroImparato(unittest.TestCase):
         self.assertEqual(normalizzati["betulla"][0]["unit_price_net"], "3.9800")
 
     def test_una_variante_imparata_di_betulla_si_rilegge_la_settimana_dopo(self) -> None:
-        # Le colonne indicate per nome arrivano al lettore dedicato risolte in
-        # posizioni: senza, la lettura si fermava con «La colonna indicata per
-        # description ("Descr.Commerciale") non è una colonna valida».
+        # Columns named by header text must reach the dedicated reader already
+        # resolved to positions; otherwise the read fails with "the column
+        # given for description ('Descr.Commerciale') is not a valid column".
         imparato = betulla_imparato()
 
         normalizzati = self.esegui(imparato, {
@@ -224,7 +227,7 @@ class IlPreparatoreEIlRegistroImparato(unittest.TestCase):
 
 
 class ColonnePerNomeDiUnaVarianteImparata(unittest.TestCase):
-    """R11 — dove i nomi diventano posizioni, e che cosa succede se non lo fanno."""
+    """Where column names get resolved to positions, and what happens when they don't."""
 
     def test_i_nomi_diventano_le_posizioni_dell_adattatore_imparato(self) -> None:
         decisione = {"field_mapping": {"columns": dict(COLONNE_PER_NOME), "order_column": "C"}}
@@ -269,9 +272,9 @@ class ColonnePerNomeDiUnaVarianteImparata(unittest.TestCase):
         self.assertEqual(righe[0]["description"], "VAPO Emanatore")
 
     def test_anche_il_catalogo_rilegge_la_variante_imparata(self) -> None:
-        # Il visualizzatore legge con lo stesso criterio della catena: se le
-        # posizioni le trova solo la catena, BETULLA resta nel confronto e
-        # sparisce dalla ricerca prodotti — il difetto del 21 agosto 2026.
+        # The catalog viewer must resolve columns the same way the pipeline
+        # does; if only the pipeline can, BETULLA stays in the comparison but
+        # drops out of product search.
         with tempfile.TemporaryDirectory() as temporaneo:
             root = Path(temporaneo)
             percorso = salva(root / "betulla.xlsx", [INTESTAZIONE_BETULLA, RIGA_BETULLA])
@@ -294,7 +297,7 @@ class ColonnePerNomeDiUnaVarianteImparata(unittest.TestCase):
 
 
 class LaColonnaDisponibilita(unittest.TestCase):
-    """R4 — mappare «Disponibilita» senza dire che cosa significa non basta."""
+    """Mapping an "Availability" column isn't enough without saying what its values mean."""
 
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -358,15 +361,15 @@ class LaColonnaDisponibilita(unittest.TestCase):
 
 
 class IlPrezzoScrittoColPunto(unittest.TestCase):
-    """R5 — «1.25» non e' milleduecentocinquanta, e non e' nemmeno 125."""
+    """"1.25" is neither one thousand two hundred fifty nor 125."""
 
     def test_la_virgola_resta_il_separatore_dei_decimali(self) -> None:
         self.assertEqual(prepare_sources.decimal_value("1,25", italian=True), Decimal("1.25"))
         self.assertEqual(prepare_sources.decimal_value("12.345,50", italian=True), Decimal("12345.50"))
 
     def test_un_punto_con_due_cifre_dietro_non_si_legge_invece_di_moltiplicare(self) -> None:
-        # Meglio una riga fra gli scarti contati come SENZA_PREZZO che un
-        # prezzo di 125 euro al posto di 1,25 che vince il confronto.
+        # Better a row discarded as SENZA_PREZZO than a price of 125 instead
+        # of 1.25 that wins the comparison.
         self.assertIsNone(prepare_sources.decimal_value("1.25", italian=True))
         self.assertIsNone(prepare_sources.decimal_value("1.2", italian=True))
 

@@ -1,24 +1,23 @@
 #!/usr/bin/env python3
-"""Modello da copiare per lo scraper di un fornitore nuovo.
+"""Template to copy for a new supplier's scraper.
 
-Si copia questo file in `scraper_<fornitore>.py`, si riempiono le tre parti
-segnate con `DA SCRIVERE` e si avvia quello. Tutto il resto — sessione,
-ripresa, CSV, metadati — sta in `scraper_fornitore.py` e non va ricopiato.
+Copy this file to `scraper_<fornitore>.py`, fill in the three parts marked
+`DA SCRIVERE` and run that. Everything else — session, resuming, CSV,
+metadata — lives in `scraper_fornitore.py` and shouldn't be copied.
 
-Cosi' com'e' **non funziona di proposito**: i tre metodi sollevano un errore
-che dice quale pezzo manca. Serve a non avere in giro un file che sembra
-pronto e invece scarica pagine d'errore.
+As it stands, it doesn't work on purpose: the three methods raise an
+error naming the missing piece. That keeps a file that looks ready from
+sitting around silently downloading error pages instead.
 
-Il giro, prima di scrivere una riga di codice:
+Before writing a line of code:
 
-1. entra nel sito col browser e arriva all'elenco dei prodotti;
-2. apri gli strumenti per sviluppatori, scheda Rete, e cambia pagina
-   nell'elenco: quasi sempre la pagina non ricarica tutto, ma chiama un
-   indirizzo che restituisce le sole righe. **Quello** e' l'indirizzo da
-   chiamare, non la pagina intera;
-3. guarda che cosa viene mandato al login (campi nascosti compresi) e che
-   cosa cambia nell'indirizzo delle righe quando cambi pagina;
-4. riempi le tre parti qui sotto e prova con `--max-pagine 2 --reset`.
+1. log into the site in a browser and reach the product listing;
+2. open dev tools, Network tab, and change pages in the listing: usually
+   the page doesn't reload everything but calls an endpoint that returns
+   just the rows. That endpoint is the one to call, not the full page;
+3. look at what's sent to the login (hidden fields included) and what
+   changes in the row endpoint's address when the page changes;
+4. fill in the three parts below and try with `--max-pagine 2 --reset`.
 """
 
 from __future__ import annotations
@@ -37,7 +36,7 @@ from scraper_fornitore import (
 )
 
 
-# DA SCRIVERE — gli indirizzi del sito.
+# DA SCRIVERE — the site's endpoints.
 INDIRIZZO_BASE = "https://esempio.invalid"
 INDIRIZZO_ACCESSO = f"{INDIRIZZO_BASE}/login"
 INDIRIZZO_ELENCO = f"{INDIRIZZO_BASE}/catalogo"
@@ -45,14 +44,14 @@ INDIRIZZO_RIGHE = f"{INDIRIZZO_BASE}/catalogo/righe"
 
 
 class SitoDaCompletare(SitoFornitore):
-    # Identificativo breve del fornitore, in minuscolo: finisce nel nome del
-    # CSV (`catalogo_<nome>.csv`) e nelle variabili d'ambiente delle
-    # credenziali (`<NOME>_UTENTE`, `<NOME>_PASSWORD`).
+    # Short lowercase supplier id: goes into the CSV filename
+    # (`catalogo_<nome>.csv`) and the credential environment variables
+    # (`<NOME>_UTENTE`, `<NOME>_PASSWORD`).
     nome = "fornitore"
 
-    # Le colonne del CSV. Sono anche le chiavi che `pagina()` deve
-    # restituire. Conviene tenere `pagina_catalogo`: e' il modo per tornare
-    # sulla riga giusta quando un controllo non torna.
+    # The CSV columns. Also the keys `pagina()` must return. Worth keeping
+    # `pagina_catalogo`: it's how to trace back to the right row when a
+    # check doesn't add up.
     campi_csv = (
         "pagina_catalogo",
         "ean",
@@ -65,15 +64,14 @@ class SitoDaCompletare(SitoFornitore):
 
     righe_per_pagina = 50
 
-    # -- 1. l'accesso -------------------------------------------------------
+    # -- 1. login -------------------------------------------------------
 
     def accedi(self, cliente: ClienteHttp, credenziali: Credenziali) -> None:
-        """DA SCRIVERE: manda il form di login e controlla che sia andato.
+        """DA SCRIVERE: submit the login form and check it worked.
 
-        Lo schema qui sotto vale per i gestionali web su ASP.NET WebForms,
-        che sono la maggioranza: si legge la pagina, si rimandano indietro
-        tutti i campi nascosti come sono arrivati, e si aggiungono utente,
-        password e il nome del pulsante.
+        The pattern below fits ASP.NET WebForms portals, which are the
+        majority: read the page, send back every hidden field as received,
+        and add username, password and the submit button's name.
         """
 
         html = cliente.leggi(INDIRIZZO_ACCESSO)
@@ -90,9 +88,9 @@ class SitoDaCompletare(SitoFornitore):
         valori[pulsante["name"]] = pulsante.get("value", "Accedi")
         risposta = cliente.invia(INDIRIZZO_ACCESSO, valori)
 
-        # Il controllo va fatto su qualcosa che compare SOLO da dentro: un
-        # login fallito che prosegue riempie il CSV di pagine d'errore, e
-        # nessuno se ne accorge fino a quando non si guarda il file.
+        # The check must be on something that appears ONLY once logged in:
+        # a failed login that proceeds fills the CSV with error pages, and
+        # nobody notices until they look at the file.
         if "esci" not in risposta.lower():
             raise ScraperError("accesso non riuscito: controlla le credenziali o l'account")
 
@@ -101,14 +99,13 @@ class SitoDaCompletare(SitoFornitore):
             "poi togli questa riga"
         )
 
-    # -- 2. quante pagine ci sono -------------------------------------------
+    # -- 2. how many pages there are -------------------------------------------
 
     def panoramica(self, cliente: ClienteHttp) -> Panoramica:
-        """DA SCRIVERE: leggi dal sito quante pagine, e se lo dice quanti articoli.
+        """DA SCRIVERE: read from the site how many pages, and the item count if given.
 
-        Non scrivere qui un numero fisso: il catalogo cresce, e uno scraper
-        che si ferma a un numero scritto a mano smette di prendere la coda
-        senza dirlo a nessuno.
+        Don't hardcode a number here: the catalog grows, and a scraper
+        pinned to a hand-written number silently stops picking up new pages.
         """
 
         raise NotImplementedError(
@@ -117,16 +114,16 @@ class SitoDaCompletare(SitoFornitore):
             "Panoramica(pagine=..., articoli_dichiarati=...)"
         )
 
-    # -- 3. le righe di una pagina ------------------------------------------
+    # -- 3. a page's rows ------------------------------------------
 
     def pagina(self, cliente: ClienteHttp, numero: int) -> list[dict[str, Any]]:
-        """DA SCRIVERE: scarica una pagina e traducila nelle chiavi di `campi_csv`.
+        """DA SCRIVERE: download a page and map it into `campi_csv` keys.
 
-        `righe_di_tabella` restituisce le celle come testo, riga per riga:
-        resta da saltare l'intestazione e dare un nome alle colonne. Il
-        numero di colonne va controllato, non dato per buono: una riga corta
-        e' una riga d'intestazione o un separatore, e se finisce nel CSV
-        sposta tutti i valori di una casella.
+        `righe_di_tabella` returns the cells as text, row by row: what's
+        left is skipping the header row and naming the columns. The number
+        of columns must be checked, not assumed: a short row is a header or
+        separator row, and if it ends up in the CSV it shifts every value
+        one column over.
         """
 
         html = cliente.leggi(f"{INDIRIZZO_RIGHE}?pagina={numero}")

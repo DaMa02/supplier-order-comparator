@@ -1,12 +1,10 @@
 #!/bin/bash
-# ---------------------------------------------------------------------------
-# Avvio del comparatore su macOS: trova un Python adatto (comune.sh) e avvia
-# app/launcher.py dalla radice del repository, sulla porta 8765.
-# ---------------------------------------------------------------------------
+# macOS startup: finds a suitable Python (comune.sh) and launches
+# app/launcher.py from the repository root, on port 8765.
 
 main() {
     qui="$(cd "$(dirname "$0")" && pwd)"
-    # avvio/macos → avvio → la radice del repository
+    # avvio/macos -> avvio -> repository root
     BASE="$(cd "$qui/../.." && pwd)"
 
     # shellcheck source=comune.sh

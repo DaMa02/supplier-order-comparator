@@ -1,28 +1,21 @@
-"""Che cosa è un'offerta, e chi lo decide.
+"""Single source of truth for what an offer is: who it belongs to, whether it can
+be ordered, and what it costs per piece.
 
-Un'offerta è la riga con cui un fornitore dice a che prezzo porta un articolo.
-Tre domande su di lei tornano dappertutto nel programma — **di chi è**,
-**si può ordinare** e **quanto costa al pezzo** — e fino al 20 agosto 2026 la
-seconda aveva un'autorità qui e **due copie scritte a mano**: una in
-`server._offerta_piu_conveniente`, una in `pipeline_jobs._ripulisci_stato`,
-cioè proprio la funzione che decide quali quantità azzerare dopo un ricalcolo.
+Answering them from two hand-maintained copies — one in
+`server._offerta_piu_conveniente`, one in `pipeline_jobs._ripulisci_stato` (the
+function that decides which quantities to zero out after a recompute) — is
+fragile: a rule added to one and missed in the other produces a recompute that
+fails to zero a quantity the compilation then rejects, with the symptom
+surfacing elsewhere.
 
-Il docstring di `_ripulisci_stato` dichiara che deve «seguire la stessa riga di
-confine» di `validate_snapshot`: un accordo tenuto in piedi a mano fra copie.
-Il giorno in cui si aggiunge una condizione — per esempio: un'offerta senza
-`sourceRow` non è utilizzabile — chi la scrive nel servizio e la dimentica
-nella catena ottiene un ricalcolo che NON azzera una quantità su un'offerta che
-la compilazione poi rifiuta, e il sintomo si vede una settimana dopo e altrove.
+This module is the single authority, following the same pattern as `registro`,
+`consegna` and `conferme`. It imports nothing from `server` or `pipeline_jobs`;
+they import from it, so no import cycle can form.
 
-Da qui questo modulo, che è la strada già battuta da `registro`, `consegna` e
-`conferme`: **una** autorità, importata da chi la usa. Non importa niente da
-`server` né da `pipeline_jobs` — sono loro a importare lui — così non può
-nascere un anello.
-
-⚠ I nomi restano quelli che avevano in `server.py`. Sono in inglese e il
-progetto scrive in italiano: qui però non è stato scritto niente di nuovo, è
-uno spostamento, e ribattezzare quattro funzioni nello stesso commit avrebbe
-nascosto nel rumore l'unica cosa da leggere — che il corpo non è cambiato.
+Function names are kept as they were in `server.py` (English, unlike the rest
+of the project's Italian) since this is a move, not a rewrite: renaming them in
+the same commit would bury the one fact worth checking — that the bodies are
+unchanged.
 """
 
 from __future__ import annotations
@@ -31,13 +24,13 @@ from typing import Any
 
 
 def numero(value: Any) -> float | None:
-    """Un numero, o `None` se quel valore non lo è.
+    """Parse a value as a number, or return `None` if it isn't one.
 
-    Sta qui e non accanto a chi la usa perché `offer_pricing` non può leggere
-    un prezzo senza di lei: `server.py` la riespone come `number`, quindi il
-    parser dei numeri del servizio e quello dell'offerta sono lo stesso, non
-    due che si somigliano.  `True` non è 1: un campo booleano finito dove ci
-    vuole un prezzo è un dato sbagliato, non il numero uno.
+    Lives here rather than next to its caller because `offer_pricing` depends
+    on it; `server.py` re-exports it as `number`, so the service and the offer
+    module share one number parser instead of two that merely look alike.
+    `True` is rejected rather than read as 1: a boolean field where a price is
+    expected is bad data, not the number one.
     """
 
     if value in (None, "") or isinstance(value, bool):
@@ -56,7 +49,7 @@ def offer_supplier_id(offer: Any) -> str:
 
 
 def find_offer(product: Any, supplier_id: str) -> dict[str, Any] | None:
-    """Offerta di un fornitore su un prodotto, la prima se il listino la ripete."""
+    """Return a supplier's offer on a product, the first one if the price list repeats it."""
 
     if not isinstance(product, dict) or not supplier_id:
         return None
@@ -67,38 +60,35 @@ def find_offer(product: Any, supplier_id: str) -> dict[str, Any] | None:
 
 
 def offer_is_available(offer: Any) -> bool:
-    """Un'offerta assente o dichiarata non disponibile non e' ordinabile.
+    """An offer that is missing or explicitly marked unavailable cannot be ordered.
 
-    Il campo mancante vale disponibile: i listini piu' vecchi non lo scrivono.
-
-    ⚠ È l'unica risposta a «si può ordinare», e va chiamata anche dove la riga
-    sarebbe di sette caratteri: il costo di riscriverla non è la riga, è che il
-    giorno in cui la regola cresce una delle copie resta indietro in silenzio.
+    A missing field counts as available: older price lists never write it.
+    This is the single answer to "can it be ordered" and should be called even
+    where inlining the check would be shorter — a second copy is the risk, not
+    the line count.
     """
 
     return isinstance(offer, dict) and offer.get("available") is not False
 
 
 def offer_pricing(offer: Any) -> dict[str, float] | None:
-    """Fattore e prezzi netti di un'offerta, oppure None se non sono utilizzabili.
+    """Return an offer's factor and net prices, or `None` if they aren't usable.
 
-    factor sono i pezzi contenuti nell'unita' d'ordine; per un espositore sono i
-    pezzi che l'espositore contiene, non 1 — l'unita' d'ordine e' l'espositore,
-    ma la merce consegnata sono i pezzi. unitPriceNet e' il prezzo al pezzo,
-    orderUnitPriceNet il prezzo del collo (o dell'espositore intero).
+    `factor` is the number of pieces contained in the order unit; for a
+    display it's the pieces the display contains, not 1 — the order unit is
+    the display, but what gets delivered is pieces. `unitPriceNet` is the
+    price per piece, `orderUnitPriceNet` the price of the carton (or of the
+    whole display).
 
-    E' lo stesso contratto per ogni tipo di articolo, ed e' quello che rende
-    confrontabili le offerte: chi sceglie la «Migliore alternativa» ordina su
-    unitPriceNet, e su un espositore quel numero dev'essere il prezzo del pezzo.
-    Il produttore di questi campi e' `display_offer` in
-    `scripts/build_review_data.py`, che fino al 14 agosto 2026 scriveva `1` e il
-    prezzo dell'espositore intero.
+    This contract is the same for every item type, which is what makes offers
+    comparable: picking the "best alternative" orders on `unitPriceNet`, and
+    for a display that number must be the per-piece price. These fields are
+    produced by `display_offer` in `scripts/build_review_data.py`.
 
-    ⚠ Le tre catene con `or` qui sotto trattano uno `0` lecito come un campo
-    assente. Oggi non morde perche' `catalog_search._offer` scarta gia' i
-    prezzi `<= 0` prima di arrivare qui, cioe' la difesa e' a monte e non nel
-    punto che legge; i nomi buoni e quelli tollerati stanno in
-    `references/offerta.md`.
+    The `or` chains below treat a legitimate `0` as a missing field. This is
+    safe today because `catalog_search._offer` already discards prices `<= 0`
+    upstream, before they reach here; accepted and tolerated field names are
+    listed in `references/offerta.md`.
     """
 
     if not isinstance(offer, dict):
@@ -115,15 +105,12 @@ def offer_pricing(offer: Any) -> dict[str, float] | None:
     return {"factor": factor, "unitPriceNet": unit_price, "orderUnitPriceNet": order_price}
 
 
-# Lo stato di un'offerta che chi ordina ha rifiutato: «non e' lo stesso
-# articolo».  Sta qui, con le altre risposte a «si puo' ordinare», e non in
-# `server.py`: lo SCRIVE il servizio e lo LEGGE `da_reperire.motivo()`, e due
-# copie della stessa stringa vogliono dire che il giorno in cui una cambia il
-# motivo scritto accanto al prodotto torna a dire «non ce l'ha nessuno» su una
-# riga che invece e' stata rifiutata da chi ordina — cioe' la sola cosa che
-# quella colonna doveva saper distinguere.
+# Status of an offer the operator rejected as "not the same item". Lives here,
+# with the other answers to "can it be ordered", rather than in `server.py`:
+# the service WRITES it and `da_reperire.motivo()` READS it, so a single
+# source keeps the reason column from reverting to "no supplier has it" on a
+# row the operator actually rejected.
 #
-# La forma e' quella degli altri stati del confronto (`EAN_ESATTO`,
-# `SEMANTICO_PROPOSTO`, `SEMANTICO_CONFERMATO_UTENTE`): il negativo si legge
-# accanto al suo positivo.
+# Named like the other comparison states (`EAN_ESATTO`, `SEMANTICO_PROPOSTO`,
+# `SEMANTICO_CONFERMATO_UTENTE`): the negative reads next to its positive.
 STATO_RIFIUTATO_UTENTE = "RIFIUTATO_UTENTE"

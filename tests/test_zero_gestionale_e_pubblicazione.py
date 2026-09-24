@@ -1,19 +1,20 @@
-"""Due difetti della revisione del 6 settembre 2026, R3 e R9.
+"""Two invariants around the reorder list and state cleanup.
 
-1. **Uno zero del gestionale e' del gestionale.**  Questa settimana l'elenco
-   chiede 0 colli di un articolo; la settimana dopo ne chiede 4.  Se lo zero e'
-   marcato «utente» il ricalcolo non lo rilegge — `_ripulisci_stato` rilegge
-   dall'elenco solo cio' che porta il marchio «gestionale» — e in pagina resta
-   0: l'articolo non entra nell'ordine e nessuno lo dice.  Dal 7 settembre
-   2026 c'e' un terzo lato: gli stati gia' salvati con l'etichetta sbagliata,
-   che si sanano da soli al primo ricalcolo — ma solo dove l'elenco di allora
-   dice che quello zero veniva davvero da lui.
-2. **La ripulitura dello stato non deve sopravvivere a una pubblicazione
-   fallita.**  La fase finale pota `state.json` sulla base del confronto nuovo
-   e solo dopo lo rende vivo.  Se la sostituzione non riesce — su Windows
-   `os.replace` fallisce mentre un antivirus, un backup o OneDrive tengono
-   aperto `review_data.json` — resterebbe in pagina il confronto di prima con
-   le decisioni gia' tolte.
+1. A zero from the management-software export is still from the export. If
+   this week's list asks for 0 cartons of an item and next week's asks for
+   4, marking that zero "user" would make the recompute skip it —
+   `_ripulisci_stato` only re-reads what still carries the "gestionale" tag
+   — and the page would stay stuck at 0 with the item silently left out of
+   the order. State files saved before this fix carry the wrong tag on that
+   same case; they self-heal on the next recompute, but only where the
+   list at save time confirms the zero really came from it — an
+   already-existing user-written zero must stay untouched.
+2. State cleanup must not survive a failed publish. The final phase prunes
+   `state.json` against the new comparison and only then makes it live. If
+   the replace fails (`os.replace` on Windows can fail while an antivirus, a
+   backup tool or OneDrive holds `review_data.json` open), the page must
+   keep the previous comparison with its decisions intact, not a pruned
+   state pointing at a comparison that was never activated.
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ import test_pipeline_jobs as banco_catena  # noqa: E402
 
 
 def confronto_nuovo(quantita: int) -> banco_catena.EsecutoreFinto:
-    """L'elenco di questa settimana: la stessa riga, con i colli che chiede oggi."""
+    """This week's reorder list: the same row, with today's requested quantity."""
 
     return banco_catena.EsecutoreFinto(confronto={
         "run": {"id": "nuova"},
@@ -57,7 +58,7 @@ def confronto_nuovo(quantita: int) -> banco_catena.EsecutoreFinto:
 
 
 class LoZeroDelGestionalePortaIlMarchioDelGestionale(unittest.TestCase):
-    """R3, il lato del confronto: chi ha scritto il numero decide chi lo riscrive."""
+    """The comparison side: who wrote the number decides who can rewrite it."""
 
     def prodotto(self, colli) -> dict[str, object]:
         fornitore = banco_confronto.supplier_match(
@@ -78,10 +79,10 @@ class LoZeroDelGestionalePortaIlMarchioDelGestionale(unittest.TestCase):
         }], ["larice"])[0]
 
     def test_zero_colli_nell_elenco_restano_una_quantita_del_gestionale(self) -> None:
-        """Zero e' un numero che il gestionale ha detto, non una scelta di nessuno.
+        """Zero is a number the management-software export stated, not anyone's choice.
 
-        Marcato «utente» diventa intoccabile: il ricalcolo della settimana dopo
-        non lo rilegge piu' e i 4 colli dell'elenco nuovo non arrivano in pagina.
+        Tagged "user", it becomes untouchable: next week's recompute stops
+        re-reading it, and the new list's 4 cartons never reach the page.
         """
 
         prodotto = self.prodotto("0")
@@ -91,8 +92,8 @@ class LoZeroDelGestionalePortaIlMarchioDelGestionale(unittest.TestCase):
         self.assertEqual(prodotto["quantitySource"], "gestionale")
 
     def test_senza_colli_nell_elenco_la_sorgente_resta_utente(self) -> None:
-        """Colonna vuota: il gestionale non ha detto niente, non c'e' niente da
-        rileggere, e la quantita' e' di chi la scrivera'."""
+        """Empty column: the export said nothing, there's nothing to
+        re-read, and the quantity belongs to whoever writes it in."""
 
         prodotto = self.prodotto(None)
 
@@ -102,7 +103,7 @@ class LoZeroDelGestionalePortaIlMarchioDelGestionale(unittest.TestCase):
 
 
 class UnoZeroDelGestionaleSiRileggeAlRicalcolo(banco_catena.BancoPipeline):
-    """R3, il lato della catena: che cosa fa `_ripulisci_stato` con quello zero."""
+    """The pipeline side: what `_ripulisci_stato` does with that zero."""
 
     def _decisione(self, **campi) -> None:
         self._scrivi(self.stato, {
@@ -118,7 +119,7 @@ class UnoZeroDelGestionaleSiRileggeAlRicalcolo(banco_catena.BancoPipeline):
         })
 
     def test_dallo_zero_di_ieri_ai_quattro_colli_di_oggi(self) -> None:
-        """E' il difetto per intero: 0 la settimana scorsa, 4 questa."""
+        """The full scenario: 0 last week, 4 this week."""
 
         self._decisione()
 
@@ -129,7 +130,7 @@ class UnoZeroDelGestionaleSiRileggeAlRicalcolo(banco_catena.BancoPipeline):
         self.assertEqual(esito["numeri"].get("quantitaRiprese"), 1)
 
     def test_uno_zero_scritto_a_mano_resta_zero(self) -> None:
-        """«Non ordinarne nessuno» detto dall'utente e' una decisione sua."""
+        """"Order none of it", said by the user, is the user's decision."""
 
         self._decisione(quantitySource="utente")
 
@@ -140,7 +141,7 @@ class UnoZeroDelGestionaleSiRileggeAlRicalcolo(banco_catena.BancoPipeline):
         self.assertEqual(esito["numeri"].get("quantitaRiprese"), 0)
 
     def test_uno_zero_che_resta_zero_non_avvisa_e_non_azzera_niente(self) -> None:
-        """Il marchio nuovo non deve far comparire avvisi dove non succede niente."""
+        """The new tag must not surface warnings where nothing actually changes."""
 
         self._decisione()
 
@@ -155,7 +156,7 @@ class UnoZeroDelGestionaleSiRileggeAlRicalcolo(banco_catena.BancoPipeline):
 
 
 class LaRipulituraNonSopravviveAUnaPubblicazioneFallita(banco_catena.BancoPipeline):
-    """R9: o cambiano tutti e due, o non cambia nessuno dei due."""
+    """Either both files change, or neither does."""
 
     def test_se_il_confronto_nuovo_non_diventa_vivo_lo_stato_torna_com_era(self) -> None:
         self._scrivi(self.stato, {
@@ -186,11 +187,11 @@ class LaRipulituraNonSopravviveAUnaPubblicazioneFallita(banco_catena.BancoPipeli
         originale = scrittura_sicura.scrivi_bytes
 
         def il_file_e_in_uso(percorso, contenuto, **extra):
-            # Il caso vero: un altro processo tiene aperto `review_data.json` e
-            # su Windows `os.replace` non riesce.
-            # `resolve()` da tutte e due le parti: su macOS la cartella
-            # temporanea arriva qui come `/private/var/...` e il confronto
-            # con `/var/...` non tornerebbe mai.
+            # Simulates another process holding `review_data.json` open, so
+            # `os.replace` fails on Windows.
+            # `resolve()` on both sides: on macOS the temp directory arrives
+            # here as `/private/var/...`, and comparing it to `/var/...`
+            # would never match.
             if Path(percorso).resolve() == self.review.resolve():
                 raise OSError(32, "Il file è in uso da un altro processo")
             return originale(percorso, contenuto, **extra)
@@ -204,14 +205,14 @@ class LaRipulituraNonSopravviveAUnaPubblicazioneFallita(banco_catena.BancoPipeli
 
 
 class UnoZeroUtenteSiSanaSoloSeEraLoZeroDelGestionale(banco_catena.BancoPipeline):
-    """R3, il terzo lato: le decisioni gia' salvate con l'etichetta sbagliata.
+    """Decisions already saved with the wrong tag.
 
-    Chi non riparte da «Inizia nuova comparazione» si porta dietro uno
-    `state.json` scritto prima del 7 settembre 2026, dove lo zero dell'elenco
-    e' marcato «utente». Ma non tutti gli zeri «utente» sono quel difetto:
-    c'e' anche lo zero che l'utente ha scritto a mano sopra un suggerimento,
-    e rileggerlo dall'elenco ordinerebbe merce che aveva tolto. A dire quale
-    e' quale e' il confronto di prima, che porta il numero del gestionale.
+    Anyone who doesn't restart from "Inizia nuova comparazione" carries over
+    a `state.json` written before this fix, where the export's zero is
+    tagged "user". But not every "user" zero is that bug: there's also the
+    zero the user wrote by hand over a suggestion, and re-reading that one
+    from the list would order stock they had removed. The previous
+    comparison, which carries the export's own number, tells them apart.
     """
 
     def _decisione_a_zero(self, **campi) -> None:
@@ -228,7 +229,7 @@ class UnoZeroUtenteSiSanaSoloSeEraLoZeroDelGestionale(banco_catena.BancoPipeline
         })
 
     def _elenco_di_prima(self, suggerito) -> None:
-        """Il confronto vivo sul disco: quanti colli chiedeva l'elenco di allora."""
+        """The live comparison on disk: how many cartons that list asked for."""
 
         self._scrivi(self.review, {
             **banco_catena.CONFRONTO_PRECEDENTE,
@@ -244,7 +245,7 @@ class UnoZeroUtenteSiSanaSoloSeEraLoZeroDelGestionale(banco_catena.BancoPipeline
         })
 
     def test_uno_zero_che_veniva_dall_elenco_torna_a_leggersi_dall_elenco(self) -> None:
-        """Il difetto per intero, sullo stato gia' salvato: 0 allora, 4 adesso."""
+        """The full scenario, on already-saved state: 0 then, 4 now."""
 
         self._decisione_a_zero()
         self._elenco_di_prima(0)
@@ -257,10 +258,10 @@ class UnoZeroUtenteSiSanaSoloSeEraLoZeroDelGestionale(banco_catena.BancoPipeline
         self.assertEqual(esito["numeri"].get("quantitaRiprese"), 1)
 
     def test_uno_zero_scritto_sopra_un_suggerimento_resta_dell_utente(self) -> None:
-        """L'elenco ne chiedeva 3 e lui ha scritto 0: «non ordinarne».
+        """The list asked for 3 and the user wrote 0: "order none".
 
-        Rietichettare questo zero ordinerebbe i 4 colli di oggi al posto suo —
-        merce che aveva tolto a mano. Peggio del difetto.
+        Retagging this zero would order today's 4 cartons in its place —
+        stock they had removed by hand. Worse than the bug it fixes.
         """
 
         self._decisione_a_zero()
@@ -274,8 +275,8 @@ class UnoZeroUtenteSiSanaSoloSeEraLoZeroDelGestionale(banco_catena.BancoPipeline
         self.assertEqual(esito["numeri"].get("quantitaRiprese"), 0)
 
     def test_con_la_colonna_dei_colli_vuota_lo_zero_resta_dell_utente(self) -> None:
-        """`suggestedQuantity` nullo: il gestionale non aveva detto niente, e
-        quello zero non puo' che essere di chi lo ha scritto."""
+        """`suggestedQuantity` is null: the export said nothing, so that
+        zero can only belong to whoever wrote it."""
 
         self._decisione_a_zero()
         self._elenco_di_prima(None)
@@ -288,9 +289,9 @@ class UnoZeroUtenteSiSanaSoloSeEraLoZeroDelGestionale(banco_catena.BancoPipeline
         self.assertEqual(esito["numeri"].get("quantitaRiprese"), 0)
 
     def test_lo_zero_che_resta_zero_si_riprende_comunque_il_marchio(self) -> None:
-        """Zero allora, zero adesso: non cambia nessun numero, ma l'etichetta
-        va corretta sul disco lo stesso — altrimenti la settimana in cui
-        l'elenco chiedera' 4 il difetto sara' ancora li'.
+        """Zero then, zero now: no number changes, but the tag still needs
+        correcting on disk — otherwise the bug is still there the week the
+        list asks for 4.
         """
 
         self._decisione_a_zero()

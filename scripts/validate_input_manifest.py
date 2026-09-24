@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate an AI-reviewed input manifest before deterministic parsing."""
+"""Validate an input manifest, deterministic or hand-written, before parsing."""
 
 from __future__ import annotations
 
@@ -11,10 +11,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-# ⚠ Il registro si legge da `registro`, non con un `json.load` di questo file.
-# Il registro effettivo e' fatto di DUE documenti — quello spedito e quello che
-# il programma impara su questo computer — e chi ne legge uno solo vede meta'
-# dei fornitori.  `registro` sta qui accanto, in `scripts/`.
+# The adapter registry is read via `registro`, never with a plain `json.load`
+# here: it is the merge of the shipped registry and the one learned locally,
+# and reading only one of the two hides half the suppliers.
 SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
@@ -25,28 +24,26 @@ import registro  # noqa: E402
 STATES = {"SCHEMA_NOTO", "SCHEMA_VARIATO", "NUOVO_FORNITORE", "FILE_NON_PERTINENTE", "AMBIGUO"}
 ROLES = {"master", "supplier", "ignore"}
 
-# I due modi di dire dove comincia il testo cercato dal marcatore.  Non c'e'
-# una espressione regolare, e non ci sara': una regola che l'utente scrive
-# dalla pagina dev'essere leggibile da chi la rilegge fra sei mesi.
+# The two ways to match the marker text. No regex support: a rule the user
+# writes from the page has to stay readable by whoever rereads it later.
 CONFRONTI_DEL_MARCATORE = ("equals", "contains")
 
 
 def errori_del_marcatore(marker: Any) -> list[str]:
-    """Che cosa non va nella dichiarazione «i dati cominciano dopo la riga X».
+    """Validate a "data starts after row X" marker declaration.
 
-    Sta qui, accanto alle altre verifiche della mappatura, e non nel lettore:
-    due elenchi di controlli che si allontanano di un campo vorrebbero dire una
-    mappatura accettata dal validatore e rifiutata alla lettura — o peggio il
-    contrario.  Il lettore chiama questa stessa funzione prima di cercare.
+    Lives next to the rest of the mapping checks, not in the reader: if the two
+    checklists drift apart, a mapping the validator accepts could be rejected
+    at read time (or the reverse). The reader calls this same function before
+    it searches.
 
-    Forma attesa::
+    Expected shape::
 
         "data_start_marker": {"column": "A", "equals": "LISTINO", "offset": 1}
 
-    ``column`` e' una lettera di colonna oppure il suo numero 1-based;
-    ``equals`` vuole il testo intero della cella, ``contains`` un pezzo (uno
-    solo dei due); ``offset`` dice quante righe piu' in basso cominciano i
-    prodotti, e vale 1 se non c'e'.
+    ``column`` is a column letter or its 1-based number; ``equals`` matches the
+    full cell text, ``contains`` a substring (exactly one of the two); ``offset``
+    is how many rows below the marker the products start, defaulting to 1.
     """
 
     if not isinstance(marker, dict) or not marker:
@@ -68,19 +65,19 @@ def errori_del_marcatore(marker: Any) -> list[str]:
     return problemi
 
 
-# Come si dice in pagina quello che qui e' scritto per il validatore.
+# Maps each validator declaration to how it's phrased on the page.
 #
-# ⚠ Sta qui e non in `app/schema_mapping.py` per la stessa ragione per cui ci
-# sta `errori_del_marcatore`: due elenchi che si allontanano di una voce
-# vorrebbero dire una stringa nuova nel validatore e nessuna traduzione in
-# pagina — cioe' di nuovo «completa columns deve essere un oggetto».
+# Lives here and not in `app/schema_mapping.py` for the same reason as
+# `errori_del_marcatore`: if the two lists drift apart, a new validator string
+# has no translation on the page, and the user sees the raw validator message
+# again.
 PAROLE_DELLA_PAGINA: dict[str, str] = {
     "columns.description": "nome prodotto",
     "columns.unit_price_net oppure columns.unit_price_pre_discount": "prezzo",
     "fattore d'ordine in colonna oppure default esplicito": "pezzi per collo",
     "columns.ean oppure ean_unavailable=true": "EAN",
-    # Il ramo del gestionale chiede le colonne **nude**: senza questa riga
-    # «columns.ean» usciva in pagina come «ean».
+    # The master (management-software) branch requires the bare column name:
+    # without this entry, "columns.ean" showed up on the page as "ean".
     "columns.ean": "EAN",
     "columns.supplier_code oppure supplier_code_unavailable=true": "codice fornitore",
     "columns.availability oppure assume_available=true": "disponibilità",
@@ -89,12 +86,12 @@ PAROLE_DELLA_PAGINA: dict[str, str] = {
     "columns.last_unit_price": "ultimo prezzo",
     "sheet": "foglio da leggere",
     "data_start_row oppure data_start_marker": "prima riga dei prodotti",
-    # I due casi «non e' nemmeno una dichiarazione»: dopo la correzione qui
-    # sotto non si raggiungono piu' dalla pagina, ma se ci si torna la frase
-    # dev'essere quella che dice all'utente che cosa fare.
+    # The two "not even a declaration" cases: the `columns` fallback above
+    # keeps the page from reaching them, but if it ever does, the phrase must
+    # still tell the user what to fix.
     "field_mapping deve essere un oggetto": "nome prodotto, prezzo, pezzi per collo",
     "columns deve essere un oggetto": "nome prodotto, prezzo, pezzi per collo",
-    # Le quattro di `errori_del_marcatore`, che `incomplete_mapping` rilancia.
+    # The four messages from `errori_del_marcatore`, forwarded by `incomplete_mapping`.
     "data_start_marker deve essere un oggetto con column e equals (oppure contains)":
         "la riga che separa i prodotti",
     "data_start_marker.column deve essere una lettera di colonna o il suo numero":
@@ -107,12 +104,12 @@ PAROLE_DELLA_PAGINA: dict[str, str] = {
 
 
 def parole_della_pagina(mancanti: list[str]) -> str:
-    """Le dichiarazioni mancanti, dette come si chiamano nella pagina.
+    """Render missing declarations using the page's own vocabulary.
 
-    Una stringa che non e' nella tabella **non** si stampa com'e': un token da
-    validatore in faccia a chi fa gli ordini non gli dice che cosa toccare. Si
-    ripiega su una frase che almeno indica dove guardare, e la stringa vera
-    resta nel `dettaglio` della fermata, per chi legge i log.
+    A string not found in the table is never printed as-is: a raw validator
+    token means nothing to someone placing orders. It falls back to a phrase
+    that at least points at the right area; the real string stays in the
+    stop's `dettaglio`, for whoever reads the logs.
     """
 
     dette: list[str] = []
@@ -129,12 +126,10 @@ def incomplete_mapping(mapping: Any, role: str, path: Path) -> list[str]:
 
     if not isinstance(mapping, dict):
         return ["field_mapping deve essere un oggetto"]
-    # ⚠ Non `mapping.get("columns") or …`: un dizionario **vuoto** e' falso, e
-    # «l'utente non ha scelto nessuna colonna» finiva sul ramo «non e' un
-    # oggetto», cioe' su un messaggio che parla della forma del JSON invece che
-    # delle colonne mancanti. Misurato il 21 agosto 2026 su «OFFERTE AGOSTO
-    # 4.xlsx»: «completa columns deve essere un oggetto». Il ripiego su
-    # `field_mapping` resta, ma solo quando `columns` non c'e' per davvero.
+    # Not `mapping.get("columns") or …`: an empty dict is falsy, so "the user
+    # picked no columns" would fall into the "not an object" branch and report
+    # the JSON shape instead of the missing columns. The `field_mapping`
+    # fallback still applies, but only when `columns` is truly absent.
     raw_columns = mapping["columns"] if "columns" in mapping else mapping.get("field_mapping")
     if not isinstance(raw_columns, dict):
         return ["columns deve essere un oggetto"]
@@ -147,12 +142,11 @@ def incomplete_mapping(mapping: Any, role: str, path: Path) -> list[str]:
         data_start = int(mapping.get("data_start_row") or 0)
     except (TypeError, ValueError):
         data_start = 0
-    # Il numero non e' l'unico modo di dire dove comincia il listino, e non e'
-    # il piu' robusto: su QUERCIA le righe 7-67 sono un blocco promozionale che la
-    # settimana prossima sara' piu' corto o piu' lungo, e un 69 congelato
-    # taglierebbe l'elenco nel punto sbagliato **in silenzio**.  Un marcatore
-    # («i prodotti cominciano dopo la riga in cui la colonna A dice LISTINO»)
-    # e' una regola, e si ricalcola a ogni lettura.
+    # A fixed row number isn't the most robust way to say where the list
+    # starts: a promotional block can grow or shrink week to week, and a
+    # frozen row number would silently cut the list at the wrong point. A
+    # marker ("products start after the row where column A reads LISTINO") is
+    # a rule, recomputed on every read.
     marker = mapping.get("data_start_marker")
     if marker not in (None, "", {}):
         missing.extend(errori_del_marcatore(marker))
@@ -200,23 +194,18 @@ def load_json(path: Path) -> Any:
 
 
 def identificativi_ammessi(percorso_adattatori: Path | None) -> set[str]:
-    """Gli identificativi che un manifest puo' dichiarare, presi dal registro VERO.
+    """Return the adapter ids a manifest may declare, from the real, merged registry.
 
-    ⚠ Qui c'era un `json.load` del solo documento spedito, e per un giorno
-    intero e' stato il difetto piu' grave del programma: un fornitore imparato
-    su questo computer — dalla mappatura guidata, oppure spostando la colonna
-    d'ordine — prende un identificativo che nel documento spedito non c'e'
-    (`quercia_v1` per un fornitore nuovo, `betulla_v1__locale` per uno imparato
-    sopra uno spedito).  La settimana dopo il riconoscimento lo dichiara
-    giustamente `SCHEMA_NOTO` con QUEL nome, e questo controllo lo bocciava:
-    `ADATTATORE_NON_VALIDO`, cioe' `MANIFEST_NON_VALIDO`, cioe' il confronto
-    della settimana che non si fa e nessuna via d'uscita dalla pagina.
+    A locally learned supplier (from the guided mapping, or from moving the
+    order column) gets an id absent from the shipped registry (`quercia_v1`
+    for a new supplier, `betulla_v1__locale` for one learned on top of a
+    shipped adapter). Reading only the shipped document here would reject that
+    id as `ADATTATORE_NON_VALIDO` even after the recognition phase correctly
+    reports it as `SCHEMA_NOTO`.
 
-    La regola e' rispettata dal parser
-    (`prepare_manifest_sources`) e dalla ricerca (`catalog_search`): **chi
-    decide per identificativo passa dal registro**, che i due documenti li
-    fonde.  Questo era l'unico posto che decideva per identificativo leggendo
-    un file da solo.
+    Every id decision must go through the registry (`prepare_manifest_sources`,
+    `catalog_search`), which merges both documents; this is the one place that
+    decides by id, so it has to read the merged view too.
     """
 
     voci, _motivo = registro.adattatori_effettivi(percorso_adattatori)
@@ -224,14 +213,13 @@ def identificativi_ammessi(percorso_adattatori: Path | None) -> set[str]:
 
 
 def adattatore_ammesso(identificativo: Any, ammessi: set[str]) -> bool:
-    """Un identificativo va bene se il registro ce l'ha, o se ha la sua radice.
+    """Return whether an id is admitted, directly or via its base adapter.
 
-    Il secondo caso non e' larghezza, e' la stessa cosa che fanno i lettori: un
-    `betulla_v1__locale` **e'** Betulla, e se la voce imparata sparisse — file
-    illeggibile fra la profilazione e questo controllo — il documento
-    resterebbe leggibile con la voce spedita, che e' quella che
-    `registro.voce_in_uso` gli darebbe.  Fermare la catena in quel caso
-    vorrebbe dire buttare un confronto per un adattatore che non serviva.
+    Matching on the base id mirrors what the readers do: `betulla_v1__locale`
+    *is* Betulla, and if the learned entry became unreadable between profiling
+    and this check, the document would still be readable via the shipped
+    entry that `registro.voce_in_uso` falls back to. Rejecting it here would
+    discard a comparison over an adapter mismatch that doesn't matter.
     """
 
     nome = str(identificativo or "")
@@ -298,10 +286,10 @@ def main() -> int:
                     errors.append({
                         "file": label,
                         "code": "MAPPATURA_INCOMPLETA",
-                        # `message` e' la frase che la fermata mostra in pagina
-                        # (app/pipeline_jobs.py, MANIFEST_NON_VALIDO): qui ci va
-                        # l'italiano. Le stringhe del validatore restano in
-                        # `missing`, che nessuno mostra e tutti possono leggere.
+                        # `message` is what the stop shows on the page
+                        # (app/pipeline_jobs.py, MANIFEST_NON_VALIDO), hence
+                        # Italian. The raw validator strings stay in `missing`,
+                        # shown to no one but readable by anyone.
                         "message": "manca " + parole_della_pagina(missing_fields) + ".",
                         "missing": missing_fields,
                     })
@@ -323,12 +311,10 @@ def main() -> int:
     if len(masters) != 1:
         errors.append({"code": "MASTER_NON_UNIVOCO", "message": f"Atteso un solo gestionale, trovati {len(masters)}: {masters}"})
     if not supplier_ids:
-        # ⚠ Era un avviso, e la fase dopo moriva.  La validazione dichiarava il
-        # manifest valido, `prepare_manifest_sources` sollevava «Nessun
-        # fornitore incluso nel manifest» e usciva 1, e in pagina arrivava la
-        # frase generica del passo fallito — «il problema e' in uno dei
-        # documenti caricati» — a chi aveva caricato un documento solo e giusto.
-        # La cosa da fare la sapeva gia' questa riga, una fase prima.
+        # Must be an error, not a warning: a warning let the manifest pass
+        # validation, and the next phase (`prepare_manifest_sources`) failed
+        # with a generic "check the uploaded files" message instead of this
+        # specific one.
         errors.append({
             "code": "NESSUN_FORNITORE",
             "message": "Manca il listino di almeno un fornitore: carica i listini di questa settimana e riprova.",

@@ -106,11 +106,11 @@ def _json_decimal(value: Decimal | None) -> str | None:
 
 
 def _codici_ammessi() -> set[str]:
-    """I codici della colonna sconto, dichiarati nel registro degli adattatori.
+    """Return the discount column's accepted codes, as declared in the adapter registry.
 
-    Sono la stessa cosa che legge il lettore del listino: tenerne qui una
-    seconda copia scritta a mano vorrebbe dire che un giorno le due divergono e
-    lo stesso codice e' lecito per uno e sospetto per l'altro.
+    Reads the same declaration the price-list reader uses; a second
+    hand-maintained copy here would risk diverging, flagging the same code as
+    valid in one place and suspicious in the other.
     """
 
     return registro.codici_ammessi(registro.codici_di_riga(registro.adattatore("larice_v1")))

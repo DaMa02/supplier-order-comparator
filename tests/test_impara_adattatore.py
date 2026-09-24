@@ -1,21 +1,20 @@
-"""Lo schema confermato dall'utente entra nel registro, e niente altro.
+"""Only the schema the operator confirmed is written to the adapter registry.
 
-Questo script è l'unica cosa che impedisce che la settimana prossima un
-fornitore già confermato torni sconosciuto: senza, uno schema approvato resta
-scritto nel manifest della run e servirebbe qualcuno a copiarlo a mano dentro
-`references/adapters.json`, che è esattamente ciò che il programma finito non
-avrà.
+`impara_adattatore.py` is what prevents an already-confirmed supplier from
+going back to unrecognised next week: without it, an approved schema stays
+in the run's manifest and someone would have to copy it by hand into
+`references/adapters.json`.
 
-Le due cose che questi collaudi difendono, e per cui esistono:
+Two invariants these tests defend:
 
-- **una voce che l'utente non ha confermato non entra per nessuna ragione**;
-- **un rifiuto non è mai silenzioso**: esce con il suo motivo scritto in
-  italiano e con uscita `2`, perché un fallimento zitto qui vorrebbe dire un
-  fornitore che torna sconosciuto e nessuno che sappia perché.
+- an entry the operator hasn't confirmed never gets written, for any reason;
+- a rejection is never silent: it exits with a written reason and exit code
+  `2`, because a silent failure here means a supplier goes back to
+  unrecognised with no record of why.
 
-Il registro vero non viene mai toccato: ogni prova lavora su una copia in una
-cartella temporanea, e i listini veri si copiano prima di darli in pasto alla
-catena.
+The real registry is never touched: every test works on a copy in a
+temporary directory, and real price lists are copied before being fed
+through the pipeline.
 """
 
 from __future__ import annotations
@@ -36,9 +35,9 @@ from openpyxl import Workbook
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = SKILL_ROOT / "scripts"
 APP = SKILL_ROOT / "app"
-# ⚠ Copia congelata, non `references/adapters.json`: quel file lo riscrive il
-# programma quando impara uno schema confermato, e queste prove partono da un
-# registro di cui conoscono il contenuto. Vedi la stessa nota in
+# A frozen fixture, not `references/adapters.json`: the program rewrites that
+# file when it learns a confirmed schema, and these tests need a registry
+# whose exact contents they know in advance. Same note in
 # `tests/test_registro_impronte.py`.
 ADAPTERS = SKILL_ROOT / "tests" / "fixtures" / "adapters_nativi.json"
 for cartella in (SCRIPTS, APP):
@@ -46,17 +45,17 @@ for cartella in (SCRIPTS, APP):
         sys.path.insert(0, str(cartella))
 
 import inspect_sources  # noqa: E402
-# `self.registro` e' il percorso della copia; il motore si chiama per esteso
-# per non confondere le due cose in un collaudo che le usa insieme.
+# Aliased to avoid confusing `self.registro` (a file path) with the module
+# that reads and writes it, in tests that use both together.
 import registro as motore_registro  # noqa: E402
 
-# I listini veri stanno fuori dal progetto: si spostano con questa variabile
-# d'ambiente senza toccare il codice del collaudo.
+# Real price lists live outside the repo; this env var points at them without
+# touching test code.
 LISTINI = Path(os.environ.get("LISTINI_STORICI", str(SKILL_ROOT / "listini-storici")))
 
-# Gli script scrivono frasi in italiano con le virgolette basse: senza questo,
-# su Windows l'uscita arriverebbe in cp1252 e le prove sui motivi leggerebbero
-# caratteri sostitutivi invece delle parole.
+# The scripts print Italian text with accented characters. Without this, on
+# Windows the output would decode as cp1252 and the reason-matching
+# assertions would see replacement characters instead of the actual words.
 AMBIENTE = {**os.environ, "PYTHONIOENCODING": "utf-8"}
 
 INTESTAZIONI_FORNITORE = ["Disponibilita merce", "Prezzo Netto EUR", "Nome Articolo",
@@ -82,7 +81,7 @@ MAPPATURA_FORNITORE: dict[str, Any] = {
 
 
 def mappatura(**modifiche: Any) -> dict[str, Any]:
-    """Una copia della mappatura confermata, con le modifiche chieste."""
+    """Return a copy of the confirmed mapping, with the given overrides."""
 
     copia = json.loads(json.dumps(MAPPATURA_FORNITORE))
     copia.update(modifiche)
@@ -90,7 +89,7 @@ def mappatura(**modifiche: Any) -> dict[str, Any]:
 
 
 def decisione(**modifiche: Any) -> dict[str, Any]:
-    """La decisione che l'AI propone e l'utente conferma."""
+    """Return a confirmed field-mapping decision, as the guided UI writes it."""
 
     proposta = {
         "state": "NUOVO_FORNITORE",
@@ -118,7 +117,7 @@ def scrivi_foglio(percorso: Path, righe: list[list[Any]], nome: str = "Offerte a
 
 def listino_fornitore(percorso: Path, *, intestazioni: list[Any] | None = None,
                       nome_foglio: str = "Offerte agosto", preambolo: int = 0) -> Path:
-    """Un listino di un fornitore che nessun adattatore conosce."""
+    """Build a price list from a supplier no adapter recognises."""
 
     righe: list[list[Any]] = [["Listino promozionale"] for _ in range(preambolo)]
     righe.append(list(intestazioni if intestazioni is not None else INTESTAZIONI_FORNITORE))
@@ -129,11 +128,10 @@ def listino_fornitore(percorso: Path, *, intestazioni: list[Any] | None = None,
 
 
 def voce_di_manifest(percorso: Path, proposta: dict[str, Any], stato_conferma: str) -> dict[str, Any]:
-    """La voce del manifest come la scrive `apply_preflight_decisions`.
+    """Build a manifest entry shaped like the one `apply_preflight_decisions` writes.
 
-    Il profilo è quello vero dell'inspector: costruirlo a mano renderebbe il
-    collaudo indipendente dal documento che la catena produce davvero, cioè
-    inutile.
+    The profile is the real one from the inspector; building it by hand would
+    decouple the test from what the pipeline actually produces.
     """
 
     profilo = inspect_sources.profile_file(percorso)
@@ -142,7 +140,7 @@ def voce_di_manifest(percorso: Path, proposta: dict[str, Any], stato_conferma: s
 
 
 class BaseImparaTests(unittest.TestCase):
-    """Ogni prova ha la sua copia del registro: quello vero non si tocca."""
+    """Each test works on its own copy of the registry; the real one is never touched."""
 
     maxDiff = None
 
@@ -152,9 +150,9 @@ class BaseImparaTests(unittest.TestCase):
         self.registro = self.radice / "adapters.json"
         shutil.copyfile(ADAPTERS, self.registro)
         self.registro_di_partenza = self.registro.read_bytes()
-        # ⚠ Dal 19 agosto 2026 quello che si impara non torna nel registro
-        # spedito — che sta sotto git e l'avvio del negozio riporta indietro —
-        # ma in un file suo, fuori da git. Il programma li legge fusi.
+        # What gets learned is not written back into the shipped registry
+        # (tracked by git; a fresh checkout would revert it) but into a
+        # separate, untracked file. The program reads both merged together.
         self.imparato = motore_registro.percorso_imparato(self.registro)
 
     def manifest(self, voci: list[dict[str, Any]]) -> Path:
@@ -177,14 +175,14 @@ class BaseImparaTests(unittest.TestCase):
         uscita = esito.stdout.decode("utf-8", errors="replace")
         try:
             return esito.returncode, json.loads(uscita)
-        except ValueError as errore:  # pragma: no cover - serve solo a leggere il guasto
+        except ValueError as errore:  # pragma: no cover - only reached to report a broken run
             raise AssertionError(
                 f"impara_adattatore.py non ha stampato un rapporto JSON.\n"
                 f"stdout:\n{uscita}\nstderr:\n{esito.stderr.decode('utf-8', errors='replace')}"
             ) from errore
 
     def documento(self) -> dict[str, Any]:
-        """Il registro come lo vede il programma: spedito più imparato."""
+        """Return the registry as the program sees it: shipped entries plus learned ones."""
 
         return {"adapters": motore_registro.adattatori(self.registro)}
 
@@ -193,13 +191,13 @@ class BaseImparaTests(unittest.TestCase):
                      if voce["id"] == identificativo), {})
 
     def assert_registro_intatto(self) -> None:
-        """Niente è stato imparato: né il file spedito né quello imparato."""
+        """Assert nothing was learned: neither the shipped file nor the learned one changed."""
 
         self.assertEqual(self.registro.read_bytes(), self.registro_di_partenza)
         self.assertFalse(self.imparato.exists())
 
     def assert_spedito_intatto(self) -> None:
-        """Qualcosa è stato imparato, ma non nel file che l'avvio riporta indietro."""
+        """Assert something was learned, but not into the file a fresh checkout reverts."""
 
         self.assertEqual(self.registro.read_bytes(), self.registro_di_partenza)
 
@@ -208,7 +206,7 @@ class BaseImparaTests(unittest.TestCase):
 
 
 class SoloCioCheLUtenteHaConfermatoTests(BaseImparaTests):
-    """L'AI propone, l'utente approva, e nel registro entra solo l'approvato."""
+    """Only the confirmed entry gets written; the rest is skipped with a reason."""
 
     def test_entra_solo_lo_schema_confermato_e_gli_altri_escono_col_motivo(self) -> None:
         noto = listino_fornitore(self.radice / "noto.xlsx")
@@ -232,14 +230,14 @@ class SoloCioCheLUtenteHaConfermatoTests(BaseImparaTests):
         self.assertIn("PENDING", self.motivo(rapporto, "variato.xlsx"))
         self.assertIn("AMBIGUO", self.motivo(rapporto, "ambiguo.xlsx"))
         self.assertEqual(self.voce("fittizio_v1")["supplier_id"], "fittizio")
-        # Nessuno degli altri tre ha lasciato traccia: betulla_v1 è ancora quello
-        # con cui il programma è partito.
+        # None of the other three left a trace: betulla_v1 is still the entry
+        # the registry started with.
         self.assertEqual(self.voce("betulla_v1")["schema_version"], 1)
         self.assertNotIn("learned_at", self.voce("betulla_v1"))
 
     def test_una_variazione_non_confermata_non_entra_e_non_e_un_errore(self) -> None:
-        """La conferma manca: è il caso normale in cui l'utente non ha ancora
-        deciso, non un guasto. Il registro resta identico, byte per byte."""
+        """A missing confirmation is the normal case of the operator not having
+        decided yet, not a failure. The registry stays identical, byte for byte."""
 
         listino = listino_fornitore(self.radice / "fornitore.xlsx")
         manifest = self.manifest_di_un_file(listino, conferma="PENDING")
@@ -271,7 +269,7 @@ class SoloCioCheLUtenteHaConfermatoTests(BaseImparaTests):
         self.assertNotIn("expected_header", scrittura)
 
     def test_una_conferma_scritta_a_meta_non_vale_come_conferma(self) -> None:
-        """`REJECTED`, `PENDING` o un campo mancante sono tutti «non approvato»."""
+        """`REJECTED`, `PENDING`, or a missing field all count as "not approved"."""
 
         listino = listino_fornitore(self.radice / "fornitore.xlsx")
         for stato in ("REJECTED", "NOT_REQUIRED", "confirmed", ""):
@@ -285,11 +283,11 @@ class SoloCioCheLUtenteHaConfermatoTests(BaseImparaTests):
 
 
 class RifiutiTests(BaseImparaTests):
-    """Quello che doveva essere imparato e non si è potuto: uscita 2, motivo scritto."""
+    """What should have been learned but couldn't: exit 2, with the reason written out."""
 
     def test_una_mappatura_incompleta_e_un_rifiuto_che_dice_che_cosa_manca(self) -> None:
-        """Le verifiche sono quelle del validatore del manifest: qui non c'è
-        una seconda copia che può allontanarsi dalla prima."""
+        """The checks reuse the manifest validator's own rules, so there's no
+        second copy of them that could drift from the first."""
 
         listino = listino_fornitore(self.radice / "fornitore.xlsx")
         senza_ordine = mappatura()
@@ -320,9 +318,9 @@ class RifiutiTests(BaseImparaTests):
         self.assert_registro_intatto()
 
     def test_un_documento_senza_riga_di_intestazione_non_si_impara_da_solo(self) -> None:
-        """Un'impronta per forma delle colonne — come quella di Larice — la
-        scrive una persona nel registro: dedurne le soglie da un profilo
-        vorrebbe dire inventarle."""
+        """A positional (headerless) fingerprint, like Larice's, is written by a
+        person directly into the registry; deriving its thresholds from a
+        document profile would mean inventing them."""
 
         listino = listino_fornitore(self.radice / "fornitore.xlsx")
         senza_intestazione = mappatura(header_row=0, assume_available=True)
@@ -338,8 +336,8 @@ class RifiutiTests(BaseImparaTests):
         self.assert_registro_intatto()
 
     def test_una_colonna_dichiarata_e_assente_dal_documento_e_un_rifiuto(self) -> None:
-        """Scriverla lo stesso vorrebbe dire un adattatore che, la prima volta
-        che serve, si ferma sulla colonna che non c'è."""
+        """Writing it anyway would produce an adapter that fails the first time
+        it's actually used, on the column that isn't there."""
 
         intestazioni = list(INTESTAZIONI_FORNITORE)
         intestazioni[5] = "Codice a barre"
@@ -354,8 +352,8 @@ class RifiutiTests(BaseImparaTests):
         self.assert_registro_intatto()
 
     def test_la_riga_di_intestazione_deve_essere_nel_profilo(self) -> None:
-        """Il documento non si riapre: l'impronta si calcola dal manifest, che
-        è quello che l'utente ha avuto davanti quando ha confermato."""
+        """The document is never reopened: the fingerprint is computed from the
+        manifest, which is what the operator actually saw when confirming."""
 
         listino = listino_fornitore(self.radice / "fornitore.xlsx")
         manifest = self.manifest_di_un_file(listino, decisione(field_mapping=mappatura(header_row=97)))
@@ -368,8 +366,8 @@ class RifiutiTests(BaseImparaTests):
         self.assert_registro_intatto()
 
     def test_il_foglio_dichiarato_deve_essere_nel_documento(self) -> None:
-        """E lo si dice prima di scrivere: un'impronta misurata sul foglio
-        sbagliato descriverebbe un documento che il lettore non aprirà mai."""
+        """Checked before writing: a fingerprint measured on the wrong sheet
+        would describe a document the reader will never actually open."""
 
         listino = listino_fornitore(self.radice / "fornitore.xlsx")
         manifest = self.manifest_di_un_file(listino, decisione(field_mapping=mappatura(sheet="Listino")))
@@ -394,8 +392,8 @@ class RifiutiTests(BaseImparaTests):
         self.assert_registro_intatto()
 
     def test_senza_fornitore_l_adattatore_non_lo_cercherebbe_nessuno(self) -> None:
-        """L'identificativo qui c'è: manca il fornitore, che è la chiave con cui
-        il resto del programma chiama l'adattatore."""
+        """The adapter id is present; what's missing is the supplier id, which
+        is the key the rest of the program uses to look the adapter up."""
 
         listino = listino_fornitore(self.radice / "fornitore.xlsx")
         manifest = self.manifest_di_un_file(
@@ -424,15 +422,14 @@ class RifiutiTests(BaseImparaTests):
         self.assertEqual(self.voce("fittizio_v1")["schema_version"], 1)
 
     def test_uno_schema_che_non_si_riconoscerebbe_non_entra_nel_registro(self) -> None:
-        """La prova che questo script non scrive un file che nessuno rilegge.
+        """Guard against writing an adapter no document would ever match.
 
-        Qui il documento è un listino CIPRESSO, e la mappatura confermata nomina
-        sei colonne su sette: l'adattatore nuovo sarebbe scritto, ma su questo
-        stesso documento continuerebbe a vincere `cipresso_v1`, che ne dichiara
-        una in più. Un adattatore che non riconosce nemmeno il documento da cui
-        è stato imparato è peggio di niente: la settimana prossima il fornitore
-        torna sconosciuto e nel registro c'è una voce che nessuno sa a che cosa
-        serva.
+        The confirmed mapping here names six columns out of seven; the new
+        adapter would be written, but on this same document `cipresso_v1`
+        would keep winning since it declares one more column. An adapter that
+        can't even recognise the document it was learned from is worse than
+        nothing: next week the supplier is unrecognised again and the
+        registry carries an entry nobody knows the purpose of.
         """
 
         listino = scrivi_foglio(self.radice / "cipresso.xlsx", [
@@ -454,8 +451,8 @@ class RifiutiTests(BaseImparaTests):
 
         motivo = self.motivo(rapporto, "cipresso.xlsx")
         self.assertEqual(uscita, 2)
-        # Il rifiuto è proprio questo: nessuna verifica è fallita, ma su questo
-        # documento vince un altro adattatore.
+        # This is the rejection itself: no validation check failed, but another
+        # adapter still wins on this document.
         self.assertIn("SCHEMA_NOTO «cipresso_v1»", motivo)
         self.assertIn("nuovo_fornitore_v1", motivo)
         self.assertEqual(self.voce("nuovo_fornitore_v1"), {})
@@ -473,7 +470,7 @@ class RifiutiTests(BaseImparaTests):
 
 
 class ScritturaNelRegistroTests(BaseImparaTests):
-    """Che cosa entra nel registro, e che cosa non deve uscirne."""
+    """What a learned entry looks like, and what must never come out of it."""
 
     def test_l_adattatore_imparato_porta_le_sue_tracce(self) -> None:
         listino = listino_fornitore(self.radice / "fornitore.xlsx")
@@ -496,9 +493,8 @@ class ScritturaNelRegistroTests(BaseImparaTests):
         self.assertEqual(firma["kind"], "headers")
         self.assertEqual((firma["sheet"], firma["header_row"], firma["data_start_row"]),
                          ("Offerte agosto", 1, 2))
-        # Le obbligatorie sono le colonne che la mappatura usa davvero: la
-        # colonna d'ordine, che nel documento è vuota, non è un'intestazione da
-        # pretendere.
+        # Required headers are only the columns the mapping actually uses: the
+        # order column, empty in this document, isn't one to require.
         self.assertEqual(firma["required"], ["aliquotaiva", "barcodeean", "codiceinterno",
                                              "disponibilitamerce", "nomearticolo",
                                              "pezziscatola", "prezzonettoeur"])
@@ -508,17 +504,17 @@ class ScritturaNelRegistroTests(BaseImparaTests):
         self.assertEqual(rapporto["imparati"][0]["scritto"], True)
 
     def test_una_variazione_confermata_non_perde_i_codici_di_riga_del_fornitore(self) -> None:
-        """La prova che conta quando un fornitore cambia schema.
+        """The test that matters when a supplier's schema changes.
 
-        `larice_v1` dichiara che `SM` marca una riga premio e non merce
-        acquistabile. Riscrivere l'adattatore da zero con la sola mappatura
-        nuova farebbe sparire quella regola in silenzio, e le righe omaggio
-        tornerebbero ordinabili appena il fornitore ci scrive un prezzo.
+        `larice_v1` declares that a `SM` row marks a bonus row, not
+        purchasable stock. Rewriting the adapter from scratch with only the
+        new mapping would silently drop that rule, and bonus rows would
+        become orderable again as soon as the supplier writes a price on them.
 
-        ⚠ Dal 22 agosto 2026 la voce non si scrive piu' ADDOSSO alla spedita ma
-        accanto, con l'id `larice_v1__locale`: quello che questa prova tiene in
-        piedi — le regole di riga, `column_map` fuso, la versione di prima
-        conservata — vale sulla voce nuova, e in piu' la spedita resta intatta.
+        The learned entry is written next to the shipped one, under the id
+        `larice_v1__locale`, not on top of it: the row rules, the merged
+        `column_map`, and the previous version are all preserved on the new
+        entry, while the shipped entry stays untouched.
         """
 
         listino = scrivi_foglio(self.radice / "larice.xlsx", [
@@ -546,23 +542,22 @@ class ScritturaNelRegistroTests(BaseImparaTests):
         self.assertEqual(voce["supplier_id"], "larice")
         self.assertEqual(voce["schema_version"], 2)
         self.assertEqual(voce["row_markers"]["codes"]["SM"]["orderable"], False)
-        # ⚠ `column_map` dice DOVE stanno le colonne, e c'è chi legge solo
-        # quello (il lettore delle soglie con omaggio: il listino Larice non ha
-        # intestazioni, non c'è un nome da risolvere). Prima restava fermo alla
-        # settimana precedente — `ean: "R"` — mentre `field_mapping` diceva già
-        # che l'EAN sta sotto «COD.EAN», cioè in colonna J di questo documento:
-        # due parti dello stesso programma leggevano due colonne diverse, e
-        # nessuna lo diceva.
+        # `column_map` records WHERE each column sits, positionally, and some
+        # readers (the free-goods-threshold reader; Larice has no header row to
+        # resolve names against) only consult that. It must be kept in sync
+        # with `field_mapping`, which is the source of truth for the mapping
+        # that was actually confirmed.
         self.assertEqual(voce["column_map"]["ean"], "J")
         self.assertEqual(voce["column_map"]["description"], "F")
         self.assertEqual(voce["field_mapping"]["columns"]["ean"], "COD.EAN")
-        # Le voci che la mappatura confermata non nomina restano: `column_map`
-        # ne porta anche di non mappate, e cancellarle spegnerebbe chi le usa.
+        # Entries the confirmed mapping doesn't name are kept too: `column_map`
+        # also carries unmapped columns, and dropping them would break whatever
+        # else reads them.
         self.assertEqual(voce["column_map"]["previous_price_note"], "M")
         self.assertEqual(voce["column_map"]["group_label"], "A")
         self.assertEqual(voce["header_signature"]["required"],
                          ["codart", "codean", "descrizione", "iva", "prezzo", "pzct", "sconto"])
-        # La versione con cui il programma è partito è ancora tutta lì.
+        # The version the program started with is fully preserved.
         self.assertEqual(len(voce["previous_versions"]), 1)
         precedente = voce["previous_versions"][0]
         self.assertEqual(precedente["schema_version"], 1)
@@ -570,19 +565,19 @@ class ScritturaNelRegistroTests(BaseImparaTests):
         self.assertEqual(rapporto["imparati"][0]["schema_version"], 2)
         self.assertEqual(rapporto["imparati"][0]["previous_versions"], 1)
         self.assertEqual(rapporto["imparati"][0]["adapter_id"], "larice_v1__locale")
-        # E la voce spedita e' ancora dov'era, intera: e' la differenza fra
-        # «imparare una variazione» e «perdere quello che il programma sa».
+        # The shipped entry is still there, unchanged: this is what separates
+        # learning a schema variation from losing what the program already knew.
         spedita = next(voce for voce in json.loads(self.registro.read_text(encoding="utf-8"))["adapters"]
                        if voce["id"] == "larice_v1")
         self.assertEqual(spedita["row_markers"]["codes"]["SM"]["orderable"], False)
         self.assertNotIn("derivato_da", spedita)
 
     def test_un_fornitore_nuovo_continua_a_scrivere_la_sua_voce(self) -> None:
-        """La separazione riguarda solo chi sta scrivendo sopra uno spedito.
+        """The `__locale` split only applies when writing over a shipped entry.
 
-        Un fornitore che nello spedito non c'e' non ha niente sotto da salvare:
-        la sua voce si aggiorna come sempre, e chiamarla `..._v1__locale`
-        aggiungerebbe un nome da capire senza proteggere niente.
+        A supplier absent from the shipped registry has nothing underneath to
+        protect: its entry updates in place as usual, and naming it
+        `..._v1__locale` would add an id to parse without protecting anything.
         """
 
         listino = listino_fornitore(self.radice / "fornitore.xlsx")
@@ -623,9 +618,9 @@ class ScritturaNelRegistroTests(BaseImparaTests):
         self.assertEqual(json.loads(contenuto.decode("utf-8")), rapporto)
 
     def test_il_registro_riscritto_resta_a_fine_riga_lf(self) -> None:
-        """I due registri si leggono affiancati quando qualcosa non torna: uno
-        scritto in CRLF li farebbe sembrare diversi riga per riga anche dove
-        dicono la stessa cosa."""
+        """The shipped and learned registries get diffed side by side when
+        something looks wrong; CRLF line endings would make every line look
+        different even where the content agrees."""
 
         listino = listino_fornitore(self.radice / "fornitore.xlsx")
 
@@ -636,9 +631,9 @@ class ScritturaNelRegistroTests(BaseImparaTests):
         self.assertTrue(contenuto.endswith(b"\n"))
 
     def test_quello_che_si_impara_non_entra_nel_registro_spedito(self) -> None:
-        """La ragione per cui i file sono due: il registro spedito sta sotto
-        git, e a ogni avvio il PC del negozio lo riporta a com'e' su GitHub.
-        Quello che ci fosse finito dentro sparirebbe al doppio clic dopo."""
+        """The reason there are two files: the shipped registry is tracked by
+        git, and the deployment on the store PC resets it to the tracked
+        state. Anything learned into that file would be lost on the next reset."""
 
         listino = listino_fornitore(self.radice / "fornitore.xlsx")
 
@@ -653,8 +648,8 @@ class ScritturaNelRegistroTests(BaseImparaTests):
         )
 
     def test_un_documento_con_un_preambolo_si_impara_dalla_sua_riga(self) -> None:
-        """L'intestazione non è sempre la prima riga: il fornitore ci mette
-        sopra il titolo del listino e la settimana di validità."""
+        """The header isn't always the first row: a supplier can put the price
+        list's title and validity dates above it."""
 
         listino = listino_fornitore(self.radice / "fornitore.xlsx", preambolo=4)
         manifest = self.manifest_di_un_file(
@@ -668,15 +663,14 @@ class ScritturaNelRegistroTests(BaseImparaTests):
 
 
 class LAdattatoreImparatoNasceConLeDifeseTests(BaseImparaTests):
-    """Bloccante 4 della verifica del 12 agosto 2026.
+    """A learned adapter's fingerprint must include column positions, not just names.
 
-    La firma imparata portava i **nomi** delle intestazioni e non le loro
-    posizioni: `posizioni_intestazioni` usciva «non applicabile» e la difesa
-    che aveva fermato la trappola BETULLA — una colonna in più in testa, prezzi
-    12,00 invece di 3,98 con SCHEMA_NOTO 0.99 — non esisteva per nessuno
-    schema imparato. Non è un di più: un adattatore imparato legge per
-    posizione ogni volta che una colonna è dichiarata per numero, e scrive
-    l'ordine in una colonna indicata per lettera.
+    Without positions, `posizioni_intestazioni` came back "not applicable" and
+    the safeguard that catches a shifted header row (an extra leading column,
+    so prices are read one column off) didn't exist for any learned schema.
+    This isn't a nice-to-have: a learned adapter reads by position whenever a
+    column is declared by index, and writes the order quantity into a column
+    given by letter.
     """
 
     def _impara_e_leggi_firma(self) -> dict[str, Any]:
@@ -695,7 +689,7 @@ class LAdattatoreImparatoNasceConLeDifeseTests(BaseImparaTests):
         })
 
     def test_la_firma_imparata_ha_la_stessa_forma_di_quella_nativa(self) -> None:
-        """Scritta in un'altra forma non verrebbe confrontata con niente."""
+        """Written in a different shape, it wouldn't compare against anything."""
 
         firma = self._impara_e_leggi_firma()
         nativa = next(voce for voce in json.loads(ADAPTERS.read_text(encoding="utf-8"))["adapters"]
@@ -707,12 +701,12 @@ class LAdattatoreImparatoNasceConLeDifeseTests(BaseImparaTests):
                 self.assertIsInstance(posizione, int)
 
     def test_una_colonna_in_piu_in_testa_declassa_lo_schema_imparato(self) -> None:
-        """La trappola BETULLA, su un adattatore imparato.
+        """A shifted header row, on a learned adapter.
 
-        Le intestazioni sono le stesse — stesso insieme di nomi, nessuna
-        novità — e sono tutte spostate di uno. Senza la firma posizionale il
-        documento restava SCHEMA_NOTO 0.99 e l'ordine finiva una colonna più
-        in là.
+        The headers are the same set of names, nothing new, just all shifted
+        one column over. Without the positional fingerprint, the document
+        would keep matching with high confidence and the order quantity would
+        land one column off.
         """
 
         listino = listino_fornitore(self.radice / "fornitore.xlsx")
@@ -731,7 +725,7 @@ class LAdattatoreImparatoNasceConLeDifeseTests(BaseImparaTests):
         self.assertIn("legge per posizione", posizioni["detail"])
 
     def test_il_listino_da_cui_e_stato_imparato_resta_riconosciuto(self) -> None:
-        """Una firma posizionale scritta male renderebbe l'adattatore inutile."""
+        """A badly written positional fingerprint would make the adapter useless."""
 
         listino = listino_fornitore(self.radice / "fornitore.xlsx")
         uscita, _rapporto = self.impara(self.manifest_di_un_file(listino))
@@ -743,11 +737,12 @@ class LAdattatoreImparatoNasceConLeDifeseTests(BaseImparaTests):
         self.assertTrue(all(verifica["ok"] for verifica in esito["checks"]), esito["checks"])
 
     def test_un_intestazione_ripetuta_prende_una_posizione_sola(self) -> None:
-        """Su ACERO «COSTO IMPON.» compare in colonna 9 e in colonna 15.
+        """A duplicated header must resolve to a single position, consistently.
 
-        Le due parti — chi scrive la firma e chi la rilegge — devono contare
-        allo stesso modo, altrimenti l'adattatore risulterebbe fuori posto
-        proprio sul documento da cui è stato imparato.
+        One real supplier's price list repeats a header text in two columns;
+        whoever writes the fingerprint and whoever reads it back must count
+        occurrences the same way, or the adapter would mismatch on the very
+        document it was learned from.
         """
 
         ripetute = [*INTESTAZIONI_FORNITORE, "Prezzo Netto EUR"]
@@ -761,13 +756,12 @@ class LAdattatoreImparatoNasceConLeDifeseTests(BaseImparaTests):
 
 
 def albero_di_prova(cartella: Path) -> Path:
-    """Una copia dell'albero della skill, per far girare la catena su un registro finto.
+    """Build a copy of the project tree, to run the real scripts against a fake registry.
 
-    Il registro lo trova `registro.py` accanto a sé (`../references`), quindi
-    l'unico modo di eseguire gli script veri contro un registro di prova è
-    dare loro un albero di prova. Il registro vero non deve poter essere
-    toccato da un collaudo: è il documento che una persona legge prima del
-    commit.
+    `registro.py` locates the registry relative to itself (`../references`),
+    so the only way to run the real scripts against a test registry is to
+    give them a whole copied tree. The real registry must never be reachable
+    from a test: it's the document a person reviews before a commit.
     """
 
     radice = cartella / "skill"
@@ -782,10 +776,10 @@ def albero_di_prova(cartella: Path) -> Path:
 
 
 class CatenaInteraTests(unittest.TestCase):
-    """Dalla profilazione al riconoscimento, con gli script veri.
+    """From profiling to recognition, running the real scripts end to end.
 
-    È la sola prova che dice se la memoria degli schemi funziona davvero:
-    senza, si è scritto un file JSON che nessuno rilegge.
+    This is the only test that proves the adapter-learning loop actually
+    closes: without it, this would just be a JSON file nothing reads back.
     """
 
     maxDiff = None
@@ -795,8 +789,8 @@ class CatenaInteraTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.cartella, True)
         self.radice = albero_di_prova(self.cartella)
         self.registro = self.radice / "references" / "adapters.json"
-        # Il registro vero com'era prima del collaudo: è il termine di paragone
-        # con cui si prova che nessuno l'ha toccato.
+        # A snapshot of the real registry before the test, to prove nothing
+        # touched it.
         self.registro_vero_prima = ADAPTERS.read_bytes()
 
     def esegui(self, nome: str, *argomenti: object) -> subprocess.CompletedProcess[bytes]:
@@ -813,14 +807,13 @@ class CatenaInteraTests(unittest.TestCase):
         return esito
 
     def togli_dal_registro_di_prova(self, identificativo: str) -> None:
-        """La premessa del collaudo se la costruisce il collaudo.
+        """Set up the test's own precondition instead of relying on the shared registry's state.
 
-        «Questo documento oggi non lo conosce nessuno» era vero perché il
-        registro vero conteneva sei voci e basta: bastava che l'utente ne
-        imparasse una — cioè che usasse la funzione per cui il registro
-        esiste — perché la premessa cadesse e il collaudo diventasse rosso
-        senza che niente fosse rotto. Adesso la premessa la si stabilisce
-        togliendo quella voce dalla **copia** su cui il collaudo lavora.
+        "This document is unrecognised today" held only as long as the real
+        registry didn't yet contain a matching entry; the moment someone
+        learned one — using the feature this test exercises — the precondition
+        would break and the test would fail with nothing actually wrong. It's
+        established here by removing that entry from the test's own copy.
         """
 
         documento = json.loads(self.registro.read_text(encoding="utf-8"))
@@ -831,7 +824,7 @@ class CatenaInteraTests(unittest.TestCase):
             flusso.write("\n")
 
     def catena(self, listino: Path, proposta: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Profila, applica la decisione confermata, impara, riprofila."""
+        """Profile, apply the confirmed decision, learn, and profile again."""
 
         profili = self.cartella / "input_profiles.json"
         self.esegui("inspect_sources.py", listino, "--output", profili)
@@ -874,20 +867,21 @@ class CatenaInteraTests(unittest.TestCase):
         "Si può indicare un'altra cartella con la variabile d'ambiente LISTINI_STORICI.",
     )
     def test_la_catena_intera_su_un_listino_vero(self) -> None:
-        """Il secondo schema CIPRESSO: oggi resta AMBIGUO, e lo imparerà la
-        Fase 5 con la conferma dell'utente. Qui la conferma è simulata dal file
-        di decisioni, il registro è una copia e il listino vero è di sola
-        lettura: si lavora su una copia, perché è già successo di rovinarlo.
+        """A second, alternate schema from a supplier already known under a
+        different layout: unrecognised until confirmed by the operator. Here
+        the confirmation is simulated by a decisions file, the registry is a
+        copy, and the real price list is treated as read-only: the pipeline
+        works on a copy of it, not the original.
         """
 
         originale = LISTINI / "Listino3_33.xlsx"
         prima_del_listino = originale.stat()
         listino = self.cartella / originale.name
         shutil.copyfile(originale, listino)
-        # Se qualcuno l'ha già imparato, la premessa la ristabilisce il
-        # collaudo sulla propria copia del registro: il registro vero non si
-        # tocca, e questo file non deve tornare rosso perché il programma ha
-        # fatto il suo mestiere.
+        # If this adapter has already been learned elsewhere, the precondition
+        # is re-established on the test's own registry copy: the real registry
+        # is untouched, and this test must not fail just because the program
+        # already did its job.
         self.togli_dal_registro_di_prova("cipresso_listino_v1")
 
         prima, dopo = self.catena(listino, {
@@ -910,16 +904,15 @@ class CatenaInteraTests(unittest.TestCase):
         self.assertEqual(dopo["signature"]["header_row"], 2)
         self.assertEqual(dopo["missing_headers"], [])
         self.assertTrue(all(verifica["ok"] for verifica in dopo["checks"]))
-        # Il listino vero non è stato aperto in scrittura da nessuno.
+        # Nothing opened the real price list for writing.
         dopo_del_listino = originale.stat()
         self.assertEqual((prima_del_listino.st_size, prima_del_listino.st_mtime_ns),
                          (dopo_del_listino.st_size, dopo_del_listino.st_mtime_ns))
-        # E il registro vero nemmeno: quello riscritto è la copia nell'albero di prova.
-        # ⚠ La proprietà è «il registro vero non è stato toccato», e si prova
-        # confrontandolo con se stesso prima e dopo. Prima si fissava l'elenco
-        # esatto dei suoi adattatori: bastava impararne uno — cioè usare la
-        # funzione per cui il registro esiste — perché questo collaudo
-        # diventasse rosso senza che niente fosse rotto.
+        # Nor the real registry: the one rewritten is the copy in the test tree.
+        # The property to check is "the real registry wasn't touched", proved by
+        # comparing it against itself before and after, rather than by
+        # asserting its exact list of adapters (which would break the moment
+        # anyone actually learned a new one).
         imparato = motore_registro.percorso_imparato(self.registro)
         self.assertTrue(imparato.is_file(), "l'adattatore imparato deve stare in un file suo")
         imparati = [voce["id"] for voce in json.loads(imparato.read_text(encoding="utf-8"))["adapters"]]
@@ -932,11 +925,11 @@ class CatenaInteraTests(unittest.TestCase):
 
 
 class LaRegolaDellInizioDeiDatiSiImparaTests(BaseImparaTests):
-    """Un marcatore confermato deve sopravvivere all'apprendimento.
+    """A confirmed data-start marker must survive being learned into the registry.
 
-    Se si perdesse per strada, il fornitore tornerebbe a essere tagliato da un
-    numero di riga congelato la settimana prossima: e' il difetto che la regola
-    chiude, e sparirebbe proprio nel passaggio che dovrebbe conservarla.
+    If it were dropped in the process, the supplier would go back to being
+    cut off at a fixed row number next week — exactly the problem the marker
+    exists to solve, and it would happen in the very step meant to preserve it.
     """
 
     MARCATORE = {"column": "A", "equals": "LISTINO", "offset": 1}
@@ -962,8 +955,9 @@ class LaRegolaDellInizioDeiDatiSiImparaTests(BaseImparaTests):
 
         self.assertEqual(voce["field_mapping"]["data_start_marker"], self.MARCATORE)
         self.assertEqual(voce["header_signature"]["data_start_marker"], self.MARCATORE)
-        # Il numero resta accanto alla regola, e l'impronta dice a che cosa
-        # serve: senza quella frase qualcuno lo leggerebbe come la regola.
+        # The resolved row number is kept alongside the marker, and the
+        # fingerprint states what it's for; without that note, someone could
+        # mistake it for the authoritative rule.
         self.assertEqual(voce["header_signature"]["data_start_row"], 3)
         self.assertIn("ricalcolato a ogni lettura", voce["header_signature"]["data_start_note"])
 
@@ -978,7 +972,7 @@ class LaRegolaDellInizioDeiDatiSiImparaTests(BaseImparaTests):
         self.assertNotIn("data_start_note", voce["header_signature"])
 
     def test_una_regola_scritta_male_non_entra_nel_registro(self) -> None:
-        """Il validatore della mappatura è lo stesso di chi legge davvero."""
+        """The mapping validator is the same one the real reader uses."""
 
         listino = self.listino_con_separatore()
         proposta = decisione(field_mapping=mappatura(

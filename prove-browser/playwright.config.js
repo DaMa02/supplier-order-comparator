@@ -1,19 +1,19 @@
 // @ts-check
 import { defineConfig, devices } from "@playwright/test";
 
-// ⚠ Una porta sua, diversa dalla 8765 predefinita: chi sviluppa tiene il
-// programma aperto mentre lavora, e le prove non devono parlare con la sua run
-// vera — né lui trovarsi la pagina cambiata sotto le mani.
+// Its own port, different from the default 8765: developers keep the
+// program open while they work, and tests must not talk to that real run,
+// or have the page change under them.
 const PORTA = 8799;
 
 export default defineConfig({
   testDir: "./prove",
-  // Nessun `retries`, ed è una scelta. Una prova che passa al secondo tentativo
-  // sta dicendo che è capricciosa, e nasconderlo con un ritenta insegna a non
-  // guardare i rossi. Se una diventa instabile si aggiusta o si toglie.
+  // No `retries`, deliberately. A test that only passes on a second attempt
+  // is flaky, and retrying silently trains people to stop looking at
+  // failures. A flaky test gets fixed or removed instead.
   retries: 0,
-  // In fila, non in parallelo: il programma tiene UNA run e UNO stato sul disco,
-  // quindi due prove insieme si pestano i piedi per costruzione.
+  // Serial, not parallel: the program keeps ONE run and ONE state on disk,
+  // so two tests running together would step on each other by construction.
   workers: 1,
   fullyParallel: false,
   reporter: [["list"]],
@@ -21,8 +21,9 @@ export default defineConfig({
   expect: { timeout: 7_000 },
   use: {
     baseURL: `http://127.0.0.1:${PORTA}`,
-    // Traccia e immagine solo quando è andata storta: servono a capire un
-    // rosso, e tenerle sempre riempie il disco di roba che nessuno apre.
+    // Trace and screenshot only on failure: they're for diagnosing a
+    // failing test, and keeping them always would fill the disk with data
+    // nobody opens.
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },

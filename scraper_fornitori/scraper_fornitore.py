@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-"""Scheletro di scraper per il sito di un fornitore.
+"""Skeleton scraper for a supplier's website.
 
-Questo file **non scarica niente da solo**: e' la meta' generica del lavoro —
-sessione HTTP, accesso, ripresa dopo un'interruzione, scrittura incrementale
-del CSV e metadati dell'estrazione. La meta' specifica di un sito (come si fa
-il login, dove sta l'elenco, quali celle sono quali colonne) si scrive in una
-sottoclasse di `SitoFornitore`: il modello da copiare e'
-`modello_fornitore.py`, la ricetta sta nel `README.md`.
+This file downloads nothing by itself: it's the generic half of the job —
+HTTP session, login, resuming after an interruption, incremental CSV writing
+and extraction metadata. The site-specific half (how login works, where the
+listing is, which cells map to which columns) goes in a subclass of
+`SitoFornitore`: copy `modello_fornitore.py` as a starting point, the recipe
+is in `README.md`.
 
-Due regole che questo modulo fa rispettare e che non vanno aggirate:
+Two rules this module enforces and that must not be worked around:
 
-1. **le credenziali non passano mai dalla riga di comando** — si leggono
-   dall'ambiente o si chiedono a schermo con la password nascosta, e non
-   finiscono ne' negli output ne' nei log;
-2. **il file scaricato non e' un listino buono finche' qualcuno non lo ha
-   controllato** — `esegui()` scrive `metadata.json` con i conteggi
-   dichiarati dal sito prima e dopo, e la decisione di accettare o bloccare il
-   risultato spetta a `valida_catalogo.py`, non al solo campo `completo`.
+1. credentials never pass through the command line — they're read from
+   the environment or prompted with the password hidden, and never end up
+   in output or logs;
+2. the downloaded file isn't a valid price list until someone has checked
+   it — `esegui()` writes `metadata.json` with the counts the site
+   declared before and after, and the decision to accept or block the
+   result belongs to `valida_catalogo.py`, not to the `completo` field alone.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ from typing import Any, Callable, Iterable, Sequence
 
 
 class ScraperError(RuntimeError):
-    """Il sito ha risposto una cosa che non ci si aspettava."""
+    """The site responded with something unexpected."""
 
 
 CallbackAvanzamento = Callable[[dict[str, Any]], None]
@@ -53,11 +53,11 @@ class Credenziali:
 
 @dataclass(frozen=True)
 class Panoramica:
-    """Quello che il sito dichiara di se' prima e dopo l'estrazione.
+    """What the site declares about itself before and after extraction.
 
-    `pagine` serve a sapere quando fermarsi; `articoli_dichiarati` e'
-    facoltativo — molti siti non lo espongono — e serve solo al validatore per
-    accorgersi che il catalogo e' cambiato mentre lo si scaricava.
+    `pagine` says when to stop; `articoli_dichiarati` is optional — many
+    sites don't expose it — and only serves the validator, to notice that
+    the catalog changed while it was being downloaded.
     """
 
     pagine: int
@@ -65,16 +65,16 @@ class Panoramica:
 
 
 # ---------------------------------------------------------------------------
-# La sessione HTTP: uguale per qualunque sito
+# The HTTP session: the same for any site
 # ---------------------------------------------------------------------------
 
 
 class ClienteHttp:
-    """Una sola sessione autenticata, con i cookie e i tentativi ripetuti.
+    """A single authenticated session, with cookies and retries.
 
-    Volutamente sulla libreria standard: questa cartella non aggiunge
-    dipendenze al progetto. Se un giorno un sito richiedesse un browser vero,
-    quella e' una scelta da discutere prima, non da introdurre di nascosto.
+    Deliberately stdlib-only: this folder adds no dependencies to the
+    project. If a site ever required a real browser, that's a choice to
+    discuss first, not to introduce quietly.
     """
 
     def __init__(
@@ -113,8 +113,8 @@ class ClienteHttp:
                 ultimo_errore = errore
                 if tentativo >= self.tentativi:
                     break
-                # Attesa crescente: un sito che sta rispondendo male non si
-                # aiuta martellandolo.
+                # Growing backoff: hammering a site that's already responding
+                # badly doesn't help.
                 time.sleep(1.5 * (tentativo + 1))
         raise ScraperError(f"la richiesta a {url} e' fallita dopo i tentativi: {ultimo_errore}")
 
@@ -126,16 +126,16 @@ class ClienteHttp:
 
 
 # ---------------------------------------------------------------------------
-# Due aiutanti per leggere l'HTML: servono quasi sempre
+# Two HTML-reading helpers: needed almost everywhere
 # ---------------------------------------------------------------------------
 
 
 class AnalizzatoreForm(HTMLParser):
-    """Estrae i campi nascosti di un form e il valore scelto nei `select`.
+    """Extracts a form's hidden fields and the selected value in each `select`.
 
-    Serve per i login dei gestionali web: quelli costruiti su ASP.NET
-    WebForms rifiutano l'invio se non si rimandano indietro i campi nascosti
-    (`__VIEWSTATE` e compagni) esattamente come sono arrivati.
+    Needed for web portal logins: those built on ASP.NET WebForms reject the
+    submission unless the hidden fields (`__VIEWSTATE` and friends) are sent
+    back exactly as received.
     """
 
     def __init__(self) -> None:
@@ -182,11 +182,11 @@ class AnalizzatoreForm(HTMLParser):
         }
 
     def trova_campo(self, frammento: str) -> dict[str, str] | None:
-        """Cerca un `input` per pezzo di `id` o di `name`.
+        """Finds an `input` by a fragment of its `id` or `name`.
 
-        Si cerca per frammento e non per nome esatto perche' i gestionali web
-        antepongono ai nomi il percorso del controllo, e quel prefisso cambia
-        appena qualcuno sposta un pannello nella pagina.
+        Matching by fragment rather than exact name because web portals
+        prefix names with the control's path, and that prefix changes as
+        soon as someone moves a panel on the page.
         """
 
         frammento = frammento.lower()
@@ -206,11 +206,11 @@ class AnalizzatoreForm(HTMLParser):
 
 
 class AnalizzatoreTabella(HTMLParser):
-    """Legge le righe di una tabella HTML come liste di celle testuali.
+    """Reads an HTML table's rows as lists of text cells.
 
-    `id_tabella` e' il frammento di `id` che identifica la tabella dei
-    prodotti; le tabelle annidate dentro quella vengono seguite, cosi' una
-    cella che contiene a sua volta una tabellina non spezza la riga.
+    `id_tabella` is the `id` fragment identifying the product table; tables
+    nested inside it are followed too, so a cell that contains a small
+    table of its own doesn't break the row.
     """
 
     def __init__(self, id_tabella: str) -> None:
@@ -267,69 +267,68 @@ def righe_di_tabella(html: str, id_tabella: str) -> list[list[str]]:
 
 
 # ---------------------------------------------------------------------------
-# La parte da scrivere per ogni sito
+# The part to write for each site
 # ---------------------------------------------------------------------------
 
 
 class SitoFornitore:
-    """Il contratto fra lo scheletro e il sito di un fornitore.
+    """The contract between the skeleton and a supplier's site.
 
-    Si eredita da questa classe e si riempiono i quattro attributi e i tre
-    metodi. Tutto il resto — ripresa, CSV, metadati, avanzamento — e' gia'
-    scritto qui sotto e non va ricopiato.
+    Subclass this and fill in the four attributes and three methods.
+    Everything else — resuming, CSV, metadata, progress — is already
+    written below and shouldn't be copied.
     """
 
-    #: Identificativo breve del fornitore, in minuscolo. Finisce nel nome del
-    #: file CSV e nel prefisso delle variabili d'ambiente.
+    #: Short lowercase supplier id. Goes into the CSV filename and the
+    #: environment-variable prefix.
     nome: str = ""
 
-    #: Le colonne del CSV, nell'ordine in cui si vogliono nel file. Sono anche
-    #: le chiavi che `pagina()` deve restituire per ogni riga.
+    #: The CSV columns, in the order wanted in the file. Also the keys
+    #: `pagina()` must return for each row.
     campi_csv: Sequence[str] = ()
 
-    #: Quante righe ci si aspetta per pagina. Serve solo ai messaggi: nessun
-    #: controllo si appoggia a questo numero.
+    #: Expected rows per page. Informational only: no check relies on it.
     righe_per_pagina: int | None = None
 
-    #: Prefisso delle variabili d'ambiente delle credenziali. Se resta vuoto
-    #: si usa `nome` in maiuscolo.
+    #: Prefix for the credential environment variables. Falls back to
+    #: `nome` uppercased when empty.
     prefisso_variabili: str = ""
 
-    # -- da riscrivere ------------------------------------------------------
+    # -- to override ------------------------------------------------------
 
     def accedi(self, cliente: ClienteHttp, credenziali: Credenziali) -> None:
-        """Esegue il login e lascia il `cliente` con la sessione aperta.
+        """Log in and leave `cliente` with an open session.
 
-        Deve sollevare `ScraperError` quando l'accesso non e' riuscito:
-        un login fallito che prosegue in silenzio produce un catalogo di
-        pagine d'errore, e nessun controllo a valle se ne accorge.
+        Must raise `ScraperError` when login fails: a failed login that
+        proceeds silently produces a catalog of error pages, and nothing
+        downstream notices.
         """
 
         raise NotImplementedError(self._da_scrivere("accedi"))
 
     def panoramica(self, cliente: ClienteHttp) -> Panoramica:
-        """Legge dal sito quante pagine ci sono, e se lo dice quanti articoli.
+        """Read from the site how many pages there are, and the item count if given.
 
-        Viene chiamata due volte: prima di cominciare e alla fine. Le due
-        risposte finiscono nei metadati e servono ad accorgersi che il
-        catalogo e' cambiato mentre lo si scaricava.
+        Called twice: before starting and at the end. Both answers go into
+        the metadata, so a catalog that changed mid-download can be
+        detected.
         """
 
         raise NotImplementedError(self._da_scrivere("panoramica"))
 
     def pagina(self, cliente: ClienteHttp, numero: int) -> list[dict[str, Any]]:
-        """Restituisce le righe di una pagina, gia' nelle chiavi di `campi_csv`.
+        """Return one page's rows, already in `campi_csv` keys.
 
-        Una pagina che non contiene nessuna riga e' un guasto, non un elenco
-        vuoto: lo scheletro si ferma da solo in quel caso.
+        A page with zero rows is a failure, not an empty listing: the
+        skeleton stops on its own in that case.
         """
 
         raise NotImplementedError(self._da_scrivere("pagina"))
 
-    # -- pronti all'uso -----------------------------------------------------
+    # -- ready to use -----------------------------------------------------
 
     def crea_cliente(self, timeout_secondi: int, tentativi: int) -> ClienteHttp:
-        """Costruisce la sessione. Si riscrive solo per cambiare user agent."""
+        """Build the session. Override only to change the user agent."""
 
         return ClienteHttp(timeout_secondi=timeout_secondi, tentativi=tentativi)
 
@@ -349,16 +348,15 @@ class SitoFornitore:
 
 
 # ---------------------------------------------------------------------------
-# Credenziali: mai negli argomenti, mai negli output
+# Credentials: never as an argument, never in output
 # ---------------------------------------------------------------------------
 
 
 def leggi_credenziali(sito: SitoFornitore, utente: str | None = None) -> Credenziali:
-    """Prende le credenziali dall'ambiente, o le chiede a schermo.
+    """Get credentials from the environment, or prompt for them.
 
-    La password non e' un argomento della riga di comando in nessun caso: la
-    riga di comando finisce nella cronologia della shell, nei log del
-    pianificatore e nell'elenco dei processi.
+    The password is never a command-line argument: the command line ends up
+    in shell history, scheduler logs and the process list.
     """
 
     variabile_utente, variabile_password = sito.variabili_credenziali()
@@ -374,7 +372,7 @@ def leggi_credenziali(sito: SitoFornitore, utente: str | None = None) -> Credenz
 
 
 # ---------------------------------------------------------------------------
-# Ripresa, CSV, metadati
+# Resuming, CSV, metadata
 # ---------------------------------------------------------------------------
 
 
@@ -385,7 +383,7 @@ def carica_ripresa(percorso: Path) -> dict[str, Any]:
 
 
 def scrivi_json(percorso: Path, valore: dict[str, Any]) -> None:
-    """Scrive sostituendo: un'interruzione non lascia un file mezzo scritto."""
+    """Write-then-replace: an interruption never leaves a half-written file."""
 
     temporaneo = percorso.with_suffix(percorso.suffix + ".tmp")
     temporaneo.write_text(json.dumps(valore, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -397,8 +395,8 @@ def aggiungi_righe(percorso: Path, campi: Sequence[str], righe: Iterable[dict[st
     if not righe:
         return 0
     nuovo = not percorso.exists() or percorso.stat().st_size == 0
-    # `utf-8-sig`: senza la firma in testa Excel apre il CSV con la codifica
-    # sbagliata e le accentate diventano illeggibili.
+    # `utf-8-sig`: without the BOM, Excel opens the CSV with the wrong
+    # encoding and accented characters become unreadable.
     with percorso.open("a", newline="", encoding="utf-8-sig") as flusso:
         scrittore = csv.DictWriter(flusso, fieldnames=list(campi))
         if nuovo:
@@ -408,7 +406,7 @@ def aggiungi_righe(percorso: Path, campi: Sequence[str], righe: Iterable[dict[st
 
 
 def _avanzamento(callback: CallbackAvanzamento | None, **evento: Any) -> None:
-    """Manda un evento di avanzamento, senza mai una credenziale dentro."""
+    """Send a progress event, never carrying a credential."""
 
     if callback is not None:
         callback(evento)
@@ -419,7 +417,7 @@ def _adesso() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Il giro completo
+# The full run
 # ---------------------------------------------------------------------------
 
 
@@ -430,7 +428,7 @@ def esegui(
     credenziali: Credenziali | None = None,
     callback_avanzamento: CallbackAvanzamento | None = None,
 ) -> int:
-    """Scarica il catalogo pagina per pagina e scrive CSV, ripresa e metadati."""
+    """Download the catalog page by page and write the CSV, resume and metadata files."""
 
     if not sito.campi_csv:
         raise ScraperError("il sito non dichiara `campi_csv`: senza colonne non si scrive un CSV")
@@ -486,9 +484,9 @@ def esegui(
     for numero in range(prima_pagina, ultima_pagina + 1):
         righe = sito.pagina(cliente, numero)
         if not righe:
-            # Zero righe quasi sempre vuol dire che la sessione e' scaduta o
-            # che la pagina e' cambiata: fermarsi lascia il CSV valido fin
-            # dove e' arrivato e la ripresa al punto giusto.
+            # Zero rows almost always means the session expired or the page
+            # changed: stopping here leaves the CSV valid up to this point
+            # and the resume state at the right page.
             raise ScraperError(f"nessuna riga di prodotto nella pagina {numero}")
         scritte = aggiungi_righe(percorso_csv, sito.campi_csv, righe)
         ripresa = {
@@ -532,9 +530,9 @@ def esegui(
         pagine_finali = panoramica_finale.pagine
         articoli_finali = panoramica_finale.articoli_dichiarati
     except ScraperError as errore:
-        # Un guasto passeggero dopo che tutte le pagine sono state scaricate
-        # non butta via il lavoro, ma resta scritto: sara' il validatore a
-        # decidere se il conteggio iniziale basta.
+        # A transient failure after all pages are downloaded doesn't discard
+        # the work, but is recorded: the validator decides whether the
+        # initial count is enough.
         errore_finale = str(errore)
 
     conteggi = [
@@ -569,7 +567,7 @@ def esegui(
 
 
 def analizza_argomenti(descrizione: str | None = None, argv: Sequence[str] | None = None) -> argparse.Namespace:
-    """Gli argomenti comuni a qualunque scraper costruito su questo scheletro."""
+    """Arguments common to any scraper built on this skeleton."""
 
     analizzatore = argparse.ArgumentParser(description=descrizione or __doc__)
     analizzatore.add_argument(
@@ -587,7 +585,7 @@ def analizza_argomenti(descrizione: str | None = None, argv: Sequence[str] | Non
 
 
 def avvia(sito: SitoFornitore, argv: Sequence[str] | None = None) -> int:
-    """Il `main` di uno scraper concreto: `raise SystemExit(avvia(IlMioSito()))`."""
+    """The `main` of a concrete scraper: `raise SystemExit(avvia(IlMioSito()))`."""
 
     try:
         return esegui(sito, analizza_argomenti(argv=argv))

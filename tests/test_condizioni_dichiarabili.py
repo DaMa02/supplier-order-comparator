@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Le condizioni commerciali si dichiarano dalla mappatura, non a mano.
+"""`commercial_conditions` must be declarable from the mapping wizard, not
+only hand-written into `references/adapters.json`.
 
-⚠ Il buco misurato su QUERCIA il 17 agosto 2026: **oggi un fornitore nuovo si
-legge e si compila, le sue offerte no.** `commercial_conditions` si scrive a
-mano dentro `references/adapters.json` e ce l'ha solo LARICE; la mappatura
-guidata non aveva un campo per dichiararla (`CAMPI_FORNITORE`) e
-`impara_adattatore` non la scriveva. QUERCIA ha quindici testi promozionali — sei
-in colonna A, nove in colonna Q — e nessuno sarebbe mai diventato una regola.
+Without a `CAMPI_FORNITORE` entry for it, a new supplier can be read and
+matched but its promotional text never becomes a rule: nothing in the
+mapping lets the operator point at the column that holds it.
 
-Qui si prova la catena intera lato servizio: la mappatura la accetta, il
-registro la impara, il motore delle offerte la ritrova. La pagina che la fa
-scegliere è di un'altra fase: qui si costruiscono i dati che mostrerà.
+Covers the service-side chain end to end: the mapping wizard accepts the
+declaration, `impara_adattatore` writes it into the adapter registry, and
+`promotion_bridge` resolves it back to columns. The page that lets the
+operator choose the layout is a separate concern; this file only builds the
+data it would show.
 """
 
 from __future__ import annotations
@@ -32,8 +32,8 @@ import schema_mapping  # noqa: E402
 from promotion_bridge import LAYOUT_BLOCCHI, LAYOUT_RIGA, colonne_richieste_dal_layout  # noqa: E402
 
 
-# Un listino con la forma di QUERCIA: le offerte scritte nella colonna del codice
-# articolo, sopra l'elenco dei prodotti.
+# A price list shaped like quercia's: promotional text written in the item-code
+# column, above the product list.
 INTESTAZIONI = ["Articolo", "EAN", "Descrizione Prodotto", "Imballo", "Prezzo Listino", "Premio", "Codice riga"]
 RIGHE = [
     {"row": 1, "values": INTESTAZIONI},
@@ -74,8 +74,8 @@ def scelta(**cambiamenti: Any) -> dict[str, Any]:
         "sheet": "Sheet",
         "headerRow": 1,
         "dataStartRow": 3,
-        # Un fornitore nuovo, che è il caso di cui parla tutto questo file:
-        # si dichiara col nome, non scegliendolo da un registro dove non c'è.
+        # A new supplier, the case this file covers: declared by name rather
+        # than picked from a registry it isn't in yet.
         "supplierName": "QUERCIA",
         "orderColumn": 8,
         "columns": {
@@ -95,7 +95,7 @@ class LaMappaturaSaDichiarareLeOfferteTests(unittest.TestCase):
         return schema_mapping.decisione_da_mappatura(profilo_finto(), scelta(**cambiamenti), [])
 
     def test_senza_dichiarazione_non_nasce_niente(self) -> None:
-        """Il silenzio resta silenzio: nessuna forma inventata per nessuno."""
+        """No declaration means no `commercial_conditions` entry is invented."""
 
         decisione = self.decisione()
 
@@ -111,14 +111,15 @@ class LaMappaturaSaDichiarareLeOfferteTests(unittest.TestCase):
         self.assertEqual(condizioni["layout"], LAYOUT_RIGA)
         self.assertEqual(condizioni["fields"]["text"], "promotion_text")
         self.assertEqual(condizioni["sheet"], "Sheet")
-        # ⚠ Dalla prima riga: su QUERCIA le condizioni stanno **sopra** l'elenco
-        # dei prodotti, e partire dalla prima riga dei dati le taglierebbe via.
+        # From row 1: on quercia the promotional text sits above the product
+        # list, so starting at the data rows would cut it off.
         self.assertEqual(condizioni["data_start_row"], 1)
 
     def test_la_colonna_delle_offerte_puo_stare_sopra_a_un_altra(self) -> None:
-        """⚠ Su QUERCIA i testi stanno nella colonna del codice articolo, su BETULLA
-        dentro la descrizione. La regola «una colonna, un campo» qui non vale:
-        non è una seconda lettura, è un'altra domanda sullo stesso testo."""
+        """A promotion-text column can coincide with another field's column
+        (e.g. the item-code column on one supplier, the description column
+        on another): reading the same cell for two purposes, not a second
+        pass over the sheet."""
 
         decisione = self.decisione(
             columns={**scelta()["columns"], "promotion_text": 1},
@@ -135,7 +136,8 @@ class LaMappaturaSaDichiarareLeOfferteTests(unittest.TestCase):
         self.assertIn("assegnata sia a", str(errore.exception))
 
     def test_dichiarare_la_forma_senza_la_colonna_e_un_errore(self) -> None:
-        """Una casella spuntata a vuoto non è una dichiarazione."""
+        """Picking a layout without pointing at its column isn't a valid
+        declaration."""
 
         with self.assertRaises(ValueError) as errore:
             self.decisione(commercialConditions={"layout": LAYOUT_RIGA})
@@ -152,11 +154,11 @@ class LaMappaturaSaDichiarareLeOfferteTests(unittest.TestCase):
         self.assertIn("non è un modo di scrivere le condizioni", str(errore.exception))
 
     def test_i_blocchi_pretendono_le_loro_colonne(self) -> None:
-        """⚠ Fallisce **adesso**, non ogni settimana.
+        """Rejects an incomplete `LAYOUT_BLOCCHI` declaration at mapping time.
 
-        Accettare `blocchi` senza il premio, il codice a barre e i codici di
-        riga scriverebbe nel registro una dichiarazione che poi produce «non so
-        più dove il listino tiene …» a ogni lettura, per sempre.
+        Accepting it without the reward, barcode and row-code columns would
+        write an adapter entry that can never be resolved back to columns on
+        any later read.
         """
 
         with self.assertRaises(ValueError) as errore:
@@ -184,7 +186,8 @@ class LaMappaturaSaDichiarareLeOfferteTests(unittest.TestCase):
 
 
 class IlRegistroLaImparaTests(unittest.TestCase):
-    """Senza questo passaggio la dichiarazione muore nella decisione della run."""
+    """Without this step the declaration would die with the run's decision
+    and never persist into the adapter registry."""
 
     def setUp(self) -> None:
         temporanea = tempfile.TemporaryDirectory()
@@ -216,10 +219,10 @@ class IlRegistroLaImparaTests(unittest.TestCase):
         )
 
         self.assertEqual(voce["commercial_conditions"]["fields"]["text"], "promotion_text")
-        # ⚠ E la colonna che quel nome indica sta in `column_map`: è l'unica
-        # forma che `promotion_bridge._dove_sta_la_colonna` sa risolvere, la
-        # stessa che segue il lettore dei prezzi. Senza, la dichiarazione
-        # nominerebbe una colonna che nessuno sa trovare.
+        # The declared field name must also resolve in `column_map`: that's
+        # the only form `promotion_bridge._dove_sta_la_colonna` can look up,
+        # the same one the price reader follows. Otherwise the declaration
+        # names a column nothing can find.
         self.assertEqual(voce["column_map"]["promotion_text"], "A")
 
     def test_senza_dichiarazione_l_adattatore_non_ne_inventa_una(self) -> None:
@@ -228,7 +231,8 @@ class IlRegistroLaImparaTests(unittest.TestCase):
         self.assertNotIn("commercial_conditions", voce)
 
     def test_una_variazione_di_schema_non_cancella_le_offerte_gia_note(self) -> None:
-        """Cambiare dove stanno le colonne non vuol dire smettere di fare offerte."""
+        """A column layout change must not drop the `commercial_conditions`
+        entry already learned for this supplier."""
 
         prima = {"commercial_conditions": {"layout": LAYOUT_RIGA, "fields": {"text": "description"}}}
         decisione = schema_mapping.decisione_da_mappatura(profilo_finto(), scelta(), [])
@@ -251,11 +255,12 @@ class IlRegistroLaImparaTests(unittest.TestCase):
 
 
 class IlMotoreDelleOfferteLaRitrovaTests(unittest.TestCase):
-    """La prova che chiude la catena: dichiarato dalla pagina, letto dal motore.
+    """Closes the chain: what the mapping wizard declares, the offer engine
+    must be able to read back.
 
-    Se `_colonne_delle_condizioni` non risolve i nomi che la mappatura ha
-    scritto, la dichiarazione è una decorazione: il registro la porta e ogni
-    lettura risponde «non so più dove il listino tiene le descrizioni».
+    If `_colonne_delle_condizioni` can't resolve the field names the mapping
+    wrote, the declaration is dead weight: the registry carries it but every
+    read fails to locate the columns.
     """
 
     def test_le_colonne_dichiarate_si_risolvono(self) -> None:
@@ -292,11 +297,11 @@ class IlMotoreDelleOfferteLaRitrovaTests(unittest.TestCase):
 
 
 class LaPaginaSaDireDaDoveVengonoLeOfferteTests(unittest.TestCase):
-    """`mappatura_effettiva` porta la dichiarazione, per chi disegnerà la pagina.
+    """`mappatura_effettiva` carries the declaration for whatever page will
+    render it.
 
-    ⚠ `None` non è un vuoto: è la differenza fra «questo fornitore non fa
-    offerte» e «le fa e non gliele stiamo leggendo», che oggi è il caso di
-    tutti tranne LARICE.
+    `None` is not an empty value: it distinguishes "this supplier has no
+    promotional offers" from "it has them and we aren't reading them yet".
     """
 
     def test_un_fornitore_senza_dichiarazione_lo_dice(self) -> None:
@@ -322,7 +327,8 @@ class LaPaginaSaDireDaDoveVengonoLeOfferteTests(unittest.TestCase):
 
 
 class LeCondizioniDiLariceRestanoQuelleTests(unittest.TestCase):
-    """Non regressione sul solo fornitore che le ha davvero, letto dal registro."""
+    """Regression check against the real registry entry for the one
+    supplier that already declares these conditions."""
 
     def test_il_registro_vero_dichiara_ancora_i_blocchi_di_larice(self) -> None:
         registro = json.loads((RADICE / "references" / "adapters.json").read_text(encoding="utf-8"))
@@ -332,7 +338,7 @@ class LeCondizioniDiLariceRestanoQuelleTests(unittest.TestCase):
 
         self.assertEqual(condizioni["layout"], LAYOUT_BLOCCHI)
         self.assertEqual(set(condizioni["fields"]), set(colonne_richieste_dal_layout(LAYOUT_BLOCCHI)))
-        # E ogni nome che dichiara è una colonna che il registro sa trovare.
+        # Every declared field name must resolve to a column in `column_map`.
         for campo in condizioni["fields"].values():
             self.assertIn(campo, larice["column_map"], campo)
 

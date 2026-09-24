@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
-"""La consegna: una cartella datata per ogni compilazione, e come si scarica.
+"""Delivery: a dated folder per order compilation, and how it's downloaded.
 
-Fase 6d.  Fino a ieri ogni compilazione scriveva in `app/data/current/outputs`
-con un nome fisso: la compilazione successiva sovrascriveva in silenzio i
-listini pronti della volta prima, e chi ricompilava prima di aver inviato
-l'ordine perdeva i file senza che niente glielo dicesse.  Qui dentro c'e' tutto
-quello che serve perche' questo non succeda piu': il nome della cartella, la
-sua creazione atomica, l'audit che la descrive, l'elenco delle compilazioni
-ricavato dalle cartelle vere e le due difese che impediscono a un percorso
-costruito a mano di uscire dalla cartella degli ordini.
+Writing every compilation into a fixed-name `app/data/current/outputs`
+folder let a later compilation silently overwrite the price lists a
+previous one had prepared, and recompiling before sending the order could
+lose files with no warning. This module provides everything needed to
+prevent that: the
+folder-naming scheme, its atomic creation, the audit record that describes
+it, the listing of compilations built from the real folders on disk, and the
+two path defenses that keep a hand-built path from escaping the orders
+folder.
 
-Il modulo e' autonomo: **non importa `server`** e non sa che cosa sia una rotta
-HTTP.  Le uniche stringhe che sembrano rotte sono i campi `url` e `zipUrl`
-della voce d'elenco (§4 del contratto), che il servizio rimanda tali e quali
-alla pagina: sono dati della voce, non conoscenza del protocollo.
+Self-contained: it does not import `server` and knows nothing about HTTP
+routes. The only route-shaped strings are the `url` and `zipUrl` fields of a
+listing entry (`voce`), which the server forwards to the page unchanged
+— they're entry data, not protocol knowledge.
 
-Sola libreria standard.
+Standard library only.
 """
 
 from __future__ import annotations
@@ -38,34 +39,35 @@ NOME_PIANO = "final_order_plan.json"
 MESI = ("gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno",
         "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre")
 
-# Il prefisso delle rotte di consegna.  Sta qui e non in `server.py` perche' la
-# voce dell'elenco (§4) porta gia' gli URL costruiti: la pagina non deve
-# incollare pezzi di percorso a mano.
+# Prefix for delivery routes. Lives here rather than in `server.py` because
+# the listing entry (`voce`) already carries built URLs: the page never
+# hand-assembles a path.
 PREFISSO_URL = "/ordini"
 
-# Massimo suffisso provato quando due compilazioni cadono nello stesso minuto.
+# Highest suffix tried when two compilations land in the same minute.
 MAX_SUFFISSO = 99
 
-# I caratteri che Windows non accetta in un nome di file.  I due punti sono in
-# questo elenco: e' il motivo per cui l'ora si scrive `1435` e non `14:35`.
+# Characters Windows rejects in a file name. The colon is in this set, which
+# is why the time is written as `1435`, not `14:35`.
 VIETATI_WINDOWS = '<>:"/\\|?*'
 
-# `AAAA-MM-GG_HHMM`, con l'eventuale suffisso progressivo `_2`, `_3`, ...
+# `YYYY-MM-DD_HHMM`, with an optional `_2`, `_3`, ... suffix.
 NOME_CARTELLA_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(?:_(\d+))?$")
 
-# L'elenco dei prodotti che nessun fornitore può dare (punto 5).  Il nome e il
-# `tipo` stanno qui e non in `app/da_reperire.py` perché è **questo** modulo che
-# deve riconoscere il file dal solo nome, quando la cartella si rilegge senza
-# audit; `da_reperire` importa questo, non viceversa, e le due costanti restano
-# una sola verità invece di due che possono allontanarsi in silenzio.
+# The "products with no supplier" list (item 5). Its file-name prefix and
+# `tipo` value live here rather than in `app/da_reperire.py` because this
+# module is what needs to recognize the file by name alone when a folder is
+# re-read without an audit; `da_reperire` imports these constants rather than
+# the other way around, so there's one source of truth instead of two that
+# could drift apart silently.
 PREFISSO_DA_REPERIRE = "Prodotti da reperire "
 TIPO_DA_REPERIRE = "da_reperire"
 
-# I tipi che si consegnano: quelli che si contano per decidere se il pulsante
-# «Scarica» compare e che finiscono nello zip.  L'elenco dei prodotti da
-# reperire è merce da consegnare quanto un listino: una compilazione fatta di
-# **soli** prodotti da reperire — il caso in cui l'utente non può ordinare
-# niente da nessuno — altrimenti non avrebbe nessun collegamento per scaricarli.
+# The types that count as deliverable: what's counted to decide whether the
+# "Download" button appears, and what goes into the zip. The to-be-sourced
+# list is deliverable output just like a price list — a compilation made up
+# only of to-be-sourced products (nothing could be ordered from any supplier)
+# would otherwise have no download link at all.
 TIPI_DA_CONSEGNARE = (
     "listino",
     TIPO_DA_REPERIRE,
@@ -73,29 +75,29 @@ TIPI_DA_CONSEGNARE = (
 
 
 # --------------------------------------------------------------------------
-# Nomi
+# Naming
 # --------------------------------------------------------------------------
 
 def nome_cartella(momento: datetime) -> str:
-    """Il nome della cartella di una compilazione: `2026-08-12_1435`."""
+    """The folder name for a compilation: `2026-08-12_1435`."""
     return momento.strftime("%Y-%m-%d_%H%M")
 
 
 def data_leggibile(momento: datetime) -> str:
     """`12 agosto 2026`.
 
-    I nomi dei mesi vengono da `MESI` e non da `strftime("%B")`: quello dipende
-    dalla localizzazione del sistema e su questa macchina darebbe `August`.
+    Month names come from `MESI`, not `strftime("%B")`, since that depends on
+    the system locale and would give `August` on this machine.
     """
     return f"{momento.day} {MESI[momento.month - 1]} {momento.year}"
 
 
 def _ripulisci_nome_file(valore: str) -> str:
-    """Rende `valore` usabile come pezzo di nome di file su Windows.
+    """Make `valore` usable as a file-name fragment on Windows.
 
-    Punti e spazi in coda diventano `_`: Windows li toglierebbe in silenzio, e
-    due fornitori che differiscono solo per quelli finirebbero nello stesso
-    file senza che nessuno se ne accorga.
+    Trailing dots and spaces become `_`: Windows silently strips them, so two
+    suppliers whose names differ only there would collide into the same file
+    without anyone noticing.
     """
     ripulito = "".join(
         "_" if carattere in VIETATI_WINDOWS or ord(carattere) < 32 or ord(carattere) == 127 else carattere
@@ -108,16 +110,15 @@ def _ripulisci_nome_file(valore: str) -> str:
 
 
 def nome_listino(fornitore: str, momento: datetime, estensione: str = ".xlsx") -> str:
-    """`Ordine LARICE — 12 agosto 2026.xlsx`, con l'em dash U+2014 spaziato.
+    """`Ordine LARICE — 12 agosto 2026.xlsx`, with a spaced em dash (U+2014).
 
-    L'estensione la decide il documento di partenza e non questa funzione: a
-    Noce si rimanda il **loro** file, che e' un `.xls`, e rinominarlo
-    `.xlsx` vorrebbe dire consegnare un documento che dichiara di essere quello
-    che non e'.
+    The extension is decided by the source document, not this function: the
+    file sent back to a supplier that ships `.xls` stays `.xls` — renaming it
+    to `.xlsx` would deliver a document claiming to be something it isn't.
 
-    L'em dash regge: `zipfile` alza la bandiera 0x800 e Esplora risorse rilegge
-    il nome carattere per carattere (misurato prima della 6d).  Quello che non
-    regge e' l'intestazione HTTP, e se ne occupa `intestazione_allegato`.
+    The em dash survives: `zipfile` sets the UTF-8 flag (0x800) and Windows
+    Explorer reads the name back character for character. What doesn't
+    survive is the HTTP header, handled separately by `intestazione_allegato`.
     """
     coda = _ripulisci_nome_file(str(estensione or ".xlsx"))
     if not coda.startswith("."):
@@ -126,7 +127,7 @@ def nome_listino(fornitore: str, momento: datetime, estensione: str = ".xlsx") -
 
 
 def _pezzi_nome_cartella(nome: str) -> tuple[datetime, int | None] | None:
-    """Il momento e il suffisso letti dal nome della cartella, o `None`."""
+    """The timestamp and suffix parsed from the folder name, or `None`."""
     corrispondenza = NOME_CARTELLA_RE.match(str(nome or ""))
     if corrispondenza is None:
         return None
@@ -134,16 +135,16 @@ def _pezzi_nome_cartella(nome: str) -> tuple[datetime, int | None] | None:
     try:
         momento = datetime(int(anno), int(mese), int(giorno), int(ora), int(minuto))
     except ValueError:
-        # `2026-02-30_1435` ha la forma giusta e non e' una data.
+        # `2026-02-30_1435` has the right shape but isn't a real date.
         return None
     return momento, (int(suffisso) if suffisso is not None else None)
 
 
 def etichetta(nome_cartella: str) -> str:
-    """`12 agosto 2026, 14:35`, oppure `... (2)` quando c'e' il suffisso.
+    """`12 agosto 2026, 14:35`, or `... (2)` when a suffix is present.
 
-    Un nome che non si legge come data torna com'e': una cartella creata a mano
-    dentro `ordini` non deve far esplodere l'elenco.
+    A name that doesn't parse as a date is returned as-is: a folder someone
+    created by hand inside `ordini` must not crash the listing.
     """
     pezzi = _pezzi_nome_cartella(nome_cartella)
     if pezzi is None:
@@ -156,8 +157,8 @@ def etichetta(nome_cartella: str) -> str:
 def nome_zip(nome_cartella: str) -> str:
     """`Listini pronti per invio 2026-08-12 14-35.zip`.
 
-    I due punti dell'ora diventano un trattino perche' il nome finisce in un
-    file che l'utente salva su disco.
+    The time's colon becomes a dash because this name ends up as a file the
+    user saves to disk.
     """
     pezzi = _pezzi_nome_cartella(nome_cartella)
     if pezzi is None:
@@ -170,16 +171,17 @@ def nome_zip(nome_cartella: str) -> str:
 
 
 # --------------------------------------------------------------------------
-# La cartella
+# The folder
 # --------------------------------------------------------------------------
 
 def crea_cartella(radice: Path, momento: datetime) -> Path:
-    """Crea la cartella della compilazione e la restituisce.
+    """Create the compilation's folder and return it.
 
-    `mkdir()` **senza `exist_ok`**, catturando `FileExistsError`: e' l'unico
-    modo atomico di dire «l'ho creata io».  Un `if not exists(): mkdir()` e' una
-    corsa, e due compilazioni nello stesso minuto finirebbero nella stessa
-    cartella sovrascrivendosi -- cioe' esattamente il difetto che la 6d chiude.
+    `mkdir()` without `exist_ok`, catching `FileExistsError`, is the only
+    atomic way to say "I created this one". An `if not exists(): mkdir()`
+    check is a race: two compilations in the same minute would land in the
+    same folder and overwrite each other, exactly the failure this module
+    exists to prevent.
     """
     radice = Path(radice)
     radice.mkdir(parents=True, exist_ok=True)
@@ -195,14 +197,14 @@ def crea_cartella(radice: Path, momento: datetime) -> Path:
 
 
 def ultima(radice: Path) -> Path | None:
-    """La cartella della compilazione piu' recente **che ha un piano**, o `None`.
+    """The most recent compilation folder that has an order plan, or `None`.
 
-    Non basta «la cartella piu' recente»: il riquadro nuovo insegna all'utente
-    che `ordini` e' il suo archivio, e appena ci crea dentro una sottocartella
-    sua — o Windows gli lascia una «Nuova cartella» per un clic sbagliato —
-    quella diventerebbe l'ultima compilazione, e chi ha appena compilato si
-    sentirebbe rispondere che compilazioni non ce ne sono.  Una cartella senza
-    piano non e' una compilazione.
+    "Most recent folder" alone isn't enough: the app treats `ordini` as the
+    user's archive, and it invites the user to create their own subfolders
+    there (or Windows leaves a stray "New folder" from a misclick). Such a
+    folder would otherwise count as the latest compilation and someone who
+    just compiled would be told there are none. A folder with no order plan
+    isn't a compilation.
     """
     radice = Path(radice)
     for voce_elenco in elenco(radice):
@@ -213,16 +215,16 @@ def ultima(radice: Path) -> Path | None:
 
 
 # --------------------------------------------------------------------------
-# L'audit
+# The audit record
 # --------------------------------------------------------------------------
 
 def scrivi_audit(cartella: Path, audit: dict) -> Path:
-    """Scrive `compilazione.json` in binario, in modo atomico.
+    """Write `compilazione.json` as bytes, atomically.
 
-    In binario perche' su Windows `write_text` trasformerebbe ogni `\\n` in
-    `\\r\\n`, e questo file lo rileggono anche gli strumenti a riga di comando.
-    Temporaneo accanto + `os.replace`: un audit troncato a meta' scrittura
-    direbbe il falso sulla compilazione.
+    As bytes because `write_text` would turn every `\\n` into `\\r\\n` on
+    Windows, and this file is also read back by command-line tools. Temp file
+    next to it plus `os.replace`: an audit truncated mid-write would lie
+    about the compilation.
     """
     percorso = Path(cartella) / NOME_AUDIT
     testo = json.dumps(audit, ensure_ascii=False, indent=2) + "\n"
@@ -233,10 +235,10 @@ def scrivi_audit(cartella: Path, audit: dict) -> Path:
 
 
 def leggi_audit(cartella: Path) -> dict | None:
-    """Il dizionario dell'audit, oppure `None`.  **Non solleva mai.**
+    """The audit dict, or `None`. Never raises.
 
-    Un audit rotto e' un problema di quella compilazione, non dell'elenco di
-    tutte le altre.
+    A broken audit is a problem for that one compilation, not for the
+    listing of every other one.
     """
     try:
         dati = json.loads((Path(cartella) / NOME_AUDIT).read_bytes().decode("utf-8"))
@@ -246,44 +248,45 @@ def leggi_audit(cartella: Path) -> dict | None:
 
 
 def tipo_file(nome: str) -> str:
-    """Il `tipo` dedotto dal solo nome, per le cartelle senza audit leggibile.
+    """Infer the `tipo` from the file name alone, for folders with no readable audit.
 
-    Un nome che qui non e' previsto torna `"altro"`, e nell'elenco compare come
-    «altro documento».  E' il ripiego che regge le cartelle d'ordine vecchie:
-    dentro ci possono essere artefatti di servizio che il programma non produce
-    piu' — e una cartella non deve ne' sparire dall'elenco ne' far esplodere la
-    voce solo perche' contiene un file di un'epoca precedente.
+    A name that doesn't match any known pattern returns `"altro"`, shown in
+    the listing as "other document". This fallback keeps order folders
+    written by earlier versions of the app usable: a file the current version
+    doesn't produce must neither hide the folder from the listing nor crash
+    the entry.
     """
     if nome == NOME_PIANO:
         return "piano"
-    # ⚠ Prima del ripiego sull'estensione: l'elenco dei prodotti da reperire è
-    # un `.xlsx` e senza questo ramo verrebbe scambiato per un listino, cioè
-    # finirebbe nello zip diretto al fornitore — un foglio che dice quello che
-    # quel fornitore *non* ci ha venduto.
+    # Checked before the generic extension fallback below: the to-be-sourced
+    # list is itself a `.xlsx` file, and without this branch it would be
+    # mistaken for a price list and end up in the zip sent to a supplier — a
+    # sheet listing exactly what that supplier did *not* sell us.
     ripulito = str(nome or "").casefold()
     if ripulito.startswith(PREFISSO_DA_REPERIRE.casefold()) and ripulito.endswith(".xlsx"):
         return TIPO_DA_REPERIRE
-    # Il `.xls` c'e' perche' a Noce si rimanda il loro documento, che e' un
-    # Excel 97-2003: senza, la copia compilata sarebbe finita fra gli «altri» e
-    # la pagina non l'avrebbe contata come un listino da spedire.
+    # `.xls` is here because the file returned to a supplier that ships
+    # Excel 97-2003 is a `.xls`; without it, that compiled copy would land in
+    # "other" and the page wouldn't count it as a price list to send.
     if nome.casefold().endswith((".xlsx", ".xls")):
         return "listino"
     return "altro"
 
 
 def e_documento(nome: str) -> bool:
-    """Se quel nome e' un documento della compilazione o roba di servizio.
+    """Whether a name is a compilation document, as opposed to housekeeping noise.
 
-    Restano fuori quattro famiglie, e ognuna per un motivo suo:
+    Four families are excluded, each for its own reason:
 
-    - i nomi che cominciano per `.`, perche' il writer lavora in
+    - names starting with `.`, since the writer works in
       `.ordine-temporaneo-*`;
-    - `~$...`, che su Windows e' il file di proprieta' che Excel deposita
-      accanto a un documento aperto.  Senza questo filtro basta aprire una copia
-      per controllarla perche' finisca nello zip diretto al fornitore, e nella
-      cartella senza audit verrebbe anche contato come un listino;
-    - i `.tmp`, che sono le scritture atomiche colte a meta';
-    - l'audit stesso, che descrive la cartella e non e' merce da consegnare.
+    - `~$...`, the lock file Excel drops next to a document that's open on
+      Windows. Without this filter, opening a copy just to check it would be
+      enough to get it included in the zip sent to a supplier, and in a
+      folder with no audit it would also be counted as a price list;
+    - `.tmp` files, atomic writes caught mid-way;
+    - the audit file itself, which describes the folder and isn't
+      deliverable content.
     """
     nome = str(nome or "")
     if not nome or nome.startswith(".") or nome.startswith("~$"):
@@ -294,7 +297,7 @@ def e_documento(nome: str) -> bool:
 
 
 # --------------------------------------------------------------------------
-# L'elenco
+# The listing
 # --------------------------------------------------------------------------
 
 def _numero(valore: Any) -> float | None:
@@ -308,7 +311,7 @@ def _url_file(nome_della_cartella: str, nome: str) -> str:
 
 
 def _tipi_dall_audit(audit: dict) -> dict[str, str]:
-    """Nome del documento -> `tipo`, letto dall'audit."""
+    """Document name -> `tipo`, read from the audit."""
     tipi: dict[str, str] = {}
     for riga in audit.get("file") or []:
         if not isinstance(riga, dict):
@@ -322,7 +325,7 @@ def _tipi_dall_audit(audit: dict) -> dict[str, str]:
 
 
 def _nomi_sul_disco(cartella: Path) -> list[str]:
-    """I documenti che ci sono **adesso** nella cartella, in ordine di nome."""
+    """The documents currently in the folder, sorted by name."""
     try:
         with os.scandir(cartella) as scansione:
             return sorted(
@@ -334,21 +337,22 @@ def _nomi_sul_disco(cartella: Path) -> list[str]:
 
 
 def voce(cartella: Path, *, etichetta_fornitore: Callable[[str], str] | None = None) -> dict:
-    """La voce dell'elenco (§4 del contratto), in camelCase per `app.js`.
+    """Build the listing entry for a delivery folder, in camelCase for `app.js`.
 
-    Una cartella che c'e' compare **sempre**: se l'audit manca o non si legge la
-    voce esiste lo stesso con `completa: false`, perche' sparire dall'elenco
-    sarebbe il modo peggiore di segnalare un audit rotto.
+    A folder that exists always shows up: if the audit is missing or
+    unreadable the entry still exists, with `completa: false`, because
+    disappearing from the listing would be the worst way to report a broken
+    audit.
 
-    ⚠ L'elenco dei documenti si legge **dal disco**, non dall'audit, e l'audit
-    dice soltanto che tipo sia ciascuno.  L'audit descrive la cartella
-    nell'istante in cui e' stato scritto; da li' in poi l'utente vive in quella
-    cartella — allega un listino a una mail, lo sposta, lo rinomina.  Un elenco
-    costruito dall'audit continuerebbe a contare un documento che non c'e' piu'
-    e offrirebbe un collegamento che risponde 404; e lo zip, che chiede ogni
-    nome dichiarato, si rifiuterebbe di consegnare anche i listini rimasti.
-    Quello che l'audit nomina e il disco non ha finisce in `mancanti`, perche'
-    sparire in silenzio e' proprio il difetto che questa fase chiude.
+    The document list is read from disk, not from the audit — the audit only
+    says what type each one is. The audit describes the folder at the moment
+    it was written; afterwards the user lives in that folder, attaching a
+    price list to an email, moving it, renaming it. A listing built purely
+    from the audit would keep counting a document that's no longer there and
+    offer a link that returns 404, and the zip endpoint, which requires
+    every declared name to exist, would then refuse to deliver even the
+    price lists that are still present. Anything the audit names that isn't
+    on disk goes into `mancanti` instead of disappearing silently.
     """
     cartella = Path(cartella)
     nome_della_cartella = cartella.name
@@ -373,9 +377,9 @@ def voce(cartella: Path, *, etichetta_fornitore: Callable[[str], str] | None = N
         tipi = _tipi_dall_audit(audit)
         file_voci = [
             {
-                # Un documento comparso dopo la scrittura dell'audit e' `altro`:
-                # non sappiamo di chi sia ne' da dove venga, e quindi non entra
-                # fra i listini da consegnare al fornitore.
+                # A document that appeared after the audit was written is
+                # `altro`: its origin is unknown, so it doesn't count as a
+                # price list to deliver to a supplier.
                 "nome": nome,
                 "tipo": tipi.get(nome, "altro"),
                 "url": _url_file(nome_della_cartella, nome),
@@ -399,23 +403,22 @@ def voce(cartella: Path, *, etichetta_fornitore: Callable[[str], str] | None = N
         ]
         totale_netto = _numero(audit.get("totale_netto"))
         righe = audit.get("righe") if isinstance(audit.get("righe"), int) and not isinstance(audit.get("righe"), bool) else None
-        # Gli avvisi che l'audit ha registrato: una copia scartata, un nome
-        # rimasto brutto, un ordine non entrato fra quelli da controllare. Fino
-        # a oggi restavano dentro `compilazione.json` e la voce dell'elenco non
-        # li nominava: la notizia viveva quanto la pagina che l'aveva vista, e
-        # ricaricando spariva (revisione di regressione del 14 agosto 2026).
+        # Warnings the audit recorded: a discarded copy, a name that stayed
+        # ugly, an order that didn't make it into the ones to check.
+        # Surfaced in the listing entry so they persist across reloads
+        # instead of living only as long as the page that first saw them.
         avvisi = [str(voce).strip() for voce in (audit.get("avvisi") or []) if str(voce).strip()]
 
-    # I listini si contano su quello che c'e', non su quello che l'audit
-    # dichiarava: e' il numero che la pagina mostra, e dev'essere vero adesso.
+    # Price lists are counted from what's actually there, not what the audit
+    # declared: it's the number the page shows, and it must be true right now.
     #
-    # ⚠ Sono due domande diverse e vogliono due numeri diversi. La pagina scrive
-    # «2 listini», e l'elenco dei prodotti da reperire un listino non e': contarlo
-    # li' direbbe una cosa falsa. Il pulsante «Scarica» invece chiede «c'e'
-    # qualcosa da portare via?», e li' quell'elenco conta eccome — una
-    # compilazione in cui non si e' potuto ordinare niente da nessuno produce
-    # **solo** lui, e con il conteggio dei soli listini resterebbe senza nessun
-    # collegamento per scaricarlo.
+    # These are two different questions with two different counts. The page
+    # says "2 price lists", and the to-be-sourced list isn't a price list —
+    # counting it there would be false. The "Download" button instead asks
+    # "is there anything to hand over?", and there the to-be-sourced list
+    # does count: a compilation where nothing could be ordered from any
+    # supplier produces only that list, and counting price lists alone would
+    # leave it with no download link at all.
     listini = sum(1 for riga in file_voci if riga["tipo"] == "listino")
     da_consegnare = sum(1 for riga in file_voci if riga["tipo"] in TIPI_DA_CONSEGNARE)
 
@@ -429,14 +432,14 @@ def voce(cartella: Path, *, etichetta_fornitore: Callable[[str], str] | None = N
         "righe": righe,
         "listini": listini,
         "file": file_voci,
-        # Quello che l'audit nomina e sul disco non c'e' piu'.  Non e' un
-        # errore del programma — e' l'utente che ha spostato un documento — ma
-        # va detto, perche' chi cerca un listino di due settimane fa deve sapere
-        # che l'ha spostato lui e non che il programma l'ha perso.
+        # Names the audit lists that are no longer on disk. Not a bug — the
+        # user moved the document — but it needs to be said, so someone
+        # looking for a two-week-old price list knows they moved it
+        # themselves rather than that the app lost it.
         "mancanti": mancanti,
         "avvisi": avvisi,
-        # Senza niente da consegnare il pulsante non deve comparire: e' `null`,
-        # non un URL che risponderebbe 404.
+        # `null`, not a URL that would 404, when there's nothing to deliver:
+        # the download button must not appear.
         "zipUrl": (f"{PREFISSO_URL}/{quote(nome_della_cartella, safe='')}/zip" if da_consegnare else None),
         "zipNome": nome_zip(nome_della_cartella),
         "completa": completa,
@@ -444,7 +447,7 @@ def voce(cartella: Path, *, etichetta_fornitore: Callable[[str], str] | None = N
 
 
 def _chiave_ordine(cartella: Path) -> float:
-    """Quando è stata fatta la compilazione: l'audit se si legge, altrimenti il disco."""
+    """When the compilation happened: from the audit if readable, else from disk."""
     audit = leggi_audit(cartella)
     if isinstance(audit, dict) and isinstance(audit.get("creato_il"), str):
         try:
@@ -458,17 +461,17 @@ def _chiave_ordine(cartella: Path) -> float:
 
 
 def elenco(radice: Path, *, etichetta_fornitore: Callable[[str], str] | None = None) -> list[dict]:
-    """Tutte le compilazioni, dalla piu' recente.
+    """List every compilation, most recent first.
 
-    Si scandiscono le cartelle vere: un indice a parte sarebbe una cosa in piu'
-    che puo' disallinearsi dal disco.
+    Scans the real folders: a separate index would be one more thing that
+    can drift out of sync with the disk.
 
-    Si elenca solo cio' che `cartella_sicura` accetterebbe, cioe' esattamente
-    quello che le rotte sanno servire.  Una giunzione NTFS dentro `ordini` — un
-    `mklink /J` verso una cartella di rete, un backup ripristinato male — si
-    risolve fuori e viene rifiutata: senza questo filtro comparirebbe come una
-    compilazione, con dentro i nomi dei file di fuori e collegamenti che
-    rispondono 404.
+    Only lists what `cartella_sicura` would accept — exactly what the routes
+    know how to serve. An NTFS junction inside `ordini` (an `mklink /J` to a
+    network folder, or a badly restored backup) resolves outside the orders
+    folder and is rejected: without this filter it would show up as a
+    compilation, listing file names from outside and offering links that
+    return 404.
     """
     radice = Path(radice)
     try:
@@ -485,11 +488,11 @@ def elenco(radice: Path, *, etichetta_fornitore: Callable[[str], str] | None = N
 
 
 # --------------------------------------------------------------------------
-# Le difese sul percorso
+# Path defenses
 # --------------------------------------------------------------------------
 
 def _dentro(figlio: Path, genitore: Path) -> bool:
-    """`figlio` sta dentro `genitore`?  Su percorsi già risolti."""
+    """Is `figlio` inside `genitore`? Assumes both paths are already resolved."""
     try:
         figlio.relative_to(genitore)
         return True
@@ -498,19 +501,19 @@ def _dentro(figlio: Path, genitore: Path) -> bool:
 
 
 def _percorso_sicuro(genitore: Path, nome: str, *, vuole_cartella: bool) -> Path | None:
-    """La difesa a lista bianca condivisa da `cartella_sicura` e `file_sicuro`.
+    """The allowlist check shared by `cartella_sicura` and `file_sicuro`.
 
-    Non si filtrano i caratteri cattivi -- filtrare e' una lista nera e le liste
-    nere si dimenticano sempre qualcosa.  Si chiede al disco che cosa esiste
-    davvero e si accetta solo un nome che compare **identico** in quella
-    scansione: i flussi alternativi NTFS (`compilazione.json:$DATA`) e i nomi
-    riservati non compaiono mai in una scansione, quindi cadono qui senza che
-    nessuno debba averli previsti.  Poi si verifica comunque il contenimento,
-    perche' un collegamento simbolico compare nella scansione ma si risolve
-    dove gli pare.
+    Doesn't filter bad characters — that's a denylist, and denylists always
+    miss something. Instead it asks the disk what actually exists and
+    accepts only a name that appears identically in that directory scan:
+    NTFS alternate data streams (`compilazione.json:$DATA`) and reserved
+    names never show up in a scan, so they're rejected without needing to be
+    special-cased. Containment is still verified afterward, because a
+    symlink shows up in the scan but can resolve anywhere.
 
-    Chi chiama arriva da `unquote(...)`: `..%2f..%2fsecrets.json` a questo punto
-    e' gia' `../../secrets.json`, quindi la difesa lavora sul nome decodificato.
+    The caller passes a name already run through `unquote(...)`:
+    `..%2f..%2fsecrets.json` has already become `../../secrets.json` by this
+    point, so this check works on the decoded name.
     """
     if not isinstance(nome, str) or not nome:
         return None
@@ -543,26 +546,26 @@ def _percorso_sicuro(genitore: Path, nome: str, *, vuole_cartella: bool) -> Path
 
 
 def cartella_sicura(radice: Path, nome: str) -> Path | None:
-    """La cartella di quella compilazione, o `None` se il nome non è legittimo."""
+    """That compilation's folder, or `None` if the name isn't legitimate."""
     return _percorso_sicuro(radice, nome, vuole_cartella=True)
 
 
 def file_sicuro(cartella: Path, nome: str) -> Path | None:
-    """Il file dentro quella compilazione, o `None` se il nome non è legittimo."""
+    """That compilation's file, or `None` if the name isn't legitimate."""
     return _percorso_sicuro(cartella, nome, vuole_cartella=False)
 
 
 # --------------------------------------------------------------------------
-# La consegna vera e propria
+# Actual delivery
 # --------------------------------------------------------------------------
 
 def zip_in_memoria(cartella: Path, nomi: Sequence[str]) -> bytes:
-    """I byte di uno zip costruito al momento in memoria.
+    """The bytes of a zip built on the fly, in memory.
 
-    Non si scrive mai su disco: sarebbe l'ennesimo artefatto da tenere
-    allineato con la cartella che dovrebbe descrivere.  Ogni nome ripassa da
-    `file_sicuro` anche se chi chiama lo ha appena letto dall'audit: l'audit e'
-    un file di testo e questa e' l'ultima porta prima di leggere il disco.
+    Never written to disk: that would be one more artifact to keep in sync
+    with the folder it's meant to describe. Every name is checked through
+    `file_sicuro` again even when the caller just read it from the audit —
+    the audit is a text file, and this is the last gate before touching disk.
     """
     nomi = list(nomi or [])
     if not nomi:
@@ -573,40 +576,40 @@ def zip_in_memoria(cartella: Path, nomi: Sequence[str]) -> bytes:
         for nome in nomi:
             percorso = file_sicuro(cartella, nome)
             if percorso is None:
-                # Non si ripete il nome chiesto: finirebbe in un messaggio
-                # all'utente e direbbe a chi prova che cosa ha provato.
+                # The requested name isn't echoed back: it would end up in a
+                # message to the user and reveal to an attacker what they'd
+                # just tried.
                 raise ValueError("Uno dei documenti chiesti non è in questa compilazione")
-            # `arcname=nome` e non il percorso: dentro lo zip niente cartelle.
+            # `arcname=nome`, not the full path: no folders inside the zip.
             archivio.write(percorso, arcname=nome)
     return memoria.getvalue()
 
 
 def _ripiego_ascii(nome: str) -> str:
-    """Il nome ridotto ad ASCII per la parte `filename=` dell'intestazione."""
+    """The name reduced to ASCII, for the header's `filename=` part."""
     scomposto = unicodedata.normalize("NFKD", str(nome))
     pezzi = []
     for carattere in scomposto:
         if unicodedata.combining(carattere):
-            continue  # l'accento della `e` accentata, gia' staccato da NFKD
+            continue  # accent mark already split off by NFKD
         if carattere in '"\\':
-            continue  # chiuderebbe le virgolette dell'intestazione
+            continue  # would close the header's quotes early
         codice = ord(carattere)
         if codice < 32 or codice == 127:
-            continue  # un `\r\n` qui dentro sarebbe un'iniezione di intestazioni
+            continue  # a `\r\n` here would be a header-injection attack
         pezzi.append(carattere if codice < 128 else "-")
     ripiego = "".join(pezzi).strip()
     return ripiego or "allegato"
 
 
 def intestazione_allegato(nome: str) -> str:
-    """Il valore di `Content-Disposition` per uno scaricamento, in RFC 5987.
+    """The `Content-Disposition` header value for a download, per RFC 5987.
 
-    Misurato prima della 6d: `attachment; filename="Ordine LARICE — 12 agosto
-    2026.xlsx"` **non si codifica in latin-1**, e `BaseHTTPRequestHandler`
-    scrive le intestazioni in latin-1: la risposta morirebbe con
-    `UnicodeEncodeError` mentre scrive l'intestazione, cioe' a corpo gia'
-    promesso.  Quindi ripiego ASCII fra virgolette per i lettori vecchi, piu'
-    `filename*=UTF-8''` per tutti gli altri, che e' quello che i browser di oggi
-    preferiscono.
+    `attachment; filename="Ordine LARICE — 12 agosto 2026.xlsx"` doesn't
+    encode in latin-1, and `BaseHTTPRequestHandler` writes headers in
+    latin-1: the response would fail with `UnicodeEncodeError` while writing
+    the header, after the body had already been promised. Hence a quoted
+    ASCII fallback for older readers, plus `filename*=UTF-8''` for
+    everything else, which current browsers prefer.
     """
     return f"attachment; filename=\"{_ripiego_ascii(nome)}\"; filename*=UTF-8''{quote(str(nome), safe='')}"

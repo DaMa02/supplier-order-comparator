@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-"""Il ponte fra i listini e il motore delle promozioni.
+"""The bridge between supplier price lists and the promotion engine.
 
-Qui si prova quello che il motore da solo non puo' provare: che cosa il
-lettore di un listino riconosce come condizione commerciale, che cosa perde
-per strada e se quello che perde lascia una traccia che l'utente puo' vedere.
+Covers what the engine alone can't: what a price-list reader recognizes as a
+commercial condition, what it fails to parse, and whether that failure leaves
+a trace the user can see instead of disappearing silently.
 
-⚠ Fino al 15 agosto 2026 il lettore conosceva **un fornitore solo**: andava a
-prendere `larice_v1` per nome e scriveva «LARICE» nei messaggi.  Da qui in
-avanti chi viene letto lo dice il registro, e le prove che contano di piu'
-sono due: quella sul listino LARICE vero — 13 condizioni su 13, come prima — e
-quella su un fornitore inventato che il codice non nomina da nessuna parte.
+The reader must work for any supplier the adapter registry declares, not one
+hardcoded name: the tests run both against the real larice price list (13
+conditions out of 13) and against a synthetic supplier the code never
+references by name.
 """
 
 from __future__ import annotations
@@ -30,8 +29,8 @@ import promotion_bridge  # noqa: E402
 from promotions import KIND_AMBIGUOUS, KIND_INCLUDED_PACK, KIND_THRESHOLD_GIFT  # noqa: E402
 
 
-# Le colonne del listino Larice usate dal lettore: G descrizione, J nome del
-# premio, P codice dello sconto, R codice a barre.
+# larice price-list columns used by the reader: G description, J reward name,
+# P discount code, R barcode.
 COLONNA_G = 7
 COLONNA_J = 10
 COLONNA_P = 16
@@ -43,10 +42,10 @@ def scrivi_listino(
     righe: list[dict[str, object]],
     colonne: dict[str, int] | None = None,
 ) -> Path:
-    """Costruisce un listino Larice finto con le sole colonne che contano.
+    """Build a fake larice price list with only the columns that matter.
 
-    `colonne` serve a spostarle: e' l'unico modo per provare che il lettore
-    segue il registro invece della posizione che si era imparato a memoria.
+    `colonne` lets a test move them, to prove the reader follows the adapter
+    registry rather than a hardcoded column position.
     """
 
     posizioni = colonne or {"g": COLONNA_G, "j": COLONNA_J, "p": COLONNA_P, "r": COLONNA_R}
@@ -79,11 +78,9 @@ class LetturaDeiBlocchiLarice(unittest.TestCase):
         return promozioni
 
     def test_l_ean_della_riga_premio_entra_nel_contratto(self):
-        """L'EAN del premio era gia' letto due righe sopra e buttato via.
-
-        Senza, `reward.ean` resta nullo su tutte le soglie e non c'e' modo di
-        risalire all'articolo regalato quando arriva la merce.
-        """
+        """The reward row's EAN must reach `reward.ean`, not just get parsed
+        and discarded: without it there's no way to identify the free item
+        when the goods arrive."""
 
         promozioni = self.leggi([
             {"g": "ACQUISTANDO 2 CT TRA"},
@@ -96,13 +93,13 @@ class LetturaDeiBlocchiLarice(unittest.TestCase):
         self.assertEqual(promozioni[0]["kind"], KIND_THRESHOLD_GIFT)
         self.assertEqual(promozioni[0]["reward"]["ean"], "8050507999999")
         self.assertEqual(promozioni[0]["reward"]["description"], "BIOPUNTO SET MARE")
-        # La riga premio non e' merce che fa raggiungere la soglia.
+        # The reward row doesn't count toward the eligible quantity.
         self.assertEqual(promozioni[0]["eligible"]["source_rows"], [2, 3])
 
     def test_una_grafia_reale_del_verbo_apre_comunque_il_blocco(self):
-        """«ACQUISTANO» (senza la D) sta alla riga 978 del listino del 3-6
-        agosto: il ponte teneva una copia piu' povera della regola e quella
-        condizione, con tre righe di merce, spariva senza una parola."""
+        """The header pattern must accept "ACQUISTANO" (missing a D) as well
+        as the canonical form: real price lists use it, and a stricter regex
+        would drop the condition silently."""
 
         promozioni = self.leggi([
             {"g": "ACQUISTANO 5 CT TRA"},
@@ -116,11 +113,9 @@ class LetturaDeiBlocchiLarice(unittest.TestCase):
         self.assertEqual(promozioni[0]["threshold"], {"qty": 5, "unit": "cartoni"})
 
     def test_un_blocco_che_non_si_calcola_resta_da_verificare(self):
-        """Il testo c'e', la merce c'e', ma la soglia non e' calcolabile.
-
-        Prima il blocco spariva in silenzio: merce con una condizione
-        commerciale che nessuno avrebbe piu' visto.
-        """
+        """A block with header and eligible rows but no computable threshold
+        must surface as ambiguous, not disappear: otherwise a commercial
+        condition would go unreported."""
 
         promozioni = self.leggi([
             {"g": "ACQUISTANDO 3 CT TRA"},
@@ -136,10 +131,10 @@ class LetturaDeiBlocchiLarice(unittest.TestCase):
         self.assertEqual(promozioni[0]["eligible"]["source_rows"], [2])
 
     def test_una_unita_mai_vista_apre_comunque_il_blocco(self):
-        """Il riconoscimento dell'intestazione e' apposta piu' largo del
-        calcolo: se pretendesse anche l'unita', un giorno che il fornitore
-        scrive «SCATOLE» il blocco non si aprirebbe nemmeno e la condizione
-        sparirebbe senza traccia invece di finire fra quelle da verificare."""
+        """Header recognition is deliberately looser than threshold
+        calculation: requiring a known unit too would make an unfamiliar one
+        (e.g. "SCATOLE") drop the condition entirely instead of flagging it
+        for review."""
 
         promozioni = self.leggi([
             {"g": "ACQUISTANDO 10 SCATOLE TRA"},
@@ -153,21 +148,21 @@ class LetturaDeiBlocchiLarice(unittest.TestCase):
         self.assertEqual(promozioni[0]["eligible"]["source_rows"], [2])
 
     def test_un_blocco_troppo_lungo_lascia_una_traccia(self):
-        """Oltre cinquecento righe il blocco si abbandona: giusto, ma non in
-        silenzio."""
+        """A block is abandoned past 500 rows, but that must be visible, not
+        silent."""
 
         righe: list[dict[str, object]] = [{"g": "ACQUISTANDO 4 CT TRA"}]
         righe.extend(riga_merce(f"PRODOTTO {n}", f"800000000{n:04d}") for n in range(3))
-        # Righe senza EAN: sono quelle che fanno scattare il conto della
-        # distanza dall'intestazione.
+        # Rows with no EAN: these are what triggers the distance-from-header
+        # count.
         righe.extend({"g": ""} for _ in range(520))
         righe.append({"g": "IN OMAGGIO 1 CT DI", "j": "PREMIO", "p": "SM", "r": "8000000009999"})
 
         promozioni = self.leggi(righe)
 
         tracce = [p for p in promozioni if p["kind"] == KIND_AMBIGUOUS]
-        # Due perdite distinte: l'intestazione abbandonata e, piu' avanti, la
-        # riga premio che si ritrova senza intestazione. Entrambe si vedono.
+        # Two distinct losses: the abandoned header, and later the reward
+        # row left without one. Both must be reported.
         self.assertEqual(len(tracce), 2)
         abbandono = next(p for p in tracce if "500 righe" in p["source_text"])
         self.assertEqual(abbandono["eligible"]["source_rows"], [2, 3, 4])
@@ -211,7 +206,8 @@ class LetturaDeiBlocchiLarice(unittest.TestCase):
         self.assertIn("manca l'intestazione", promozioni[0]["source_text"])
 
     def test_le_condizioni_non_ricomposte_sono_contate(self):
-        """Il numero serve a chi guarda il servizio: non si contano a mano."""
+        """The count of unparsed conditions must be exposed, not something an
+        operator has to tally by hand."""
 
         percorso = scrivi_listino(self.cartella / "larice.xlsx", [
             {"g": "ACQUISTANDO 2 CT TRA"},
@@ -223,18 +219,15 @@ class LetturaDeiBlocchiLarice(unittest.TestCase):
 
         self.assertEqual(self.servizio.condizioni_da_verificare["larice"], 1)
         self.assertEqual(len(promozioni), 1)
-        # Il conteggio sopravvive alla seconda lettura, che usa la cache.
+        # The count must survive a second read, which hits the cache.
         self.servizio.detect(review)
         self.assertEqual(self.servizio.condizioni_da_verificare["larice"], 1)
 
     def test_gli_sconti_gia_nel_prezzo_non_entrano_nell_elenco(self):
-        """⚠ 165 condizioni su 166 erano «Sconto numerico 10%», una per riga.
-
-        Con le parole di chi le leggeva: «LARICE fa una INFINITA di sconti,
-        mantieni solo offerte come quella del tostapane, della bistecchiera,
-        del sale lavastoviglie e simili».  Sepolte in mezzo agli sconti, le
-        soglie con omaggio non si vedevano.  Non si perde nessun calcolo: uno
-        sconto gia' compreso nel prezzo non ha mai prodotto un prezzo.
+        """A flat per-row discount that's already reflected in the offer's
+        `unitPriceNet` must be dropped from the reported list, not just
+        counted: keeping it would bury threshold-gift conditions (the ones
+        that actually need review) under a large number of no-op discounts.
         """
 
         percorso = scrivi_listino(self.cartella / "larice.xlsx", [
@@ -265,7 +258,8 @@ class LetturaDeiBlocchiLarice(unittest.TestCase):
         self.assertEqual(self.servizio.sconti_gia_nel_prezzo, 5)
 
     def test_uno_sconto_che_il_prezzo_non_contiene_resta(self):
-        """Quello cambia il totale: toglierlo sarebbe nascondere un numero."""
+        """A discount not already reflected in the price changes the total,
+        so it must stay in the reported list."""
 
         promozione = promotion_bridge.detect_numeric_discount(
             supplier="larice",
@@ -292,12 +286,12 @@ class LetturaDeiBlocchiLarice(unittest.TestCase):
 
 
 class ConUnRegistroFinto(unittest.TestCase):
-    """Sostituisce il registro degli adattatori per la durata di un test.
+    """Swaps in a fake adapter registry for the duration of a test.
 
-    Si parte sempre da quello vero e si cambia una sola dichiarazione: un
-    adattatore porta anche altro — i codici di riga di Larice dicono che `SM`
-    marca il premio e non merce acquistabile — e una copia piu' povera
-    proverebbe qualcosa che nel programma non succede mai.
+    Always starts from the real registry and changes one declaration at a
+    time: an adapter also carries other facts (e.g. larice's row codes,
+    which mark `SM` as the reward rather than orderable goods), and a
+    stripped-down fake would exercise a shape that never occurs in practice.
     """
 
     def setUp(self) -> None:
@@ -320,14 +314,11 @@ class ConUnRegistroFinto(unittest.TestCase):
 
 
 class ColonneDalRegistro(ConUnRegistroFinto):
-    """Dove stanno le colonne del listino Larice lo dice il registro.
-
-    Finche' le posizioni stavano scritte dentro il lettore, il giorno che
-    Larice ne sposta una — o che l'utente conferma una variazione di schema, e
-    il registro impara la mappatura nuova — i blocchi non si formavano piu' e
-    le soglie con omaggio sparivano dal riepilogo senza un avviso: chi ordina
-    4 cartoni invece di 5 perde il cartone in omaggio e non lo sa.
-    """
+    """The reader must get larice's column positions from the adapter
+    registry, not a hardcoded layout: a supplier can add a column, or the
+    user can confirm a schema change that the registry then learns, and the
+    reader must follow along instead of silently losing threshold-gift
+    conditions from the summary."""
 
     SOGLIA = [
         {"g": "ACQUISTANDO 5 CT TRA"},
@@ -335,7 +326,7 @@ class ColonneDalRegistro(ConUnRegistroFinto):
         {"g": "IN OMAGGIO 1 CT DI", "j": "DENT. SENSODENT 15 ML", "p": "SM", "r": "5059187155220"},
     ]
 
-    # Le colonne di oggi, per i test che ne spostano o ne tolgono una sola.
+    # Today's column positions, for tests that move or drop just one.
     COLONNE_DI_OGGI = {
         "description": "G", "reward_description": "J", "discount": "P", "ean": "R",
     }
@@ -345,7 +336,7 @@ class ColonneDalRegistro(ConUnRegistroFinto):
         self.servizio = promotion_bridge.PromotionService()
 
     def registro_con(self, colonne_di_larice: dict[str, object]) -> None:
-        """Un registro uguale a quello vero, tranne le colonne di Larice."""
+        """A registry identical to the real one except for larice's columns."""
 
         def sostituisci(documento: dict) -> None:
             self.adattatore(documento, "larice_v1")["column_map"] = colonne_di_larice
@@ -353,16 +344,15 @@ class ColonneDalRegistro(ConUnRegistroFinto):
         self.registro_finto(sostituisci)
 
     def senza(self, *colonne: str) -> dict[str, object]:
-        """Le colonne di oggi meno quelle che il test vuole far mancare."""
+        """Today's columns minus the ones the test wants to drop."""
 
         return {campo: dove for campo, dove in self.COLONNE_DI_OGGI.items() if campo not in colonne}
 
     def test_una_colonna_spostata_nel_registro_sposta_anche_il_lettore(self):
-        """Il listino ha una colonna in piu' in testa e il registro lo sa gia'.
-
-        Con le posizioni scritte nel codice qui non si formava nessun blocco:
-        openpyxl non solleva niente se si legge la colonna accanto, e la
-        condizione commerciale spariva senza lasciare traccia.
+        """The registry already reflects an inserted column; the reader must
+        follow it. Reading the wrong (adjacent) column raises nothing in
+        openpyxl, so a stale hardcoded position would drop the condition
+        without any error.
         """
 
         self.registro_con({
@@ -382,15 +372,15 @@ class ColonneDalRegistro(ConUnRegistroFinto):
         self.assertEqual(promozioni[0]["reward"]["description"], "DENT. SENSODENT 15 ML")
         self.assertEqual(promozioni[0]["reward"]["ean"], "5059187155220")
         self.assertTrue(promozioni[0]["confirmed"])
-        # La riga premio non conta fra la merce che fa raggiungere la soglia:
-        # il codice `SM` continua a dirlo anche con le colonne spostate.
+        # The reward row still doesn't count toward the eligible quantity:
+        # the `SM` code marks it regardless of where the columns moved to.
         self.assertEqual(promozioni[0]["eligible"]["source_rows"], [2])
-        # Il riferimento manda l'utente nelle colonne di oggi, non in quelle di ieri.
+        # The cell reference must point at today's columns, not the old ones.
         self.assertEqual(promozioni[0]["source_reference"], "Canvass di prova!H1:K3")
 
     def test_una_colonna_che_il_registro_non_dichiara_ferma_la_lettura(self):
-        """Non si indovina: leggere la colonna accanto vuol dire zero soglie e
-        nessuno che se ne accorga. Meglio fermarsi e dirlo."""
+        """A missing column must stop the read with an error, not guess:
+        reading an adjacent column would silently produce zero thresholds."""
 
         self.registro_con(self.senza("ean"))
         percorso = scrivi_listino(self.cartella / "larice.xlsx", self.SOGLIA)
@@ -407,12 +397,11 @@ class ColonneDalRegistro(ConUnRegistroFinto):
         )
 
     def test_il_nome_dell_articolo_in_omaggio_vale_come_le_altre_colonne(self):
-        """Non e' un di piu' che si puo' tirare a indovinare.
+        """The reward-name column is required like the others, not optional.
 
-        Senza quel nome la soglia si ricompone lo stesso, ma esce «da
-        verificare» invece che confermata: l'utente perderebbe l'omaggio in un
-        altro modo, e nessun avviso glielo direbbe.  Finche' il registro non la
-        dichiarava, qui restava scritta la posizione storica.
+        Without it the threshold still parses, but as unconfirmed rather
+        than confirmed, which would silently downgrade the condition's
+        status instead of raising a clear error.
         """
 
         self.registro_con(self.senza("reward_description"))
@@ -440,9 +429,9 @@ class ColonneDalRegistro(ConUnRegistroFinto):
         )
 
     def test_una_colonna_dichiarata_in_un_modo_che_non_si_legge_non_si_tira_a_indovinare(self):
-        """«9» e' un nome di intestazione dappertutto nel programma, e il
-        listino Larice di intestazioni non ne ha: leggerlo come «colonna 9»
-        vorrebbe dire scegliere una colonna che nessun altro lettore sceglie."""
+        """A column declared as a header name ("9") must not be resolved by
+        position: larice's price list has no header row, so treating "9" as
+        column 9 would pick a column no other reader agrees on."""
 
         self.registro_con({**self.COLONNE_DI_OGGI, "ean": "9"})
         percorso = scrivi_listino(self.cartella / "larice.xlsx", self.SOGLIA)
@@ -454,12 +443,9 @@ class ColonneDalRegistro(ConUnRegistroFinto):
 
 
 class IlListinoCheNonSiRisolve(unittest.TestCase):
-    """Il documento dichiarato dalla review che non si apre piu'.
-
-    Spostato sul Desktop, tolto dai caricamenti dopo il ricalcolo, su un
-    percorso di rete caduto: il lettore tornava una lista vuota, cioe' la
-    stessa risposta di «questo fornitore non ha condizioni commerciali».
-    """
+    """A price list the review references but fails to open (moved, deleted
+    after a recompute, a dropped network path) must surface as a load error,
+    not silently read as "no promotions"."""
 
     def setUp(self) -> None:
         self.cartella = Path(tempfile.mkdtemp(prefix="listino-sparito-"))
@@ -481,15 +467,15 @@ class IlListinoCheNonSiRisolve(unittest.TestCase):
         )
 
     def test_un_fornitore_che_la_review_non_dichiara_non_diventa_un_avviso(self):
-        """Un avviso che compare sempre non lo legge piu' nessuno: senza un
-        listino Larice fra i documenti non c'e' nessuna perdita da segnalare."""
+        """A warning nobody could ever silence stops being read: no larice
+        file among the documents means nothing was lost to report."""
 
         self.assertEqual(self.servizio.detect({"files": [], "products": []}), [])
         self.assertEqual(self.servizio.load_errors, [])
 
     def test_un_listino_che_si_apre_non_segnala_niente(self):
-        """La stessa review con il documento al suo posto resta muta: e' la
-        prova che l'avviso nuovo dipende dal file e non dal fornitore."""
+        """The same review with the file back in place stays silent: proves
+        the warning is keyed on the file, not on the supplier."""
 
         percorso = scrivi_listino(self.cartella / "larice.xlsx", [
             {"g": "ACQUISTANDO 2 CT TRA"},
@@ -505,12 +491,12 @@ class IlListinoCheNonSiRisolve(unittest.TestCase):
 
 
 class LePromozioniDiOggiNonCambiano(unittest.TestCase):
-    """Il contratto che il riepilogo mostra oggi, inchiodato campo per campo.
+    """Pins the exact field-by-field contract the summary shows today.
 
-    E' il rischio principale della correzione: far arrivare le colonne dal
-    registro non deve cambiare di una virgola quello che l'utente vede con il
-    listino e la mappatura di oggi.  L'identificativo compreso, perche' le
-    conferme gia' date dall'utente si appoggiano a quello.
+    Reading column positions from the registry instead of a hardcoded layout
+    must not change anything the user sees with today's price list and
+    mapping — the condition identifier included, since the user's existing
+    confirmations key off it.
     """
 
     def test_il_contratto_di_una_soglia_e_di_una_condizione_ambigua_e_lo_stesso(self):
@@ -576,16 +562,15 @@ class LePromozioniDiOggiNonCambiano(unittest.TestCase):
 
 
 class IlDiPiuGiaCompresoNelPrezzo(ConUnRegistroFinto):
-    """Chi dichiara che «11+1» e' gia' dentro il prezzo lo dice il registro.
-
-    Prima era un `supplier == "betulla"` scritto nel codice: il giorno che un
-    altro fornitore avesse fatto lo stesso patto, dichiararlo nel registro non
-    avrebbe cambiato niente, e per quel fornitore il di piu' sarebbe finito
-    fra le offerte da verificare invece che fra le confezioni promozionali.
+    """Whether a promotional "N+1 free" text is already included in the
+    listed price must be a per-supplier declaration in the adapter registry,
+    not a hardcoded `supplier == "betulla"` check: otherwise declaring the
+    same deal for another supplier would have no effect, and their offer
+    would stay flagged for manual review instead of being recognized.
     """
 
-    # Il testo vero di BETULLA, dal listino: «11+1» non e' uno sconto da
-    # applicare, il prezzo di listino lo contiene gia'.
+    # betulla's real price-list text: "11+1 Gratis" is not a discount to
+    # apply, the listed price already includes it.
     OFFERTA = "LINDA SETA Assorbenti Ultra Con Ali Lunghi 11+1 Gratis Pz"
 
     def tipi_delle_promozioni(self, fornitore: str) -> list[str]:
@@ -605,13 +590,14 @@ class IlDiPiuGiaCompresoNelPrezzo(ConUnRegistroFinto):
         return [p["kind"] for p in promotion_bridge.PromotionService().detect(review)]
 
     def test_il_fornitore_che_lo_dichiara_oggi_lo_ottiene_ancora(self):
-        """Con il registro vero BETULLA resta esattamente com'era."""
+        """With the real registry, betulla's result is unchanged."""
 
         self.assertEqual(self.tipi_delle_promozioni("betulla"), [KIND_INCLUDED_PACK])
 
     def test_senza_la_dichiarazione_la_regola_non_vale_piu(self):
-        """La prova che la regola arriva davvero dal registro: se il registro
-        tace, il di piu' torna a essere un'offerta da guardare a mano."""
+        """Proves the rule actually comes from the registry: with the
+        declaration removed, the "N+1" text goes back to needing manual
+        review."""
 
         def togli(documento: dict) -> None:
             self.adattatore(documento, "betulla_v1")["commercial_rules"].pop(
@@ -623,8 +609,8 @@ class IlDiPiuGiaCompresoNelPrezzo(ConUnRegistroFinto):
         self.assertEqual(self.tipi_delle_promozioni("betulla"), [KIND_AMBIGUOUS])
 
     def test_vale_per_qualunque_fornitore_lo_dichiari(self):
-        """La prova che non e' lo stesso confronto con un altro vestito: la
-        dichiarazione la si mette su CIPRESSO e ha effetto su CIPRESSO."""
+        """Not the same check wearing a different name: the declaration is
+        added to cipresso and only affects cipresso."""
 
         self.assertEqual(self.tipi_delle_promozioni("cipresso"), [KIND_AMBIGUOUS])
 
@@ -636,13 +622,13 @@ class IlDiPiuGiaCompresoNelPrezzo(ConUnRegistroFinto):
         self.registro_finto(dichiara)
 
         self.assertEqual(self.tipi_delle_promozioni("cipresso"), [KIND_INCLUDED_PACK])
-        # E BETULLA, che lo dichiarava gia', non ha perso niente per strada.
+        # betulla, which already declared it, is unaffected.
         self.assertEqual(self.tipi_delle_promozioni("betulla"), [KIND_INCLUDED_PACK])
 
     def test_una_dichiarazione_che_non_e_un_si_non_vale(self):
-        """«true» scritto come testo non e' una dichiarazione: un adattatore
-        imparato male non deve poter cambiare di nascosto il prezzo di un
-        fornitore."""
+        """The string `"true"` is not a valid declaration: a badly learned
+        adapter must not be able to silently change a supplier's price
+        handling."""
 
         def quasi(documento: dict) -> None:
             self.adattatore(documento, "betulla_v1")["commercial_rules"][
@@ -655,12 +641,10 @@ class IlDiPiuGiaCompresoNelPrezzo(ConUnRegistroFinto):
 
 
 class ColonnaOffertaNoce(unittest.TestCase):
-    """Il canale delle offerte Noce, chiuso a monte dall'adattatore.
-
-    Nel listino vero del 6 agosto 2026 la colonna «descrizione_offerta» e'
-    vuota su tutte le righe, quindi questo percorso si puo' provare soltanto
-    con un caso costruito: il collaudo serve a garantire che, quando il
-    fornitore la compilera', il testo arrivi fino ai rilevatori.
+    """noce's `descrizione_offerta` column is currently always empty in real
+    files, so this path can only be exercised with a synthetic case: it
+    guards that, whenever the supplier does fill it in, the text reaches the
+    promotion detectors.
     """
 
     INTESTAZIONI = [
@@ -744,21 +728,18 @@ class ColonnaOffertaNoce(unittest.TestCase):
 
 
 class UnFornitoreInventatoDichiaraDoveTieneLeSueCondizioni(ConUnRegistroFinto):
-    """Il motore legge chiunque lo dichiari, non chi il codice conosce per nome.
+    """The engine must read any supplier the registry declares, not only
+    ones the code names explicitly.
 
-    ⚠ Questo e' il difetto che la correzione del 15 agosto 2026 chiude.  Il
-    lettore andava a prendere `larice_v1` per nome, leggeva il documento di
-    `paths["larice"]` e scriveva «LARICE» nei messaggi: le condizioni di
-    chiunque altro non le guardava nessuno, e non c'era modo di dichiararle
-    senza rimettere mano al codice.  «BIANCHI & FIGLI» non compare in nessun
-    file del programma: se queste prove passano, un fornitore nuovo si accende
-    con una voce di registro.
+    A synthetic supplier that appears nowhere else in the program should
+    become readable purely by adding an adapter registry entry, with no code
+    change.
     """
 
     FORNITORE = "bianchi"
 
     def adattatore_inventato(self, condizioni: dict | None) -> dict:
-        """Un fornitore che esiste solo nel registro, con colonne tutte sue."""
+        """A supplier that only exists in the registry, with its own columns."""
 
         voce = {
             "id": "bianchi_v1",
@@ -795,7 +776,7 @@ class UnFornitoreInventatoDichiaraDoveTieneLeSueCondizioni(ConUnRegistroFinto):
         self.registro_finto(aggiungi)
 
     def scrivi(self, foglio_chiamato: str, righe: list[dict[str, object]]) -> Path:
-        """Un listino con le colonne di BIANCHI, non con quelle di Larice."""
+        """A price list shaped by bianchi's columns, not larice's."""
 
         libro = Workbook()
         foglio = libro.active
@@ -809,7 +790,7 @@ class UnFornitoreInventatoDichiaraDoveTieneLeSueCondizioni(ConUnRegistroFinto):
         libro.close()
         return percorso
 
-    # -- la forma a blocchi, quella di LARICE, su un altro fornitore --------
+    # -- block layout (larice's), applied to a different supplier ----------
 
     A_BLOCCHI = {
         "layout": "blocchi",
@@ -849,13 +830,13 @@ class UnFornitoreInventatoDichiaraDoveTieneLeSueCondizioni(ConUnRegistroFinto):
         self.assertEqual(soglia["reward"]["description"], "TOSTAPANE 750W")
         self.assertEqual(soglia["reward"]["ean"], "8011111119999")
         self.assertTrue(soglia["confirmed"])
-        # Le due righe di merce, non la riga regalo: il codice che la marca lo
-        # dichiara questo fornitore, con una parola sua («RG», non «SM»).
+        # The two goods rows, not the reward row: this supplier's row-marker
+        # code, its own ("RG" rather than larice's "SM").
         self.assertEqual(soglia["eligible"]["source_rows"], [4, 5])
-        # Le colonne e il foglio del riferimento sono i suoi, non quelli di Larice.
+        # Reference columns and sheet name are this supplier's own, not larice's.
         self.assertEqual(soglia["source_reference"], "Condizioni!C3:E6")
 
-    # -- il premio scritto nella riga stessa, non in una colonna sua --------
+    # -- reward written inline in the text, no dedicated column ------------
 
     A_BLOCCHI_IN_UNA_COLONNA_SOLA = {
         "layout": "blocchi",
@@ -879,12 +860,13 @@ class UnFornitoreInventatoDichiaraDoveTieneLeSueCondizioni(ConUnRegistroFinto):
     ]
 
     def test_il_premio_nella_stessa_colonna_del_testo_non_esce_scritto_due_volte(self):
-        """Il canvass nuovo di LARICE tiene testo e premio tutt'e due in
-        colonna E, e il registro deve poterlo dire.
+        """The registry must support text and reward name in the same column
+        (larice's newer canvass layout keeps both in column E).
 
-        Leggendo la stessa colonna per i due ruoli la frase usciva doppia —
-        «TOSTAPANE 750W IN OMAGGIO 1 CT DI TOSTAPANE 750W» — cioe' la malattia
-        del §17: la soglia era giusta e la frase che l'utente legge no.
+        Reading that column for both roles must not duplicate the reward
+        name in the rendered sentence (e.g. "TOSTAPANE 750W IN OMAGGIO 1 CT
+        DI TOSTAPANE 750W"): the threshold itself would be correct, but the
+        text shown to the user would not.
         """
 
         self.registro_con_bianchi(self.A_BLOCCHI_IN_UNA_COLONNA_SOLA)
@@ -903,7 +885,7 @@ class UnFornitoreInventatoDichiaraDoveTieneLeSueCondizioni(ConUnRegistroFinto):
         self.assertEqual(soglia["eligible"]["source_rows"], [4, 5])
 
     def test_due_colonne_diverse_continuano_a_leggersi_tutt_e_due(self):
-        """La controprova: dove il premio ha una colonna sua non cambia nulla."""
+        """Converse check: a dedicated reward column still works as before."""
 
         self.registro_con_bianchi(self.A_BLOCCHI)
         percorso = self.scrivi("Condizioni", self.LISTINO_A_BLOCCHI)
@@ -915,11 +897,9 @@ class UnFornitoreInventatoDichiaraDoveTieneLeSueCondizioni(ConUnRegistroFinto):
         self.assertEqual(promozioni[0]["reward"]["description"], "TOSTAPANE 750W")
 
     def test_la_stessa_soglia_arriva_fino_al_riepilogo(self):
-        """La prova che non e' solo il lettore: e' tutta la catena.
-
-        `detect` sceglieva i fornitori da leggere con il nome scritto dentro,
-        quindi un fornitore nuovo poteva anche essere leggibile senza che
-        nessuno gli chiedesse mai niente.
+        """Checks the whole chain, not just the reader in isolation:
+        `detect` must pick up any supplier present in the run's files, not
+        only ones it names internally.
         """
 
         self.registro_con_bianchi(self.A_BLOCCHI)
@@ -933,12 +913,12 @@ class UnFornitoreInventatoDichiaraDoveTieneLeSueCondizioni(ConUnRegistroFinto):
 
         self.assertEqual([p["supplier"] for p in promozioni], ["bianchi"])
         self.assertEqual(servizio.load_errors, [])
-        # Contato per fornitore: LARICE non e' fra i documenti di questa run,
-        # quindi non ha nemmeno un conteggio — e non un conteggio a zero, che
-        # si leggerebbe come «letto, niente da verificare».
+        # Counted per supplier: larice isn't among this run's files, so it
+        # gets no count at all rather than a zero, which would read as
+        # "read, nothing to verify".
         self.assertEqual(servizio.condizioni_da_verificare, {"bianchi": 0})
 
-    # -- la forma a riga: una condizione scritta per intero in una colonna --
+    # -- row layout: one condition written entirely in a single column -----
 
     A_RIGA = {
         "layout": "riga",
@@ -948,14 +928,15 @@ class UnFornitoreInventatoDichiaraDoveTieneLeSueCondizioni(ConUnRegistroFinto):
     }
 
     def test_una_condizione_scritta_per_intero_dentro_una_riga(self):
-        """La forma che avrebbero BETULLA e NOCE il giorno che scrivono
-        qualcosa: il testo sta tutto in una cella, non su piu' righe."""
+        """The layout betulla and noce would use if they started declaring
+        promotions: the whole condition sits in one cell, not spread across
+        rows."""
 
         self.registro_con_bianchi(self.A_RIGA)
         percorso = self.scrivi("Condizioni", [
-            # La riga di testata: sta sopra `data_start_row` e porta apposta
-            # una parola promozionale, cosi' se la prima riga dei dati venisse
-            # ignorata questa condizione inesistente si farebbe contare.
+            # The header row sits above `data_start_row` and deliberately
+            # carries a promotional word, so that if the data start row were
+            # ignored this non-condition would get picked up too.
             {3: "TABELLA PROMOZIONE SETTIMANALE", 8: "codice a barre"},
             {3: "SAPONE MANI 300 ML", 6: "TP", 8: "8011111111111"},
             {
@@ -976,15 +957,16 @@ class UnFornitoreInventatoDichiaraDoveTieneLeSueCondizioni(ConUnRegistroFinto):
         self.assertEqual(soglia["threshold"], {"qty": 5, "unit": "cartoni"})
         self.assertEqual(soglia["reward"]["description"], "SALE LAVASTOVIGLIE KG1")
         self.assertEqual(soglia["reward"]["pieces_per_unit"], 12)
-        # Il prodotto che la porta e' quello della sua riga, per riga e per EAN.
+        # The eligible product is the one on the same row, identified both by
+        # row and by EAN.
         self.assertEqual(soglia["eligible"]["source_rows"], [3])
         self.assertEqual(soglia["eligible"]["eans"], ["8011111111112"])
         self.assertEqual(soglia["source_reference"], "Condizioni!C3")
 
     def test_a_riga_una_descrizione_qualunque_non_diventa_un_offerta(self):
-        """Il rischio della forma a riga: la colonna del testo e' spesso la
-        descrizione del prodotto, e trecento nomi di prodotto non devono
-        diventare trecento offerte da verificare."""
+        """The risk with row layout: the text column is often just the
+        product description, and an ordinary product name must not be
+        mistaken for a promotion."""
 
         self.registro_con_bianchi(self.A_RIGA)
         percorso = self.scrivi("Condizioni", [
@@ -1001,8 +983,8 @@ class UnFornitoreInventatoDichiaraDoveTieneLeSueCondizioni(ConUnRegistroFinto):
         self.assertEqual(promozioni, [])
 
     def test_a_riga_la_riga_non_acquistabile_resta_fuori(self):
-        """Il codice di riga vale in tutte e due le forme: una riga che il
-        fornitore dichiara non acquistabile non porta una condizione."""
+        """The row-marker code applies in both layouts: a row the supplier
+        marks non-orderable never becomes a condition."""
 
         self.registro_con_bianchi(self.A_RIGA)
         percorso = self.scrivi("Condizioni", [
@@ -1016,15 +998,13 @@ class UnFornitoreInventatoDichiaraDoveTieneLeSueCondizioni(ConUnRegistroFinto):
 
         self.assertEqual(promozioni, [])
 
-    # -- che cosa succede se il registro non lo dichiara -------------------
+    # -- behavior when the registry declares nothing -----------------------
 
     def test_senza_la_dichiarazione_non_si_legge_e_non_si_avvisa_nessuno(self):
-        """La prova che la regola arriva davvero dal registro.
-
-        E anche che il silenzio e' quello giusto: un fornitore che non dichiara
-        condizioni non ne ha, e riempire la pagina di «non so leggere le
-        offerte di X» a ogni ricalcolo vorrebbe dire un avviso che non chiede
-        di fare niente.
+        """Proves the rule really comes from the registry, and that silence
+        is the correct outcome here: a supplier with no declared conditions
+        has none, and warning about it on every recompute would just be
+        noise nobody can act on.
         """
 
         self.registro_con_bianchi(None)
@@ -1040,7 +1020,8 @@ class UnFornitoreInventatoDichiaraDoveTieneLeSueCondizioni(ConUnRegistroFinto):
         self.assertEqual(servizio.load_errors, [])
 
     def test_una_forma_di_scrittura_che_il_motore_non_conosce_si_ferma_e_lo_dice(self):
-        """Un registro imparato male non deve leggere «qualcosa comunque»."""
+        """An unknown layout value in a badly learned registry entry must
+        fail with an error, not fall back to reading "something anyway"."""
 
         self.registro_con_bianchi({**self.A_BLOCCHI, "layout": "a fisarmonica"})
         percorso = self.scrivi("Condizioni", self.LISTINO_A_BLOCCHI)
@@ -1057,9 +1038,8 @@ class UnFornitoreInventatoDichiaraDoveTieneLeSueCondizioni(ConUnRegistroFinto):
         )
 
     def test_il_nome_nei_messaggi_e_quello_dichiarato_dal_registro(self):
-        """«LARICE» stava scritto nel codice accanto a `supplier="larice"`: un
-        fornitore nuovo sarebbe comparso negli avvisi con il suo
-        identificativo tecnico, o peggio con il nome di un altro."""
+        """Warning messages must use the display name declared in the
+        registry, not the internal supplier id or another supplier's name."""
 
         senza_ean = {
             **self.A_BLOCCHI,
@@ -1100,13 +1080,10 @@ class UnFornitoreInventatoDichiaraDoveTieneLeSueCondizioni(ConUnRegistroFinto):
         )
 
     def test_due_fornitori_che_dichiarano_si_leggono_sempre_nello_stesso_ordine(self):
-        """⚠ Trovato da una mutazione rimasta verde.
-
-        Finche' a dichiarare le condizioni e' un fornitore solo, qualunque
-        ordine e' lo stesso ordine: togliere l'ordinamento non faceva fallire
-        niente.  Ma l'elenco delle promozioni e' quello che la pagina mostra, e
-        due letture della stessa run che lo mettono in ordine diverso fanno
-        sembrare cambiato un confronto che non e' cambiato.
+        """Detected promotions must be returned in a stable order across
+        multiple suppliers: the page renders this list directly, so two
+        reads of the same run producing a different order would make an
+        unchanged comparison look like it had changed.
         """
 
         self.registro_con_bianchi(self.A_BLOCCHI)
@@ -1124,24 +1101,23 @@ class UnFornitoreInventatoDichiaraDoveTieneLeSueCondizioni(ConUnRegistroFinto):
             "products": [],
         }
 
-        # Nel registro BIANCHI viene dopo LARICE; nell'elenco viene prima,
-        # perche' l'ordine e' alfabetico e non quello in cui sono dichiarati.
+        # bianchi comes after larice in the registry; it comes first here
+        # because the output order is alphabetical, not declaration order.
         letti = [p["supplier"] for p in promotion_bridge.PromotionService().detect(review)]
 
         self.assertEqual(letti, ["bianchi", "larice"])
 
     def test_di_due_adattatori_si_usa_quello_del_documento_che_si_ha_in_mano(self):
-        """⚠ Trovato da una mutazione rimasta verde.
-
-        Noce ha due adattatori, uno per il `.xls` e uno per il CSV: leggere
-        le condizioni con la dichiarazione dell'altro formato vuol dire cercare
-        una colonna dove non c'e'.  Nessun test lo copriva, perche' l'unico
-        fornitore che dichiara condizioni oggi ha un adattatore solo.
+        """When a supplier has more than one adapter (e.g. noce's separate
+        `.xls` and CSV entries), the reader must pick the one matching the
+        file actually being read, not just the first match: reading with the
+        wrong format's declaration means looking for a column that isn't
+        there.
         """
 
         def due_adattatori(documento: dict) -> None:
-            # Il primo dell'elenco e' quello dell'altro formato, con colonne
-            # diverse: se il formato non contasse, si userebbe questo.
+            # The first entry has a different format with different columns:
+            # if the format check were missing, this one would be picked.
             csv = self.adattatore_inventato(dict(self.A_RIGA))
             csv["id"] = "bianchi_csv_v1"
             csv["file_types"] = [".csv"]
@@ -1162,8 +1138,8 @@ class UnFornitoreInventatoDichiaraDoveTieneLeSueCondizioni(ConUnRegistroFinto):
         self.assertEqual(promozioni[0]["source_reference"], "Condizioni!C3:E6")
 
     def test_il_foglio_dichiarato_e_quello_che_si_legge(self):
-        """Il lettore prendeva sempre il primo foglio del libro.  Un fornitore
-        che mette le condizioni nel secondo non aveva modo di dirlo."""
+        """The reader must use the sheet name declared in the registry, not
+        always the workbook's first sheet."""
 
         self.registro_con_bianchi(self.A_BLOCCHI)
         libro = Workbook()
@@ -1187,19 +1163,12 @@ class UnFornitoreInventatoDichiaraDoveTieneLeSueCondizioni(ConUnRegistroFinto):
 
 
 class SoloChiLoDichiaraVieneLetto(unittest.TestCase):
-    """Nel registro di oggi lo dichiara LARICE e nessun altro, ed e' misurato.
+    """Today, only larice declares commercial conditions in the registry.
 
-    ⚠ 15 agosto 2026, i quattro listini veri della settimana, cella per cella:
-    LARICE 13 intestazioni di soglia e 13 righe premio in colonna G; BETULLA 12
-    testi con una parola promozionale dentro la descrizione, di cui **7 sono
-    la parola «Ogni» di «Ogni Superficie»**; CIPRESSO 1, ed e' un nome di
-    prodotto che contiene «offerta»; NOCE la colonna
-    `descrizione_offerta` **vuota su tutte e 18.074 le righe** e la colonna
-    `offerta` che dice `NO` su tutte e 17.148 quelle compilate.
-
-    Dichiarare la colonna della descrizione per BETULLA farebbe comparire dodici
-    condizioni di cui nove non sono condizioni: inventare offerte a chi non ne
-    ha e' peggio del difetto che si stava correggendo.
+    Declaring a plain description column as the condition text for another
+    supplier would surface plausible-looking product names as promotions
+    that aren't: inventing offers for a supplier that has none is worse than
+    missing real ones.
     """
 
     def test_nel_registro_di_oggi_lo_dichiara_solo_larice(self):
@@ -1226,12 +1195,10 @@ class SoloChiLoDichiaraVieneLetto(unittest.TestCase):
 
 
 class IlListinoLariceVero(unittest.TestCase):
-    """La non-regressione che i listini sintetici non coprono.
-
-    Misurato prima della correzione e riverificato dopo: 13 condizioni, tutte
-    `soglia_omaggio`, tutte complete — soglia con l'unita', premio con nome ed
-    EAN, righe di merce risolte, ripetibile, confermata.  Nessuna condizione
-    «da verificare».
+    """A regression check synthetic price lists can't cover: reading the
+    real larice file must still yield exactly 13 threshold-gift conditions,
+    all complete (threshold with unit, reward with name and EAN, resolved
+    eligible rows, repeatable, confirmed) and none left "to verify".
     """
 
     LISTINO = RADICE / "app" / "data" / "current" / "uploads" / "33-34.1 07-21 ago.xlsx"
@@ -1257,7 +1224,7 @@ class IlListinoLariceVero(unittest.TestCase):
                 self.assertTrue(promozione["reward"]["description"])
                 self.assertTrue(promozione["reward"]["ean"])
                 self.assertTrue(promozione["eligible"]["source_rows"])
-        # I premi che l'utente ha nominato quando ha deciso che cosa tenere.
+        # The reward names the operator picked out when deciding what to keep.
         premi = {p["reward"]["description"] for p in promozioni}
         self.assertIn("RESALINA SALE LAVASTOVIGLIE KG1", premi)
         self.assertIn("BISTECCHIERA 1000W", premi)
@@ -1265,12 +1232,11 @@ class IlListinoLariceVero(unittest.TestCase):
 
 
 class UnDocumentoExcel97(ConUnRegistroFinto):
-    """Noce manda **solo** Excel 97-2003, e il suo formato si legge.
-
-    Un motore che dicesse «dichiara pure dove tieni le condizioni, tanto il tuo
-    documento non lo apro» sarebbe un altro cablaggio, solo meno visibile.  Il
-    listino vero serve anche da misura: la colonna che Noce dichiara per le
-    offerte e' vuota su tutte le righe, quindi qui il numero giusto e' zero.
+    """noce sends only legacy Excel 97-2003 (`.xls`) files, and the reader
+    must actually open that format: accepting a declaration but never
+    reading the document would be the same hardcoded-supplier problem in a
+    less visible form. The real price list also acts as a measurement: its
+    offer-text column is empty on every row, so zero is the correct count.
     """
 
     LISTINO = RADICE / "app" / "data" / "current" / "uploads" / "formattato_104233.xls"
@@ -1297,9 +1263,9 @@ class UnDocumentoExcel97(ConUnRegistroFinto):
         self.assertEqual(promozioni, [])
 
     def test_la_colonna_sbagliata_del_listino_xls_si_legge_lo_stesso(self):
-        """La prova che il `.xls` viene letto davvero e non solo aperto: la
-        colonna delle descrizioni ha cinque testi «N+M GRATIS», e sono quelli
-        che il rilevatore trova quando gli si dice di guardare li'."""
+        """Proves the `.xls` file is actually read, not just opened: its
+        description column has five "N+M GRATIS" texts, and the detector
+        must find exactly those when pointed at that column."""
 
         if not self.LISTINO.is_file():
             self.skipTest(f"il listino NOCE vero non c'è: {self.LISTINO.name}")
@@ -1326,13 +1292,12 @@ class UnDocumentoExcel97(ConUnRegistroFinto):
 
 
 class QualeDeiDueAdattatoriDelloStessoFornitore(unittest.TestCase):
-    """Un fornitore con due schemi dello **stesso** formato.
+    """A supplier with two adapters for the same file format.
 
-    Fino al 4 settembre 2026 a scegliere era la sola estensione, e bastava
-    perche' i due adattatori di Noce sono uno `.xls` e uno `.csv`.  LARICE
-    adesso ne ha due `.xlsx`: con la vecchia regola avrebbe vinto sempre il
-    primo dei due, cioe' le soglie del canvass nuovo sarebbero state cercate
-    nelle colonne del vecchio.  Non un errore: zero condizioni, in silenzio.
+    File extension alone is enough to disambiguate noce's `.xls` and `.csv`
+    adapters, but not larice's two `.xlsx` adapters: picking the first match
+    would silently read the newer canvass layout with the older adapter's
+    columns, producing zero conditions with no error.
     """
 
     VOCI = [
@@ -1348,7 +1313,8 @@ class QualeDeiDueAdattatoriDelloStessoFornitore(unittest.TestCase):
         self.assertEqual(scelto["id"], "larice_canvass_v1")
 
     def test_lo_schema_imparato_porta_a_quello_da_cui_deriva(self) -> None:
-        """Chi decide per identificativo passa da `registro.adattatore_base`."""
+        """An id-based decision must resolve a learned schema back to its
+        base adapter via `registro.adattatore_base`."""
 
         scelto = promotion_bridge._adattatore_per_il_documento(
             self.VOCI, self.DOCUMENTO, "larice_canvass_v1__locale"
@@ -1356,7 +1322,8 @@ class QualeDeiDueAdattatoriDelloStessoFornitore(unittest.TestCase):
         self.assertEqual(scelto["id"], "larice_canvass_v1")
 
     def test_senza_identificativo_resta_la_regola_del_formato(self) -> None:
-        """La regola di prima non se ne va: serve ancora ai due di Noce."""
+        """The older extension-based rule must still apply, since noce's two
+        adapters still rely on it."""
 
         voci = [
             {"id": "noce_csv_v1", "file_types": [".csv"]},
@@ -1368,7 +1335,8 @@ class QualeDeiDueAdattatoriDelloStessoFornitore(unittest.TestCase):
         self.assertEqual(scelto["id"], "noce_xls_v1")
 
     def test_un_identificativo_che_non_e_fra_questi_non_si_indovina(self) -> None:
-        """Meglio nessuna condizione che le condizioni di un altro documento."""
+        """An unrecognized adapter id must resolve to nothing, rather than
+        falling back to another document's conditions."""
 
         scelto = promotion_bridge._adattatore_per_il_documento(
             self.VOCI, self.DOCUMENTO, "qualcosa_di_imparato_v1"
@@ -1376,7 +1344,7 @@ class QualeDeiDueAdattatoriDelloStessoFornitore(unittest.TestCase):
         self.assertEqual(scelto, {})
 
     def test_con_un_candidato_solo_l_identificativo_non_toglie_niente(self) -> None:
-        """Il fornitore che di schemi ne ha uno solo si legge come sempre."""
+        """A supplier with only one schema must keep reading as before."""
 
         scelto = promotion_bridge._adattatore_per_il_documento(
             [{"id": "betulla_v1", "file_types": [".xlsx"]}], Path("betulla.xlsx"), "betulla_v1__imparato"

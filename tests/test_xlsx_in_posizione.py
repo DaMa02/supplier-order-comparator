@@ -1,17 +1,15 @@
-"""La scrittura in posizione dentro un `.xlsx`: `scripts/lib/xlsx_in_posizione.mjs`.
+"""Tests for `scripts/lib/xlsx_in_posizione.mjs`, the in-place `.xlsx` writer.
 
-Dal 5 settembre 2026 le copie dei listini non le ricostruisce piu' una libreria:
-si apre lo ZIP, si cambia il testo delle sole celle della colonna d'ordine
-dentro l'XML del foglio, e si richiude copiando ogni altra parte byte per byte.
+`.xlsx` copies are not rebuilt with a spreadsheet library: the ZIP is opened,
+only the order column's cell text is changed inside the sheet's XML, and
+every other part is copied through byte for byte.
 
-Qui si prova il modulo da solo, su fogli scritti a mano, e poi la compilazione
-**su tutti i listini `.xlsx` del repository**: e' la prova che Daniele ha
-chiesto — «va fatto bene e controllato con test di compilazione su piu'
-listini» — e su ogni listino pretende quattro cose: la guardia cella per cella
-passa, openpyxl riapre la copia, ogni parte dello ZIP tranne il foglio e'
-identica all'originale, e LibreOffice la converte senza errori dove c'e'.
-L'ultima prova — aprire tre copie con Excel, cambiarle, salvarle — la fa una
-persona, e non e' sostituibile.
+This suite tests the module in isolation, on hand-written sheets, then runs
+compilation against every `.xlsx` price list in the repository. Each price
+list must pass four checks: the cell-by-cell guard, a re-open with openpyxl,
+byte-identical ZIP parts outside the sheet, and a clean LibreOffice
+conversion where LibreOffice is available. Opening compiled copies in Excel
+by hand is a manual check this suite doesn't replace.
 """
 
 from __future__ import annotations
@@ -42,9 +40,9 @@ from test_writer_ordini import listino_con_stringhe_vuote, node_disponibile, xls
 MODULO = SKILL_ROOT / "scripts" / "lib" / "xlsx_in_posizione.mjs"
 WRITER = SKILL_ROOT / "scripts" / "write_supplier_orders.mjs"
 
-# Il banco che parla col modulo: legge un JSON di comandi, li esegue e risponde
-# in JSON.  Sta qui e non in un file `.mjs` di prova perche' e' l'unico posto in
-# cui serve.
+# Bridge script that talks to the module: reads a JSON command list, runs
+# each command, and replies in JSON. Kept inline rather than as a separate
+# `.mjs` fixture since nothing else needs it.
 _BANCO = r"""
 import { apriLibro } from PERCORSO_MODULO;
 const [sorgente, uscita, comandi] = process.argv.slice(2);
@@ -112,8 +110,8 @@ class BancoDelModulo(unittest.TestCase):
 
 
 class LaScritturaInPosizione(BancoDelModulo):
-    """Sul listino scritto a mano di `test_writer_ordini`: A2 e A5 sono stringhe
-    condivise vuote, C2 e C5 quantita' preesistenti, C4 un titolo di sezione."""
+    """Fixture from `test_writer_ordini`: A2/A5 are empty shared strings, C2/C5
+    hold pre-existing quantities, C4 is a section title."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -179,12 +177,13 @@ class LeFormeCheUnListinoVeroPuoAvere(BancoDelModulo):
         return xlsx_a_mano(self.cartella / nome, corpo)
 
     def test_una_cella_nuova_non_eredita_nessuno_stile(self) -> None:
-        """Una cella esistente tiene il suo stile; una nuova non ne prende
-        nessuno, nemmeno quello che `<cols>` dichiara per la colonna.
+        """An existing cell keeps its style; a newly written cell gets none,
+        not even a style declared for its column by `<cols>`.
 
-        ⚠ Su `documenti/prova2.xlsx` la colonna dichiara per tutte le 16.384
-        colonne un formato «testo»: ereditarlo cambiava come si vede il numero,
-        e la guardia cella per cella rifiutava la copia."""
+        A price list can declare a "text" number format for an entire column;
+        inheriting it on write would change how the number displays and fail
+        the cell-by-cell guard.
+        """
 
         sorgente = self.foglio(
             '<cols><col min="3" max="3" style="7"/></cols>'
@@ -224,8 +223,8 @@ class LeFormeCheUnListinoVeroPuoAvere(BancoDelModulo):
         self.assertFalse((self.cartella / "copia.xlsx").exists())
 
     def test_con_le_formule_nel_foglio_si_chiede_a_excel_di_ricalcolare(self) -> None:
-        """I totali del fornitore sommano la colonna d'ordine, e qui non si
-        ricalcola niente: `fullCalcOnLoad` li fa rifare a Excel all'apertura."""
+        """A supplier's totals sum the order column; nothing here recalculates
+        them, so `fullCalcOnLoad` forces Excel to do it on open."""
 
         sorgente = self.foglio(
             '<sheetData><row r="1"><c r="B1"><f>SUM(C:C)</f><v>0</v></c></row>'
@@ -238,7 +237,7 @@ class LeFormeCheUnListinoVeroPuoAvere(BancoDelModulo):
         self.assertIn('<calcPr fullCalcOnLoad="1"/>', libro)
         self.assertLess(libro.index("</sheets>"), libro.index("<calcPr"), "dopo i fogli, come vuole lo schema")
         _xml_ben_formato(copia)
-        # E senza formule il libro non si tocca.
+        # With no formulas, the workbook part isn't touched.
         senza = self.foglio('<sheetData><row r="2"><c r="A2"><v>1</v></c></row></sheetData>', "senza.xlsx")
         risposta = self.esegui(senza, [{"fai": "scrivi", "cella": "C2", "numero": 5}], copia)
         self.assertEqual(risposta["sostituite"], 1)
@@ -276,18 +275,18 @@ class LeFormeCheUnListinoVeroPuoAvere(BancoDelModulo):
 
 
 # ---------------------------------------------------------------------------
-# La compilazione su tutti i listini veri del repository
+# Compilation against every real price list in the repository
 # ---------------------------------------------------------------------------
 
-# La colonna d'ordine dei listini che il registro conosce; per gli altri si
-# prende la prima colonna vuota.
+# Order column for price lists the adapter registry knows about; for the
+# others, the first empty column is used.
 _COLONNA_D_ORDINE = {
     "LISTINO BETULLA": "C",
     "3listino_Cipresso": "G",
     "Listino3_": "G",
     "OFFERTE": "H",
 }
-# I canvass di LARICE: colonna D, con 641 titoli di sezione dentro.
+# LARICE canvass sheets: order column D, with section title rows mixed in.
 _LARICE = ("28.1", "30.1", "31.1", "32.1", "Copia di 30.1")
 
 
@@ -310,12 +309,12 @@ def _colonna_d_ordine(percorso: Path, foglio: Any) -> str:
 
 
 def _righe_del_piano(foglio: Any, colonna: str) -> list[int]:
-    """Tre righe con merce, sparse, dove nella colonna d'ordine non c'e' testo."""
+    """Pick three scattered rows with product data and no text in the order column."""
 
     indice = copia_fedele.numero_di_colonna(colonna)
     candidate = []
-    # In lettura veloce le celle vuote non sanno il proprio numero di riga:
-    # lo si conta da qui.
+    # In read-only mode empty cells don't know their own row number, so it's
+    # tracked here instead.
     for numero, riga in enumerate(foglio.iter_rows(min_row=2), start=2):
         cella_ordine = riga[indice - 1].value if indice <= len(riga) else None
         if isinstance(cella_ordine, str) and cella_ordine.strip():
@@ -328,8 +327,8 @@ def _righe_del_piano(foglio: Any, colonna: str) -> list[int]:
 
 
 class LaCompilazioneSuiListiniVeri(unittest.TestCase):
-    """Per ogni listino `.xlsx` del repository: si compila con il writer vero
-    e si pretende che la copia regga le quattro prove."""
+    """For every `.xlsx` price list in the repo: compile with the real writer
+    and require the copy to pass all four checks."""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -385,13 +384,13 @@ class LaCompilazioneSuiListiniVeri(unittest.TestCase):
                 cartella.mkdir()
                 copia, colonna, quantita = self.compila(sorgente, cartella)
 
-                # 1. La guardia cella per cella.
+                # 1. The cell-by-cell guard.
                 esito = copia_fedele.confronta_copia(
                     sorgente, copia, colonna_ordine=colonna, prima_riga=2, quantita=quantita,
                 )
                 self.assertTrue(esito.fedele, f"{sorgente.name}: {copia_fedele.frase_di_rifiuto('prova', esito)}")
 
-                # 2. openpyxl riapre la copia e ci trova le quantita'.
+                # 2. openpyxl re-opens the copy and finds the written quantities.
                 libro = load_workbook(copia, read_only=True)
                 try:
                     foglio = libro.worksheets[0]
@@ -400,8 +399,8 @@ class LaCompilazioneSuiListiniVeri(unittest.TestCase):
                 finally:
                     libro.close()
 
-                # 3. Ogni parte dello ZIP e' intatta, tranne il foglio (e il
-                #    libro, solo per dire a Excel di ricalcolare).
+                # 3. Every ZIP part is untouched except the sheet (and the
+                #    workbook part, only to flag Excel to recalculate).
                 diverse = _parti_diverse(sorgente, copia)
                 self.assertTrue(
                     set(diverse) <= {"xl/worksheets/sheet1.xml", "xl/workbook.xml"} or len(diverse) <= 2,
@@ -411,7 +410,7 @@ class LaCompilazioneSuiListiniVeri(unittest.TestCase):
                                 f"{sorgente.name}: parti cambiate {diverse}")
                 _xml_ben_formato(copia)
 
-                # 4. LibreOffice la converte senza errori, dove c'e'.
+                # 4. LibreOffice converts it without errors, where available.
                 if self.soffice:
                     conversione = subprocess.run(
                         [self.soffice, "--headless", "--convert-to", "csv", "--outdir", str(cartella), str(copia)],

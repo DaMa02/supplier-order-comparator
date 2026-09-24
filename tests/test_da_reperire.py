@@ -1,24 +1,22 @@
-"""L'elenco dei prodotti che nessun fornitore può dare.
+"""The "items to be sourced" list: products no supplier can provide.
 
-Punto 5.  Quattro cose qui valgono da sole l'intero file, e sono quelle in cui
-un'implementazione plausibile sbaglia in silenzio:
+Covers the invariants a plausible-but-wrong implementation would silently break:
 
-1. **Le sette colonne, in quest'ordine.**  Il foglio lo apre una persona che
-   telefona ai fornitori: una colonna spostata non fa esplodere niente, fa
-   leggere il prezzo dove c'è la quantità.  I valori si rileggono con
-   `openpyxl` cella per cella, non si controlla che il file «esista».
-2. **`righe` vuoto è un errore.**  Un foglio con le sole intestazioni finirebbe
-   nell'elenco della compilazione e nello zip, e direbbe a chi lo apre che c'è
-   qualcosa da reperire quando non c'è niente.
-3. **Il nome porta l'em dash**, come i listini compilati, e deve attraversare
-   `consegna.intestazione_allegato` senza uccidere la risposta HTTP: le
-   intestazioni si scrivono in latin-1 e l'em dash crudo là dentro alza
-   `UnicodeEncodeError` a corpo già promesso.
-4. **Il nome si fa riconoscere da `consegna.tipo_file`.**  Se il giro non
-   torna, il file nasce e poi viene scambiato per un listino, cioè spedito al
-   fornitore.
+1. The six columns, in this order. The sheet is opened by a person calling
+   suppliers: a shifted column doesn't crash anything, it just puts the price
+   where the quantity should be. Values are read back with `openpyxl`
+   cell by cell, not by checking that the file merely "exists".
+2. An empty `righe` is an error. A sheet with only headers would still enter
+   the delivery listing and the zip, telling whoever opens it there's
+   something to source when there's nothing.
+3. The file name carries an em dash, like compiled price lists, and must
+   survive `consegna.intestazione_allegato` without breaking the HTTP
+   response: headers are written in latin-1, and a raw em dash there raises
+   `UnicodeEncodeError` after the body is already promised.
+4. The name must be recognized by `consegna.tipo_file`. If that check fails,
+   the file gets misclassified as a price list and shipped to a supplier.
 
-Niente rete, niente `app/data/`: tutto in `tempfile.TemporaryDirectory()`.
+No network, no `app/data/`: everything runs in `tempfile.TemporaryDirectory()`.
 """
 
 from __future__ import annotations
@@ -64,7 +62,7 @@ def riga(
     ultimo_prezzo: object = 3.9,
     motivo: str = da_reperire.MOTIVO_NON_A_LISTINO,
 ) -> dict:
-    """Una riga verosimile, nella forma dichiarata dal contratto."""
+    """Build a plausible row in the contract's declared shape."""
     return {
         "ean": ean,
         "descrizione": descrizione,
@@ -76,7 +74,7 @@ def riga(
 
 
 def offerta(stato: str, *, chiave: str = "status") -> dict:
-    """Un'offerta ridotta a quello che `motivo` guarda davvero."""
+    """An offer trimmed to what `motivo` actually inspects."""
     return {"supplierId": "larice", chiave: stato}
 
 
@@ -87,7 +85,7 @@ class CasoConCartella(unittest.TestCase):
         self.cartella = Path(self.temporanea.name)
 
     def scrivi_e_rileggi(self, righe: list[dict], momento: datetime = MOMENTO):
-        """Scrive il foglio e lo riapre davvero: il ritorno è `(nome, foglio)`."""
+        """Write the sheet and actually reopen it; returns `(nome, foglio)`."""
         nome = da_reperire.scrivi(self.cartella, righe, momento)
         libro = load_workbook(self.cartella / nome)
         self.addCleanup(libro.close)
@@ -95,7 +93,7 @@ class CasoConCartella(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Il nome
+# File name
 # ---------------------------------------------------------------------------
 
 class NomeFileTests(unittest.TestCase):
@@ -104,8 +102,8 @@ class NomeFileTests(unittest.TestCase):
         self.assertIn(f" {EM_DASH} ", da_reperire.nome_file(MOMENTO))
 
     def test_nome_file_usa_la_stessa_data_dei_listini(self) -> None:
-        # Non una seconda tabella dei mesi: la stessa di `consegna`, quella che
-        # non passa da strftime("%B") e quindi non dice "August".
+        # Reuses `consegna`'s own month table rather than a second one, so it
+        # never goes through strftime("%B") and never prints "August".
         for momento in (datetime(2026, 1, 5), datetime(2026, 9, 3), datetime(2026, 12, 31)):
             self.assertEqual(
                 da_reperire.nome_file(momento),
@@ -122,26 +120,26 @@ class NomeFileTests(unittest.TestCase):
             self.assertNotIn(vietato, nome)
 
     def test_il_nome_attraversa_l_intestazione_di_scaricamento(self) -> None:
-        """`BaseHTTPRequestHandler` scrive le intestazioni in latin-1.
+        """`BaseHTTPRequestHandler` writes headers in latin-1.
 
-        Con l'em dash crudo la risposta muore a corpo già promesso: è lo stesso
-        difetto già pagato sui nomi dei listini, e la difesa è la stessa
-        funzione.  Qui si prova che il nome nuovo ci passa dentro.
+        A raw em dash breaks the response after the body is already
+        promised — the same failure mode as the price-list names, guarded by
+        the same function. This checks the new file name passes through it too.
         """
 
         nome = da_reperire.nome_file(MOMENTO)
         valore = consegna.intestazione_allegato(nome)
-        valore.encode("latin-1")  # non deve sollevare
+        valore.encode("latin-1")  # must not raise
         with self.assertRaises(UnicodeEncodeError):
             f'attachment; filename="{nome}"'.encode("latin-1")
         self.assertIn('filename="Prodotti da reperire - 17 agosto 2026.xlsx"', valore)
         self.assertIn("filename*=UTF-8''", valore)
 
     def test_il_nome_prodotto_si_fa_riconoscere_dalla_consegna(self) -> None:
-        """Il giro completo: il nome che scriviamo è quello che la consegna legge.
+        """End-to-end: the name written here is the same one `consegna` reads.
 
-        Se questo non torna, il file nasce e poi viene contato come un listino,
-        cioè spedito al fornitore dentro lo zip.
+        If this diverges, the file gets counted as a price list and shipped
+        to the supplier inside the zip.
         """
 
         nome = da_reperire.nome_file(MOMENTO)
@@ -151,7 +149,7 @@ class NomeFileTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Il motivo
+# Reason column
 # ---------------------------------------------------------------------------
 
 class MotivoTests(unittest.TestCase):
@@ -161,9 +159,9 @@ class MotivoTests(unittest.TestCase):
         self.assertEqual(da_reperire.motivo(offerte), da_reperire.MOTIVO_NON_A_LISTINO)
 
     def test_basta_un_fornitore_che_lo_ha_a_listino_per_cambiare_frase(self) -> None:
-        # Ce l'ha, ma l'offerta non è utilizzabile: a chi telefona conviene
-        # richiamare lo stesso fornitore fra qualche giorno, non cercarne uno
-        # nuovo.  Le due frasi dicono proprio questo.
+        # The supplier has it, but the offer isn't usable: whoever calls
+        # should try that same supplier again later, not look for a new one.
+        # The two messages say exactly that.
         offerte = [offerta("NON_TROVATO"), offerta("ESATTO"), offerta("NON_TROVATO")]
         self.assertEqual(da_reperire.motivo(offerte), "Nessun fornitore lo ha disponibile")
         self.assertEqual(da_reperire.motivo(offerte), da_reperire.MOTIVO_NON_DISPONIBILE)
@@ -173,10 +171,9 @@ class MotivoTests(unittest.TestCase):
             self.assertEqual(da_reperire.motivo(vuoto), da_reperire.MOTIVO_NON_A_LISTINO)
 
     def test_legge_anche_match_status_quando_status_manca(self) -> None:
-        # Le offerte del confronto portano lo stesso valore in due campi; se un
-        # giorno ne arrivasse una col solo `matchStatus`, dire «non lo ha a
-        # listino nessuno» quando invece qualcuno ce l'ha sarebbe una bugia
-        # nella colonna che l'utente legge.
+        # The comparison's offers carry the same value in two fields; if one
+        # arrived with only `matchStatus`, saying "no supplier has it" when
+        # one actually does would be a lie in the column the user reads.
         self.assertEqual(
             da_reperire.motivo([offerta("NON_TROVATO", chiave="matchStatus")]),
             da_reperire.MOTIVO_NON_A_LISTINO,
@@ -187,9 +184,9 @@ class MotivoTests(unittest.TestCase):
         )
 
     def test_uno_stato_illeggibile_non_diventa_non_trovato(self) -> None:
-        # `None`, la stringa vuota, un'offerta che non è nemmeno un dizionario:
-        # non si può affermare che non sia a listino, e la frase prudente è
-        # l'altra.
+        # `None`, an empty string, an offer that isn't even a dict: none of
+        # these can prove it's absent from every price list, so the cautious
+        # message is the other one.
         for offerte in (
             [{"supplierId": "larice"}],
             [{"status": ""}],
@@ -200,15 +197,15 @@ class MotivoTests(unittest.TestCase):
             self.assertEqual(da_reperire.motivo(offerte), da_reperire.MOTIVO_NON_DISPONIBILE, repr(offerte))
 
     def test_motivo_non_guarda_il_disco_ne_il_server(self) -> None:
-        # È una funzione pura: la stessa lista dà sempre la stessa frase e non
-        # lascia niente dietro di sé.
+        # A pure function: the same input always yields the same message and
+        # leaves no side effects.
         offerte = [offerta("NON_TROVATO")]
         self.assertEqual(da_reperire.motivo(offerte), da_reperire.motivo(offerte))
         self.assertEqual(offerte, [{"supplierId": "larice", "status": "NON_TROVATO"}])
 
 
 # ---------------------------------------------------------------------------
-# Il file
+# File output
 # ---------------------------------------------------------------------------
 
 class ScriviTests(CasoConCartella):
@@ -216,7 +213,7 @@ class ScriviTests(CasoConCartella):
         nome = da_reperire.scrivi(self.cartella, [riga()], MOMENTO)
         self.assertEqual(nome, NOME_ATTESO)
         self.assertTrue((self.cartella / nome).is_file())
-        # Nessun temporaneo rimasto indietro.
+        # No leftover temp file.
         self.assertEqual(sorted(p.name for p in self.cartella.iterdir()), [NOME_ATTESO])
 
     def test_le_sei_intestazioni_sono_quelle_e_in_quest_ordine(self) -> None:
@@ -244,23 +241,23 @@ class ScriviTests(CasoConCartella):
             ),
         ])
 
-        self.assertEqual(foglio.max_row, 3)  # intestazioni + due prodotti
+        self.assertEqual(foglio.max_row, 3)  # header + two products
         self.assertEqual(foglio["A2"].value, "8005905000123")
         self.assertEqual(foglio["B2"].value, "Caffè macinato 250 g")
         self.assertEqual(foglio["C2"].value, 4)
         self.assertEqual(foglio["D2"].value, 3.9)
         self.assertEqual(foglio["E2"].value, "Nessun fornitore lo ha a listino")
-        self.assertIsNone(foglio["F2"].value)  # la riempie l'utente
+        self.assertIsNone(foglio["F2"].value)  # filled in by the user
 
         self.assertEqual(foglio["A3"].value, "8001234000999")
         self.assertEqual(foglio["B3"].value, "Espositore natalizio")
         self.assertEqual(foglio["E3"].value, "Nessun fornitore lo ha disponibile")
 
     def test_l_ean_resta_testo_e_non_diventa_notazione_scientifica(self) -> None:
-        """Tredici cifre trattate da numero diventano `8.0059e+12`.
+        """A 13-digit code stored as a number renders as `8.0059e+12`.
 
-        Chi copia quel codice per cercarlo su un altro listino trova zero
-        risultati, e non ha modo di capire perché.
+        Whoever copies that value to search another price list gets zero
+        results with no way to understand why.
         """
 
         _, foglio = self.scrivi_e_rileggi([riga(ean="8005905000123")])
@@ -270,16 +267,16 @@ class ScriviTests(CasoConCartella):
         self.assertEqual(cella.data_type, "s")
 
     def test_un_ean_gia_numerico_arriva_lo_stesso_come_testo(self) -> None:
-        # Il chiamante potrebbe passarlo come intero: il foglio non deve
-        # cambiare faccia a seconda di come è tipizzato a monte.
+        # The caller might pass it as an int: the sheet must render it the
+        # same way regardless of the upstream type.
         _, foglio = self.scrivi_e_rileggi([riga(ean=8005905000123)])
         self.assertEqual(foglio["A2"].value, "8005905000123")
 
     def test_il_prezzo_mancante_lascia_la_cella_vuota(self) -> None:
-        """Vuoto e zero dicono due cose diverse.
+        """Empty and zero mean different things.
 
-        Uno zero in quella colonna direbbe che quel prodotto costava zero, che
-        è un'informazione falsa; vuoto dice «non lo sappiamo», che è la verità.
+        A zero in that column would claim the product cost nothing, which is
+        false; an empty cell says "unknown", which is true.
         """
 
         _, foglio = self.scrivi_e_rileggi([riga(ultimo_prezzo=None)])
@@ -287,16 +284,17 @@ class ScriviTests(CasoConCartella):
         self.assertNotEqual(foglio["D2"].value, 0)
 
     def test_il_prezzo_presente_resta_un_numero(self) -> None:
-        # Un prezzo scritto come testo non si somma e non si ordina.
+        # A price stored as text can't be summed or sorted.
         _, foglio = self.scrivi_e_rileggi([riga(ultimo_prezzo=12.5)])
         self.assertEqual(foglio["D2"].value, 12.5)
         self.assertIsInstance(foglio["D2"].value, (int, float))
 
     def test_i_colli_restano_un_numero_e_l_unita_diversa_entra_nella_cella(self) -> None:
-        """L'intestazione resta «Colli richiesti» e l'elenco mescola le due cose.
+        """The "Colli richiesti" header stays fixed even though the list mixes
+        cartons and displays.
 
-        Tre espositori scritti come `3` sotto quell'intestazione si leggono come
-        tre colli: chi telefona ordinerebbe la cosa sbagliata.
+        Three displays written as `3` under that header would read as three
+        cartons, and whoever calls the supplier would order the wrong thing.
         """
 
         _, foglio = self.scrivi_e_rileggi([
@@ -307,16 +305,16 @@ class ScriviTests(CasoConCartella):
         ])
         self.assertEqual(foglio["C2"].value, 4)
         self.assertEqual(foglio["C3"].value, "3 espositori")
-        self.assertEqual(foglio["C4"].value, 2)  # unità assente: sono colli
-        self.assertEqual(foglio["C5"].value, 1)  # maiuscola o minuscola è lo stesso
+        self.assertEqual(foglio["C4"].value, 2)  # no unit given: it's cartons
+        self.assertEqual(foglio["C5"].value, 1)  # case-insensitive match
         self.assertIsInstance(foglio["C2"].value, int)
 
     def test_righe_vuote_sono_un_errore_del_chiamante_e_non_lasciano_file(self) -> None:
-        """Chi chiama non deve mai creare un file vuoto.
+        """A caller must never end up creating an empty file.
 
-        Un foglio con le sole intestazioni finirebbe nell'elenco della
-        compilazione e nello zip, e direbbe a chi lo apre che c'è qualcosa da
-        reperire quando non c'è niente.
+        A sheet with only headers would still enter the delivery listing and
+        the zip, telling whoever opens it there's something to source when
+        there's nothing.
         """
 
         for vuoto in ([], (), None):
@@ -325,8 +323,8 @@ class ScriviTests(CasoConCartella):
         self.assertEqual(list(self.cartella.iterdir()), [])
 
     def test_una_riga_a_cui_manca_un_campo_non_fa_saltare_la_compilazione(self) -> None:
-        # La cartella datata viene cancellata se qualcosa esplode qui dentro:
-        # un campo mancante non deve costare l'intera compilazione.
+        # The dated run folder is deleted if anything crashes here: a missing
+        # field must not cost the whole run.
         _, foglio = self.scrivi_e_rileggi([{"descrizione": "Solo la descrizione"}])
         self.assertIsNone(foglio["A2"].value)
         self.assertEqual(foglio["B2"].value, "Solo la descrizione")
@@ -335,24 +333,23 @@ class ScriviTests(CasoConCartella):
         self.assertIsNone(foglio["E2"].value)
 
     def test_due_scritture_nella_stessa_cartella_non_si_sommano(self) -> None:
-        # Stesso momento, stesso nome: la seconda riscrive, non appende.
+        # Same timestamp, same name: the second write replaces, it doesn't append.
         da_reperire.scrivi(self.cartella, [riga(), riga()], MOMENTO)
         _, foglio = self.scrivi_e_rileggi([riga()])
         self.assertEqual(foglio.max_row, 2)
 
     def test_il_file_e_un_xlsx_vero_e_apribile(self) -> None:
-        # `openpyxl` non era mai stato usato per **scrivere** in produzione:
-        # questa è la prova che quello che esce si riapre.
+        # Proves what this module writes actually reopens as a valid workbook.
         nome = da_reperire.scrivi(self.cartella, [riga()], MOMENTO)
         crudo = (self.cartella / nome).read_bytes()
-        self.assertTrue(crudo.startswith(b"PK"))  # è uno zip, cioè un OOXML
+        self.assertTrue(crudo.startswith(b"PK"))  # it's a zip, i.e. OOXML
         libro = load_workbook(self.cartella / nome)
         self.addCleanup(libro.close)
         self.assertEqual(libro.sheetnames, [da_reperire.NOME_FOGLIO])
 
     def test_niente_formule_dentro_le_celle(self) -> None:
-        # Il foglio lo apre una persona, non un motore di calcolo: una formula
-        # qui dentro sarebbe una cosa in più che può rompersi.
+        # The sheet is opened by a person, not a spreadsheet engine: a
+        # formula here would be one more thing that can break.
         nome = da_reperire.scrivi(self.cartella, [riga()], MOMENTO)
         libro = load_workbook(self.cartella / nome)
         self.addCleanup(libro.close)
@@ -361,16 +358,15 @@ class ScriviTests(CasoConCartella):
                 self.assertNotEqual(cella.data_type, "f", cella.coordinate)
 
     def test_una_descrizione_o_un_ean_che_comincia_per_uguale_non_diventa_formula(self) -> None:
-        """EAN e descrizione arrivano dai listini dei fornitori: testo che non
-        controlliamo.  openpyxl scrive come FORMULA una stringa che comincia
-        per «=», e chi apre il foglio per telefonare in giro si troverebbe un
-        calcolo (o un `#NAME?`) al posto del nome del prodotto o del codice.
+        """EAN and description come from supplier price lists: text outside
+        our control. openpyxl writes a string starting with "=" as a
+        FORMULA, so whoever opens the sheet to call suppliers would see a
+        calculation (or `#NAME?`) instead of the product name or code.
 
-        L'asserzione è su `data_type` alla rilettura, non sulla forma
-        dell'XML: openpyxl serializza l'elemento vuoto in modo diverso a
-        seconda che trovi `lxml` installato o no, e un test che guardasse
-        l'XML passerebbe su una macchina e fallirebbe sull'altra a parità
-        di codice.
+        Asserted via `data_type` on reread rather than the raw XML: openpyxl
+        serializes an empty element differently depending on whether `lxml`
+        is installed, so a test checking the XML directly could pass on one
+        machine and fail on another with the same code.
         """
 
         nome = da_reperire.scrivi(
@@ -391,8 +387,8 @@ class ScriviTests(CasoConCartella):
         self.assertEqual(cella_descrizione.value, '=HYPERLINK("http://esempio.test")')
 
     def test_le_colonne_hanno_una_larghezza(self) -> None:
-        # Senza, la descrizione e le note escono tagliate e vanno allargate a
-        # mano ogni volta.
+        # Without this, the description and notes columns render truncated
+        # and need to be widened by hand every time.
         nome = da_reperire.scrivi(self.cartella, [riga()], MOMENTO)
         libro = load_workbook(self.cartella / nome)
         self.addCleanup(libro.close)

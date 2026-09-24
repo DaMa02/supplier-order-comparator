@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
-"""Storico degli ordini compilati, per ricordare la merce non ancora ricevuta.
+"""History of compiled orders, to remember merchandise not yet received.
 
-Il negozio ordina una settimana, il fornitore non consegna, la merce non entra
-nel gestionale: la settimana dopo lo stesso articolo verrebbe riordinato senza
-accorgersene.  Questo modulo conserva una voce per fornitore ad ogni
-compilazione riuscita — riuscita vuol dire con le copie dei listini sul disco,
-il resto non e' un ordine — e permette di rispondere una volta sola, per
-l'intero ordine.
+The store orders one week, the supplier fails to deliver, the item never
+enters the management software: the following week the same item would be
+reordered without anyone noticing. This module keeps one entry per supplier
+for every successful compilation — successful meaning the price-list copies
+are written to disk, anything less isn't an order — and lets the user answer
+once for the whole order.
 
-Le risposte sono tre e riguardano sempre l'ordine intero, perche' le consegne
-parziali non esistono: «ricevuta» chiude, «non ancora» rimanda la domanda alla
-settimana dopo, «non arrivera' piu'» la chiude senza dire che la merce e'
-arrivata.  Una domanda mai risposta scade dopo 60 giorni, e la scadenza si
-dichiara (`expired_orders`) invece di spegnersi in silenzio.
+There are three possible answers, always for the whole order, since partial
+deliveries don't exist: "received" closes it, "not yet" postpones the
+question to next week, "will never arrive" closes it without claiming the
+merchandise arrived. An unanswered question expires after 60 days, and the
+expiry is reported (`expired_orders`) rather than fading out silently.
 
-Il modulo e' autonomo: non conosce ne' il server HTTP ne' ReviewStore, cosi'
-resta verificabile da solo.  L'archivio vive fuori dalla cartella della run in
-corso (app/data/history/orders.json) per sopravvivere al ricalcolo settimanale.
+The module is self-contained: it knows nothing about the HTTP server or
+ReviewStore, so it stays independently testable. The archive lives outside
+the current run's folder (app/data/history/orders.json) so it survives the
+weekly recompute.
 """
 
 from __future__ import annotations
@@ -39,20 +40,19 @@ SCHEMA_VERSION = 1
 STATUS_PENDING = "in_attesa"
 STATUS_RECEIVED = "ricevuto"
 STATUS_EXPIRED = "scaduto"
-# «Non arrivera' piu'»: l'unico modo di chiudere una domanda senza mentire
-# dicendo che la merce e' arrivata.  Senza questa risposta un ordine mai
-# consegnato tornerebbe a chiedere di se' ogni settimana per sessanta giorni.
+# "Will never arrive": the only way to close a question without claiming the
+# merchandise arrived. Without this answer, an undelivered order would keep
+# asking about itself every week for sixty days.
 STATUS_CLOSED = "non_arrivera"
 STATI_NOTI = {STATUS_PENDING, STATUS_RECEIVED, STATUS_EXPIRED, STATUS_CLOSED}
 EXPIRY_DAYS = 60
-# Dopo un «non ancora arrivata» la domanda torna la settimana dopo: il negozio
-# ordina una volta a settimana, quindi e' quello il momento in cui ha senso
-# richiedere.  Prima era il browser a nascondere la domanda per la sola
-# giornata in corso, e la stessa domanda tornava il giorno dopo.
+# After a "not yet arrived" answer, the question returns the following week:
+# the store places orders once a week, so that's the point where re-asking
+# makes sense.
 REASK_DAYS = 7
-# Per quanti giorni la scadenza di un ordine resta scritta in pagina.  Un mese:
-# chi lavora una volta a settimana la vede almeno quattro volte, e poi smette
-# di occupare la pagina con una notizia vecchia.
+# How many days an order's expiry notice stays on the page. A month: someone
+# who works the page once a week sees it at least four times, then it stops
+# taking up space with old news.
 EXPIRY_NOTICE_DAYS = 30
 
 
@@ -69,7 +69,7 @@ def to_iso(moment: datetime | None = None) -> str:
 
 
 def parse_moment(value: Any) -> datetime | None:
-    """Legge un ISO8601; restituisce None quando la data non è interpretabile."""
+    """Parse an ISO8601 string; returns None when the date can't be read."""
 
     text = str(value or "").strip()
     if not text:
@@ -84,28 +84,27 @@ def parse_moment(value: Any) -> datetime | None:
 
 
 def normalize_ean(value: Any) -> str:
-    """Il codice a barre ripulito dagli spazi esterni: la chiave preferita."""
+    """The barcode with surrounding whitespace stripped: the preferred key."""
 
     if value is None or isinstance(value, bool):
         return ""
     return str(value).strip()
 
 
-# Un identificativo di prodotto vale come identita' solo quando lo compone il
-# CONTENUTO e non la posizione nel foglio.  Dei due nomi degli espositori
-# (`scripts/build_review_data.py`, build_display_products) solo
-# `display:composition:<ean>:<pezzi>|...` nasce dalla composizione, quindi la
-# settimana dopo indica lo stesso articolo; `display:unmatched:...` porta
-# dentro il fornitore scelto e la descrizione, e cambia al cambio di
-# fornitore — abbinarlo mancherebbe l'avviso senza dirlo (revisione
-# avversariale R4).  `product:<riga>` mai: dipende dalla riga
-# dell'esportazione settimanale, e product:198 di oggi non e' l'articolo che
-# stava su product:198 la settimana scorsa.
+# A product identifier counts as an identity only when it's built from
+# content, not from sheet position. Of the two display-product id shapes
+# (`scripts/build_review_data.py`, build_display_products), only
+# `display:composition:<ean>:<pieces>|...` is derived from the composition,
+# so it still names the same item next week; `display:unmatched:...` embeds
+# the chosen supplier and description and changes when the supplier changes
+# — matching on it would silently miss the notice. `product:<row>` never:
+# it depends on the row in the weekly export, and today's product:198 isn't
+# last week's.
 PREFISSI_IDENTITA_STABILE = ("display:composition:",)
 
 
 def stable_product_id(value: Any) -> str:
-    """L'identificativo, se è di quelli confrontabili fra due settimane."""
+    """The identifier, if it's of the kind comparable across weeks."""
 
     if value is None or isinstance(value, bool):
         return ""
@@ -114,12 +113,12 @@ def stable_product_id(value: Any) -> str:
 
 
 def match_key(ean: Any, product_id: Any = "") -> str:
-    """La chiave con cui una riga d'ordine e un prodotto del confronto si abbinano.
+    """The key that matches an order line to a product in the comparison.
 
-    Prima l'EAN, che e' l'articolo e basta.  Quando l'EAN non c'e' — e' il caso
-    degli espositori, che nel confronto non ne hanno mai uno — subentra
-    l'identita' del prodotto, ma soltanto se e' di quelle stabili: senza questo
-    ripiego un espositore ordinato restava invisibile la settimana dopo.
+    EAN first, since that alone identifies an item. When there's no EAN —
+    displays never have one in the comparison — the product's identity takes
+    over, but only when it's one of the stable ones: without this fallback,
+    an ordered display would stay invisible the following week.
     """
 
     normalized = normalize_ean(ean)
@@ -159,8 +158,8 @@ def _normalized_entry(raw: dict[str, Any]) -> dict[str, Any]:
     entry["status"] = status if status in STATI_NOTI else STATUS_PENDING
     answered = entry.get("answeredAt")
     entry["answeredAt"] = str(answered) if answered else None
-    # Quando la scadenza e' scattata: serve a dirlo in pagina.  Gli archivi
-    # scritti prima non ce l'hanno e restano leggibili senza.
+    # When the expiry fired: needed to report it on the page. Archives
+    # written before this field existed lack it and stay readable without it.
     expired = entry.get("expiredAt")
     entry["expiredAt"] = str(expired) if expired else None
     entry["totalNet"] = round(_number(entry.get("totalNet")) or 0.0, 2)
@@ -170,7 +169,7 @@ def _normalized_entry(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def load_history(path: Path) -> dict[str, Any]:
-    """Legge l'archivio; se il file manca restituisce uno storico vuoto."""
+    """Read the archive; returns an empty history if the file is missing."""
 
     file_path = Path(path)
     if not file_path.exists():
@@ -191,11 +190,11 @@ def load_history(path: Path) -> dict[str, Any]:
 
 
 def save_history(path: Path, history: dict[str, Any]) -> None:
-    """Scrittura atomica e arrivata sul disco: la fa `scrittura_sicura`.
+    """Atomic write, confirmed to reach disk: handled by `scrittura_sicura`.
 
-    ⚠ Questa e' la memoria che dice **che cosa e' stato ordinato e non e'
-    ancora arrivato**: trovarla vuota dopo una mancanza di corrente vuol dire
-    che nessuno chiedera' piu' «e' arrivata?» per quella merce.
+    This is the memory that says what was ordered and hasn't arrived yet:
+    finding it empty after a crash means nobody will ever ask "has it
+    arrived?" for that merchandise again.
     """
 
     scrittura_sicura.scrivi_json(Path(path), history)
@@ -207,7 +206,7 @@ def expire_pending(
     now: datetime | None = None,
     max_age_days: int = EXPIRY_DAYS,
 ) -> bool:
-    """Manda in scadenza le attese troppo vecchie; True se qualcosa è cambiato."""
+    """Expire pending questions older than the limit; True if anything changed."""
 
     limit = (now or utc_now()) - timedelta(days=max_age_days)
     changed = False
@@ -215,21 +214,21 @@ def expire_pending(
         if entry.get("status") != STATUS_PENDING:
             continue
         created = parse_moment(entry.get("createdAt"))
-        # I sessanta giorni contano dall'ULTIMA interazione, non dalla nascita:
-        # con la domanda che torna ogni sette giorni, un ordine risposto «non
-        # ancora arrivata» ieri sarebbe scaduto oggi come se l'utente non
-        # avesse mai risposto — e la frase avrebbe detto «senza risposta» di
-        # chi rispondeva con diligenza (revisione avversariale R4).
+        # The sixty days count from the LAST interaction, not from creation:
+        # with the question returning every seven days, an order answered
+        # "not yet arrived" yesterday would otherwise expire today as if
+        # nobody had ever answered it, mislabeling a diligent answer as
+        # "no response".
         answered = parse_moment(entry.get("answeredAt"))
         ultima = max(momento for momento in (created, answered) if momento is not None) \
             if (created or answered) else None
-        # Una data assente o illeggibile va trattata come scaduta: senza data la
-        # domanda non è collocabile nel tempo e resterebbe in attesa per sempre.
+        # A missing or unreadable date counts as expired: without a date the
+        # question can't be placed in time and would stay pending forever.
         if ultima is not None and ultima >= limit:
             continue
         entry["status"] = STATUS_EXPIRED
-        # Il momento della scadenza si scrive: e' quello che permette di dirlo
-        # in pagina invece di spegnere la domanda in silenzio.
+        # The expiry moment is recorded, so it can be shown on the page
+        # instead of the question silently going quiet.
         entry["expiredAt"] = to_iso(now)
         changed = True
     return changed
@@ -241,13 +240,12 @@ def expired_orders(
     now: datetime | None = None,
     window_days: int = EXPIRY_NOTICE_DAYS,
 ) -> list[dict[str, Any]]:
-    """Gli ordini scaduti di recente, per dirlo in pagina.
+    """Recently expired orders, to report on the page.
 
-    Un ordine che scade e' una domanda che il programma smette di fare: va
-    detto, altrimenti la merce non arrivata sparisce senza che nessuno lo
-    sappia.  Restano fuori le scadenze piu' vecchie del limite e quelle degli
-    archivi scritti prima di `expiredAt`, che nessuno potrebbe piu' collocare
-    nel tempo.
+    An order that expires is a question the program stops asking: it has to
+    be reported, or the missing merchandise disappears without anyone
+    knowing. Excludes expiries older than the window and entries without an
+    `expiredAt` (older archives lack it), which cannot be placed in time.
     """
 
     limit = (now or utc_now()) - timedelta(days=window_days)
@@ -263,8 +261,8 @@ def expired_orders(
             "supplier": str(entry.get("supplier") or ""),
             "supplierName": str(entry.get("supplierName") or _default_supplier_name(str(entry.get("supplier") or ""))),
             "createdAt": str(entry.get("createdAt") or ""),
-            # Chi scrive la frase deve poter dire la verita': «senza risposta»
-            # e «l'ultima risposta e' del …» sono due notizie diverse.
+            # Whoever builds the message needs the truth: "no response" and
+            # "last answered on ..." are two different pieces of news.
             "answeredAt": str(entry.get("answeredAt") or "") or None,
             "expiredAt": str(entry.get("expiredAt") or ""),
             "lineCount": len(entry.get("lines") or []),
@@ -275,9 +273,9 @@ def expired_orders(
 
 
 def read_history(path: Path, *, now: datetime | None = None) -> tuple[dict[str, Any], bool]:
-    """Carica l'archivio applicando la scadenza a 60 giorni.
+    """Load the archive, applying the 60-day expiry.
 
-    Restituisce (storico, cambiato): quando è cambiato conviene risalvarlo.
+    Returns (history, changed): when changed, the caller should save it back.
     """
 
     history = load_history(path)
@@ -294,24 +292,24 @@ def order_lines_from_plan(plan_lines: Iterable[dict[str, Any]]) -> list[dict[str
             "ean": normalize_ean(line.get("ean")),
             "description": str(line.get("description") or ""),
             "quantity": _quantity(line.get("quantity")),
-            # L'unità con cui si era ordinato: lo stesso codice può essere un
-            # espositore una settimana e un prodotto normale quella dopo, e
-            # l'avviso deve dire "espositori" se di espositori si trattava.
+            # The unit ordered in: the same code can be a display one week
+            # and a regular product the next, and the notice must say
+            # "displays" if it was displays.
             "unit": str(line.get("desired_quantity_unit") or "colli"),
             "orderUnitPriceNet": round(_number(line.get("order_unit_price_net")) or 0.0, 6),
-            # Identita' del prodotto nel confronto: per gli espositori, che un
-            # EAN non ce l'hanno, e' l'unico modo di ritrovarli la settimana
-            # dopo (vedi match_key).
+            # Product identity in the comparison: for displays, which have
+            # no EAN, this is the only way to find them again next week (see
+            # `match_key`).
             "productId": str(line.get("product_id") or ""),
         })
     return lines
 
 
 def _run_key(run_id: Any, created_at: Any) -> str:
-    """La settimana a cui appartiene un ordine.
+    """The week an order belongs to.
 
-    Senza runId (confronto senza identificativo) si ripiega sulla data, per non
-    accorpare ordini di giornate diverse sotto la stessa chiave.
+    Without a runId (a comparison run with no identifier) falls back to the
+    date, so orders from different days don't collapse onto the same key.
     """
 
     run = str(run_id or "").strip()
@@ -323,14 +321,14 @@ def _entry_run_key(entry: dict[str, Any]) -> str:
 
 
 def _is_replaceable(entry: dict[str, Any]) -> bool:
-    """Una domanda ancora aperta: la RICONSEGNA dello stesso fornitore la sostituisce.
+    """A question still open: a re-compilation for the same supplier replaces it.
 
-    Aperta vuol dire `in_attesa`, anche se l'utente ha gia' risposto «non
-    ancora arrivata»: quella risposta parlava di una compilazione che una
-    riconsegna ha superato, e tenerla in piedi accanto alla nuova produrrebbe
-    due domande per la stessa settimana e colli sommati due volte (revisione
-    avversariale R4).  «Ricevuta», «non arrivera' piu'» e «scaduto» sono
-    storia chiusa: non si toccano e non si ripropongono.
+    Open means `in_attesa`, even if the user already answered "not yet
+    arrived": that answer was about a compilation a re-compilation has since
+    superseded, and leaving it standing next to the new one would produce two
+    questions for the same week and double-counted quantities. "Received",
+    "will never arrive" and "expired" are closed history: they're never
+    touched or reissued.
     """
 
     return entry.get("status") == STATUS_PENDING
@@ -345,21 +343,21 @@ def record_plan(
     order_key: str = "",
     delivered: Iterable[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Registra una voce "in_attesa" per ogni fornitore consegnato dal piano.
+    """Record a pending entry for every supplier the plan actually delivered.
 
-    IDENTIFICATIVO: "<order_key>:<fornitore>", dove `order_key` è la cartella
-    datata della compilazione.  Due compilazioni della stessa run sono due
-    ordini diversi — l'utente puo' aver gia' mandato la prima — e la seconda
-    non deve cancellarla scrivendoci sopra.
+    Identifier: `"<order_key>:<supplier>"`, where `order_key` is the
+    compilation's dated folder. Two compilations of the same run are two
+    different orders — the user may already have sent the first one — and
+    the second must not overwrite it.
 
-    SOSTITUZIONE: della stessa settimana si tiene solo l'ultima compilazione,
-    ma soltanto fra le domande ancora SENZA RISPOSTA.  Una risposta gia' data
-    resta dov'è: la sua domanda non torna e non si duplica.
+    Replacement: only the latest compilation of the same week is kept, and
+    only among questions still without an answer. An answer already given
+    stays where it is: its question doesn't return and doesn't duplicate.
 
-    `delivered` sono i fornitori di cui la compilazione ha davvero creato la
-    copia: un fornitore rimasto senza copia non diventa un ordine, e nemmeno
-    cancella quello che c'era prima, perché una compilazione fallita non
-    cambia niente di quello che è già stato mandato.
+    `delivered` are the suppliers for which the compilation actually wrote a
+    copy: a supplier left without a copy doesn't become an order, and doesn't
+    erase what was there before either, since a failed compilation changes
+    nothing about what was already sent.
     """
 
     label = supplier_name or _default_supplier_name
@@ -373,10 +371,10 @@ def record_plan(
     for line in (plan or {}).get("orders") or []:
         if not isinstance(line, dict):
             continue
-        # Casefold da tutte e due le parti: `run_writer` consegna identificativi
-        # casefoldati, e un fornitore con una maiuscola nel piano non si
-        # incontrava mai con la sua copia — ordine prodotto, storico muto
-        # (revisione avversariale R4).
+        # Casefolded on both sides: `run_writer` hands over casefolded
+        # identifiers, and a supplier key with different casing in the plan
+        # would never match its own delivered copy, silently leaving the
+        # order out of the history.
         supplier = str(line.get("supplier") or "").strip().casefold()
         if not supplier:
             continue
@@ -415,27 +413,25 @@ def record_plan(
             existing[order_id] = payload
             recorded.append(payload)
             continue
-        # Stessa compilazione registrata due volte: si aggiorna, non si duplica.
+        # Same compilation recorded twice: updated, not duplicated.
         payload["createdAt"] = str(entry.get("createdAt") or created_at)
         if entry.get("answeredAt") or entry.get("status") != STATUS_PENDING:
-            # Una risposta già data alla STESSA compilazione non regredisce
-            # perché la si sta ri-registrando: qui non c'è nessuna riconsegna,
-            # è la stessa voce scritta due volte.
+            # An answer already given to the SAME compilation doesn't revert
+            # just because it's being recorded again: this isn't a
+            # re-delivery, it's the same entry written twice.
             payload["status"] = str(entry.get("status"))
             payload["answeredAt"] = entry.get("answeredAt")
         entry.update(payload)
         recorded.append(entry)
 
-    # Della stessa settimana resta in piedi solo l'ultima compilazione, e la
-    # sostituzione tocca SOLTANTO i fornitori riconsegnati adesso: la domanda
-    # di prima parlava di una compilazione superata (anche se l'utente le
-    # aveva risposto «non ancora arrivata»).  ⚠ Un fornitore ASSENTE dal piano
-    # non si cancella piu': dopo D1 ogni voce dello storico e' un documento
-    # consegnato davvero — cancellarla perche' una compilazione successiva non
-    # lo conteneva significava perdere l'ordine LARICE gia' mandato e
-    # riordinarne la merce (BLOCCANTE della revisione avversariale R4; la
-    # vecchia regola nasceva quando la voce si scriveva al momento del piano,
-    # cioe' quando era un'intenzione e non un documento).
+    # Only the latest compilation of the same week stays standing, and the
+    # replacement touches ONLY the suppliers just re-delivered: the earlier
+    # question was about a compilation that's now superseded (even if the
+    # user had answered "not yet arrived" to it). A supplier absent from the
+    # plan is never removed: every history entry is a document that was
+    # actually delivered, and removing one because a later compilation
+    # didn't include that supplier would drop a real, already-sent order
+    # while leaving its merchandise to be reordered.
     registrati = {str(item.get("orderId") or "") for item in recorded}
     superflue = [
         entry for entry in orders
@@ -455,11 +451,11 @@ def pending_entries(
     *,
     exclude_run_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Ordini ancora in attesa, esclusa la run attualmente aperta.
+    """Orders still pending, excluding the currently open run.
 
-    Senza l'esclusione, subito dopo aver compilato l'utente si vedrebbe chiedere
-    se ha ricevuto la merce ordinata trenta secondi prima, e ogni articolo appena
-    ordinato comparirebbe segnalato come "già ordinato".
+    Without this exclusion, right after compiling, the user would be asked
+    whether merchandise ordered thirty seconds ago has arrived, and every
+    item just ordered would show up flagged as "already ordered".
     """
 
     current = str(exclude_run_id or "").strip()
@@ -474,13 +470,13 @@ def pending_entries(
 
 
 def remove_compilation(history: dict[str, Any], order_key: str) -> list[dict[str, Any]]:
-    """Elimina tutte le voci nate da una compilazione cancellata.
+    """Remove every entry created by a deleted compilation.
 
-    La chiave delle voci nuove è ``<cartella>:<fornitore>``. Si confronta il
-    prefisso completo, con i due punti finali, così cancellare ``..._2`` non
-    tocca ``..._20``. Ricevuti, chiusi, scaduti e ancora in attesa vengono
-    eliminati insieme: una compilazione di prova non deve lasciare alcun
-    promemoria o traccia commerciale nel pannello delle consegne.
+    New entries are keyed as `<folder>:<supplier>`. The full prefix is
+    compared, trailing colon included, so deleting `..._2` doesn't also
+    remove `..._20`. Received, closed, expired and still-pending entries are
+    all removed together: a discarded compilation must leave no reminder or
+    commercial trace in the deliveries panel.
     """
 
     key = str(order_key or "").strip()
@@ -501,24 +497,24 @@ def remove_compilation(history: dict[str, Any], order_key: str) -> list[dict[str
 
 
 def ask_again_at(entry: dict[str, Any]) -> str:
-    """Quando la domanda torna dopo un «non ancora arrivata»; "" se è dovuta ora.
+    """When the question returns after "not yet arrived"; "" if due now.
 
-    La decide il servizio e non il browser, come ogni altra regola: il browser
-    si limita a confrontarla con l'orologio. ⚠ Non sta sul disco: si ricalcola
-    da `answeredAt` a ogni richiesta, quindi non è un valore che si possa
-    correggere a mano dentro `orders.json`.
+    Decided by the service, not the browser, like every other rule: the
+    browser only compares it against the clock. Not stored on disk: it's
+    recomputed from `answeredAt` on every request, so it isn't a value that
+    can be hand-edited inside `orders.json`.
     """
 
     answered = parse_moment(entry.get("answeredAt"))
     if answered is None:
         return ""
-    # ⚠ Chi comincia una comparazione nuova rimette in piedi la domanda subito,
-    # e questo segno vince sui sette giorni: aprire la settimana è un segnale
-    # più forte di un timer, ed è il momento in cui ci si chiede davvero se la
-    # merce della settimana scorsa è arrivata (Daniele, 22 agosto 2026).
-    # Si confronta con `answeredAt` e non con l'orologio: una risposta data
-    # DOPO la riapertura rimette il rinvio, altrimenti la domanda tornerebbe
-    # per sempre a ogni ricaricamento.
+    # Starting a new comparison run reinstates the question immediately, and
+    # that signal overrides the seven-day delay: opening a new week is a
+    # stronger signal than a timer, and it's the point where it makes sense
+    # to actually ask whether last week's merchandise arrived.
+    # Compared against `answeredAt`, not the clock: an answer given AFTER
+    # the reopening restores the delay, or the question would return forever
+    # on every reload.
     riaperta = parse_moment(entry.get("reaskedAt"))
     if riaperta is not None and riaperta >= answered:
         return ""
@@ -526,22 +522,22 @@ def ask_again_at(entry: dict[str, Any]) -> str:
 
 
 def riapri_le_domande(history: dict[str, Any]) -> int:
-    """Toglie il rinvio a tutte le domande «è arrivata?» ancora in attesa.
+    """Clear the delay on every still-pending "has it arrived?" question.
 
-    Non tocca `answeredAt`: quella è la memoria di **che cosa** è stato
-    risposto e **quando**, ed è la stessa cosa che permette di rispondere a
-    «che cosa avevo deciso prima». Il rinvio è una conseguenza di quella data,
-    non un dato suo, quindi si annulla con un segno a parte.
+    Doesn't touch `answeredAt`: that's the record of what was answered and
+    when, and it's what lets the system answer "what did I decide before".
+    The delay is a consequence of that date, not part of it, so it's cleared
+    with a separate flag.
 
-    Restituisce quante domande sono tornate in piedi: serve a non dire
-    «rimesse 4 domande» quando non ce n'era nessuna da rimettere.
+    Returns how many questions were reinstated, so callers can avoid
+    reporting a count when there was nothing to reinstate.
     """
 
     adesso = to_iso()
     quante = 0
     for entry in pending_entries(history):
         if not entry.get("answeredAt"):
-            # Mai risposta: la domanda è già dovuta, non c'è rinvio da togliere.
+            # Never answered: the question is already due, nothing to clear.
             continue
         entry["reaskedAt"] = adesso
         quante += 1
@@ -553,7 +549,7 @@ def pending_summary(
     *,
     exclude_run_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Elenco compatto per la domanda in cima alla pagina 2."""
+    """Compact list for the question at the top of page 2."""
 
     return [
         {
@@ -561,11 +557,12 @@ def pending_summary(
             "supplier": str(entry.get("supplier") or ""),
             "supplierName": str(entry.get("supplierName") or _default_supplier_name(str(entry.get("supplier") or ""))),
             "createdAt": str(entry.get("createdAt") or ""),
-            # Serve al programma per non riproporre la stessa domanda a ogni
-            # ricaricamento della pagina dopo un "non ancora arrivata".
+            # Keeps the same question from being re-asked on every page
+            # reload after a "not yet arrived" answer.
             "answeredAt": entry.get("answeredAt") or None,
-            # ...e questo dice quando invece va riproposta: una settimana dopo,
-            # perché la merce può arrivare nel frattempo e nessuno lo direbbe.
+            # ...and this says when to ask again: a week later, since the
+            # merchandise may arrive in the meantime and nothing else would
+            # report it.
             "askAgainAt": ask_again_at(entry),
             "lineCount": len(entry.get("lines") or []),
             "totalNet": round(_number(entry.get("totalNet")) or 0.0, 2),
@@ -581,11 +578,12 @@ def answer_order(
     *,
     now: datetime | None = None,
 ) -> dict[str, Any] | None:
-    """Risposta unica per l'intero ordine: le consegne parziali non esistono.
+    """Single answer for the whole order: partial deliveries don't exist.
 
-    "Sì" chiude l'ordine; "No" lo lascia in attesa e segna la risposta, così la
-    domanda tace per una settimana e poi torna: finché la merce non è arrivata
-    la domanda ha ancora senso, e sparire sarebbe come dire che è arrivata.
+    "Yes" closes the order; "No" leaves it pending and records the answer, so
+    the question goes quiet for a week and then returns: as long as the
+    merchandise hasn't arrived the question still makes sense, and dropping
+    it would amount to claiming it had.
     """
 
     target = str(order_id or "").strip()
@@ -598,11 +596,11 @@ def answer_order(
         if received:
             entry["status"] = STATUS_RECEIVED
         elif entry.get("status") == STATUS_EXPIRED:
-            # Un «non ancora arrivata» su un ordine GIA' scaduto non lo
-            # resuscita: tornerebbe in attesa, riscadrebbe alla lettura dopo
-            # con un `expiredAt` di oggi, e l'avviso «ordini scaduti»
-            # rinascerebbe ogni volta, per sempre (revisione avversariale R4).
-            # La risposta si registra, lo stato resta quello che era.
+            # A "not yet arrived" answer on an order that's already expired
+            # doesn't revive it: it would go back to pending, re-expire on
+            # the next read with today's `expiredAt`, and the "expired
+            # orders" notice would keep coming back forever. The answer is
+            # recorded, the status stays what it was.
             pass
         else:
             entry["status"] = STATUS_PENDING
@@ -616,11 +614,11 @@ def close_order(
     *,
     now: datetime | None = None,
 ) -> dict[str, Any] | None:
-    """«Non arriverà più»: chiude la domanda senza dire che la merce è arrivata.
+    """Close the question as "will never arrive", without claiming it arrived.
 
-    Serve perché un «non ancora arrivata» torna a chiedere ogni settimana: un
-    ordine che il fornitore non consegnerà mai deve poter uscire di scena, e
-    l'unica alternativa sarebbe segnarlo ricevuto, cioè scrivere il falso.
+    Needed because "not yet arrived" keeps asking every week: an order the
+    supplier will never deliver needs a way to exit, and the only
+    alternative would be marking it received, which would be false.
     """
 
     target = str(order_id or "").strip()
@@ -640,10 +638,10 @@ def pending_by_identity(
     *,
     exclude_run_id: str | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Indice identità -> ordini in attesa, con i colli complessivi dell'articolo.
+    """Index identity -> pending orders, with the item's total quantity.
 
-    L'identità è quella di `match_key`: l'EAN quando c'è, altrimenti
-    l'identificativo stabile del prodotto (gli espositori).
+    Identity is the one from `match_key`: the EAN when there is one,
+    otherwise the product's stable identifier (displays).
     """
 
     index: dict[str, list[dict[str, Any]]] = {}
@@ -655,8 +653,8 @@ def pending_by_identity(
                 continue
             key = match_key(line.get("ean"), line.get("productId"))
             if not key:
-                # Né EAN né identità stabile: non abbina mai nulla, perché un
-                # avviso sbagliato è peggio di un avviso mancante.
+                # Neither an EAN nor a stable identity: never matches
+                # anything, since a wrong notice is worse than a missing one.
                 continue
             quantities[key] = quantities.get(key, 0.0) + (_number(line.get("quantity")) or 0.0)
             units.setdefault(key, str(line.get("unit") or "colli"))
@@ -667,7 +665,7 @@ def pending_by_identity(
                 "supplierName": str(entry.get("supplierName") or _default_supplier_name(str(entry.get("supplier") or ""))),
                 "orderedAt": str(entry.get("createdAt") or ""),
                 "quantity": _quantity(quantity),
-                # Unità del momento in cui si era ordinato, non di questa settimana.
+                # Unit from when it was ordered, not from this week.
                 "unit": units.get(key, "colli"),
             })
     return index
@@ -679,15 +677,15 @@ def attach_pending_orders(
     *,
     exclude_run_id: str | None = None,
 ) -> None:
-    """Aggiunge "pendingOrders" ad ogni prodotto abbinando per identità.
+    """Add "pendingOrders" to every product, matched by identity.
 
-    ⚠ Un EAN puo' essere condiviso da piu' prodotti del confronto (Noce ne
-    ha 46 ripetuti su 99 righe): attribuire la quantita' ordinata a OGNI
-    prodotto che porta quel codice regalava «20 colli gia' ordinati» anche
-    all'articolo che nessuno aveva ordinato (revisione avversariale R4).  Lo
-    storico non sa distinguere le righe che condividono il codice: quando
-    succede, la voce lo dichiara (`sharedWith`) invece di inventare
-    un'attribuzione, e la pagina deve dirlo insieme al numero.
+    An EAN can be shared by several products in the comparison — a supplier
+    can repeat the same barcode across many rows. Attributing the ordered
+    quantity to EVERY product carrying that code would show "already
+    ordered" on items nobody actually ordered. The history can't tell apart
+    rows that share the code, so when this happens the entry declares it
+    (`sharedWith`) instead of inventing an attribution, and the page must say
+    so alongside the number.
     """
 
     elenco = [product for product in products or [] if isinstance(product, dict)]

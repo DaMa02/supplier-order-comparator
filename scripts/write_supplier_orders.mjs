@@ -6,27 +6,26 @@ import path from "node:path";
 
 import { ContenitoreNonLeggibile, FoglioNonScrivibile, apriLibro } from "./lib/xlsx_in_posizione.mjs";
 
-// Ogni errore esce di qui marcato cosi', su una riga sola.  Serve a chi ci
-// chiama (`app/server.py`): senza la marca, quello che arrivava all'utente era
-// la traccia di Node con i percorsi assoluti, invece della frase italiana che
-// il writer aveva gia' pronta.
+// Every error surfaces on a single line with this marker, for the caller
+// (`app/server.py`) to grep instead of forwarding Node's raw stack trace
+// with absolute paths to the user.
 const MARCA_ERRORE = "ERRORE_COMPILAZIONE: ";
 
-// E il riepilogo di fine lavoro esce marcato cosi', su una riga sola, in JSON
-// compatto: i conteggi e gli avvisi della compilazione servono a chi ci chiama,
-// che cerca la riga marcata e non legge tutto lo `stdout` (vedi in fondo).
+// The end-of-run summary is marked the same way, on a single line, as
+// compact JSON: the caller greps for the marked line rather than parsing
+// the whole `stdout` (see the bottom of the file).
 const MARCA_RIEPILOGO = "RIEPILOGO_COMPILAZIONE: ";
 
 /**
- * Un guasto che il writer sa spiegare, con la frase gia' scritta per l'utente.
+ * A failure the writer can explain, with a message already written for
+ * the user.
  *
- * ⚠ La marca `ERRORE_COMPILAZIONE:` va SOLO sulle frasi di questa classe.  La
- * prima versione marcava qualunque messaggio uscisse dal `catch` finale, e in
- * pagina arrivavano gli errori degli altri — `ENOENT ... C:\...` con i percorsi
- * del computer, le chiavi di risorsa .NET della libreria
- * (`Arg_ArgumentOutOfRangeException`) — vestiti da frase italiana.  Quello che
- * il writer non ha scritto lui non e' una spiegazione: e' un dettaglio tecnico,
- * e sta sulla console, non in pagina.
+ * The `ERRORE_COMPILAZIONE:` marker must only go on messages of this
+ * class. Marking whatever comes out of the final `catch` would surface
+ * other errors — raw ENOENT paths, .NET resource keys from a dependency —
+ * dressed up as if they were a real explanation. A message the writer
+ * didn't compose itself is a technical detail for the console, not
+ * something to show the user.
  */
 class ErroreCompilazione extends Error {}
 
@@ -35,12 +34,10 @@ const FRASE_GUASTO_IMPREVISTO =
   "i dettagli tecnici sono sulla console del programma. " +
   "Il piano ordini è completo e si può scaricare.";
 
-// ⚠ Fino al 5 settembre 2026 qui si caricava `@oai/artifact-tool`, una
-// libreria .NET in WebAssembly da 24 MB che importava il listino, se lo
-// ricostruiva in memoria e lo riscriveva da capo — perdendo per strada celle,
-// titoli di sezione e la forma che Excel si aspetta.  Adesso le copie le fa
-// `lib/xlsx_in_posizione.mjs`, che tocca il solo XML del foglio dentro lo ZIP e
-// copia ogni altra parte byte per byte: nessuna libreria, nessun runtime.
+// Copies are produced by `lib/xlsx_in_posizione.mjs`, which touches only
+// the sheet XML inside the ZIP and copies every other part byte for byte,
+// instead of a full-reserialization library that would risk dropping
+// cells, section headers, or the shape Excel expects.
 
 const SUPPLIER_NAMES = {
   betulla: "BETULLA",
@@ -50,18 +47,17 @@ const SUPPLIER_NAMES = {
 };
 
 /**
- * I nomi leggibili dichiarati dalla configurazione (`display_name`).
+ * Human-readable supplier names declared by the config (`display_name`).
  *
- * ⚠ Fino al 14 agosto 2026 la tabella qui sopra era tutto quello che il writer
- * sapeva: per un fornitore nuovo l'utente si trovava scritto `NUOVO_FORNITORE`,
- * con l'underscore, dentro le frasi **e dentro il nome del file d'ordine** che
- * finisce al fornitore.  Come si chiama un fornitore e' un dato del registro,
- * non del codice: arriva con la regola di scrittura, e la tabella cablata resta
- * solo come ripiego per le configurazioni che il nome non lo dichiarano.
+ * A supplier's display name is data from the adapter registry, not the
+ * code: it arrives with the write config, and the hardcoded `SUPPLIER_NAMES`
+ * table below is only a fallback for configs that don't declare one — using
+ * a raw supplier id there instead would leak an internal identifier into
+ * user-facing messages and into the order filename itself.
  *
- * La mappa si riempie una volta sola, appena letta la configurazione, perche'
- * `supplierName` lo chiamano una trentina di frasi sparse nel file — alcune
- * prima ancora che la regola di quel fornitore sia stata controllata.
+ * This map is filled once, right after the config is read, because
+ * `supplierName` is called from many places scattered through the file,
+ * some before that supplier's rule has even been validated.
  */
 const nomiDichiarati = new Map();
 
@@ -93,28 +89,28 @@ function supplierName(supplier) {
   return nomiDichiarati.get(supplier) || SUPPLIER_NAMES[supplier] || supplier.toUpperCase();
 }
 
-/** «CAFFÈ» e «CAFFE» sono la stessa parola: l'accento si stacca e si butta. */
+/** Strips accents so accented and unaccented spellings of a word compare equal. */
 function senzaAccenti(testo) {
   return String(testo ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
 /**
- * Il nome del fornitore ridotto a quello che un nome di file regge.
+ * The supplier's name reduced to characters a filename can carry.
  *
- * ⚠ Nelle frasi il nome va scritto come l'ha dichiarato il registro — «Sapori &
- * Co. S.r.l.» — ma lo stesso nome finisce dentro `ORDINE_<nome>_<listino>.xlsx`,
- * e Windows nei nomi di file i due punti, la barra, l'asterisco e il punto
- * interrogativo non li accetta: il file non si scriverebbe affatto e il
- * fornitore non riceverebbe l'ordine.  Qui si tiene solo quello che passa
- * ovunque; la frase per l'utente non si tocca.
+ * User-facing messages use the name as the registry declared it, but that
+ * same name also goes into `ORDINE_<name>_<pricelist>.xlsx`, and Windows
+ * rejects colons, slashes, asterisks and question marks in filenames — the
+ * file would simply fail to write and the supplier would get no order.
+ * Only the message-facing name is affected; the sanitized form is used for
+ * the filename only.
  */
 function nomePerIlFile(supplier) {
   const ripulito = senzaAccenti(supplierName(supplier))
     .toUpperCase()
     .replace(/[^A-Z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
-  // Un nome fatto solo di segni non lascerebbe niente: meglio una parola
-  // qualunque che un file chiamato `ORDINE__listino.xlsx`.
+  // A name made only of punctuation would leave nothing behind; a
+  // placeholder word beats a file literally named `ORDINE__listino.xlsx`.
   return ripulito || "FORNITORE";
 }
 
@@ -136,10 +132,10 @@ function normalizeColumn(value, supplier, quale = "ordine") {
 }
 
 /**
- * La colonna da controllare, dichiarata come lettera («A», «AB») o come numero
- * 1-based: sono i due modi in cui i fogli di calcolo la scrivono, e il registro
- * puo' portare l'uno o l'altro.  Torna sempre il numero, perche' e' cosi' che
- * si pesca dentro la griglia gia' letta.
+ * The column to verify, declared as a letter ("A", "AB") or a 1-based
+ * number — both are common in spreadsheet configs, and the registry may
+ * use either. Always returns the number, since that's how the already
+ * loaded grid is indexed.
  */
 function colonnaDaControllare(value, quale, supplier) {
   if (value === undefined || value === null || String(value).trim() === "") return null;
@@ -155,12 +151,12 @@ function colonnaDaControllare(value, quale, supplier) {
 }
 
 /**
- * Le colonne del listino da confrontare con il piano prima di scrivere.
+ * Price-list columns to compare against the plan before writing.
  *
- * Tutto facoltativo e indipendente l'uno dall'altro: `ean_column` e
- * `description_column` possono esserci tutte e due, una sola o nessuna.  Senza
- * `verify`, o con un `verify` vuoto, si scrive come si e' sempre scritto: una
- * configurazione vecchia non deve smettere di funzionare per una chiave nuova.
+ * Both optional and independent: `ean_column` and `description_column` can
+ * both be set, only one, or neither. Without `verify`, or with an empty
+ * one, the write behaves as it always did, so an older config keeps
+ * working without this key.
  */
 function normalizeVerify(rule, supplier) {
   const verify = rule.verify ?? rule.verifica ?? null;
@@ -175,7 +171,7 @@ function normalizeVerify(rule, supplier) {
   };
 }
 
-/** `A` diventa 1, `D` diventa 4: il numero di colonna come lo conta Excel. */
+/** `A` becomes 1, `D` becomes 4: column number as Excel counts it. */
 function numeroDiColonna(lettera) {
   let numero = 0;
   for (const carattere of String(lettera).toUpperCase()) {
@@ -202,11 +198,10 @@ function positiveInteger(value, label) {
 
 async function loadWriterConfig(argv) {
   if (!argv.config) {
-    // Il ripiego cablato («betulla in C, larice in D») e' stato tolto apposta:
-    // le regole vengono dal registro attraverso la configurazione, e un
-    // writer che conosce le colonne per conto suo puo' scrivere l'ordine in
-    // una colonna diversa da quella dichiarata (revisione avversariale del
-    // 13 agosto 2026).
+    // No hardcoded per-supplier fallback on purpose: rules come from the
+    // adapter registry via the config, and a writer that hardcodes columns
+    // itself can silently write an order into a column that doesn't match
+    // the one the registry declares.
     throw new ErroreCompilazione(
       "Serve la configurazione di scrittura (--config): le regole vengono dal registro, non dal codice.",
     );
@@ -216,8 +211,8 @@ async function loadWriterConfig(argv) {
   try {
     config = JSON.parse(await fs.readFile(configPath, "utf8"));
   } catch (error) {
-    // Il dettaglio (un ENOENT, una sintassi JSON) porta percorsi assoluti e
-    // inglese: va sulla console come `cause`, non nella frase per l'utente.
+    // The underlying detail (ENOENT, a JSON syntax error) carries absolute
+    // paths; it goes to the console as `cause`, not into the user message.
     throw new ErroreCompilazione("Configurazione di scrittura non leggibile.", { cause: error });
   }
   if (!config || typeof config !== "object" || Array.isArray(config)) {
@@ -247,19 +242,18 @@ function configuredRule(rules, supplier) {
 }
 
 /**
- * Il listino di questo fornitore lo scrive il servizio locale, non questo writer.
+ * Whether this supplier's price list is written by the local `.xls`
+ * service instead of this writer.
  *
- * ⚠ Fino al 18 agosto 2026 la domanda era `supplier === "noce"`, scritta in
- * tre punti di questo file. Il nome pero' non c'entra: quello che decide e' la
- * procedura di scrittura che la configurazione **dichiara** — la stessa che
- * `app/server.py` legge con `procedura_di_scrittura`, e che il registro porta
- * fin qui come `compilazione`. Con il nome cablato, un fornitore nuovo che
- * mandasse un `.xls` sarebbe finito in questo writer e sarebbe stato fermato
- * accusando il suo documento; e il giorno in cui Noce mandasse un `.xlsx`
- * come tutti, il nome lo avrebbe mandato lo stesso alla patch in posizione.
+ * Decided by the write procedure the config declares (read by
+ * `app/server.py` as `procedura_di_scrittura`, and carried here from the
+ * adapter registry as `compilazione`), never by a hardcoded supplier
+ * name. A supplier id check here would misroute the moment a supplier
+ * changes format, or a new supplier with that same name needs the
+ * opposite path.
  *
- * Chi non dichiara niente passa di qui: e' la strada normale, quella di tutti
- * i listini `.xlsx`.
+ * A supplier that declares nothing falls through here: the normal path,
+ * shared by every `.xlsx` price list.
  */
 const PATCH_IN_POSIZIONE = "patch_xls_in_posizione";
 
@@ -281,22 +275,17 @@ function normalizeRule(rule, supplier) {
   if (!sheet) {
     throw new ErroreCompilazione(`Manca il foglio verificato per ${supplierName(supplier)}.`);
   }
-  // ⚠ Qui c'era un blocco `if (supplier === "cipresso")` che pretendeva colonna
-  // «G» e intestazione «ORDINE» scritte nel codice.  Il 14 agosto 2026 ha
-  // impedito OGNI compilazione — anche di LARICE e NOCE, perche' basta una
-  // regola rifiutata a fermare tutto — su un listino CIPRESSO che quella
-  // settimana la colonna G ce l'aveva vuota, cosa che l'utente aveva
-  // **confermato** nella mappatura guidata e che il registro dichiarava.
-  // Un nome di fornitore nel codice contro una regola dichiarata nel registro:
-  // e' esattamente il contrario del vincolo su cui poggia il programma.
-  // Al suo posto non c'e' una regola nuova, c'e' la regola che c'era gia': si
-  // verifica **quello che la configurazione dichiara**.  Se dice che testo deve
-  // esserci nella cella dell'intestazione, si controlla che ci sia; se dice che
-  // l'utente ha confermato che quella cella e' vuota, si controlla che sia
-  // ancora vuota; se non dichiara nessuna intestazione — il listino LARICE una
-  // riga di intestazione non ce l'ha proprio — non c'e' niente da verificare, e
-  // a difendere la scrittura restano foglio, colonna, riga d'inizio, impronta
-  // del file e il controllo di EAN e descrizione sulla riga di destinazione.
+  // There's deliberately no per-supplier hardcoded expectation here (a
+  // fixed column letter or header text for a named supplier): a rule
+  // rejected in the code contradicts a mapping the user already confirmed
+  // and the registry already declares, and a single such mismatch would
+  // block every other supplier's fill too. What's verified is exactly
+  // what the config declares: if it names header text, that text must be
+  // there; if it says the user confirmed the header cell is blank, that
+  // cell must still be blank; if it declares no header at all (some price
+  // lists have no header row), there's nothing to check, and the write is
+  // still defended by sheet, column, start row, source hash, and the EAN
+  // and description checks on the destination row.
   const blankHeaderConfirmed = rule.blank_header_confirmed === true || rule.blankHeaderConfirmed === true;
 
   return {
@@ -339,11 +328,11 @@ function worksheetForRule(libro, rule, supplier) {
 function verifyOrderHeader(sheet, rule, supplier) {
   if (!rule.headerRow) return;
   const observed = sheet.valore(`${rule.orderColumn}${rule.headerRow}`);
-  // La conferma «quella cella e' vuota» e' una verifica come le altre, e va
-  // rifatta qui sul documento aperto: fra la mappatura confermata e la
-  // compilazione il fornitore puo' aver messo un'intestazione dove non c'era,
-  // e scrivere sotto un titolo che nessuno ha letto e' il caso da cui tutte
-  // queste guardie sono nate.
+  // A confirmed "that cell is blank" is a check like any other, redone
+  // here against the open document: between confirmation and this run the
+  // supplier's file could have gained a header where there wasn't one,
+  // and writing beneath an unread header is exactly the failure these
+  // guards exist to prevent.
   if (rule.blankHeaderConfirmed && !rule.expectedHeader) {
     if (normalizeHeader(observed) !== "") {
       throw new ErroreCompilazione(
@@ -377,7 +366,7 @@ function orderRowsForSupplier(orders, supplier) {
   return quantities;
 }
 
-/** Quello che c'e' scritto in una cella e' una quantita' d'ordine? */
+/** Is what's stored in a cell a valid order quantity? */
 function eUnaQuantita(valore) {
   if (valore === null || valore === undefined || typeof valore === "boolean") return false;
   if (typeof valore === "number") return Number.isFinite(valore);
@@ -386,7 +375,7 @@ function eUnaQuantita(valore) {
   return Number.isFinite(Number(testo.replace(",", ".")));
 }
 
-/** Da `[3,4,5,9]` a `[[3,5],[9,9]]`: i blocchi contigui, per pulirli in una volta. */
+/** `[3,4,5,9]` -> `[[3,5],[9,9]]`: contiguous runs, so they can be cleared in one call each. */
 function blocchiContigui(righe) {
   const blocchi = [];
   for (const riga of righe) {
@@ -398,19 +387,18 @@ function blocchiContigui(righe) {
 }
 
 /**
- * Azzera le quantita' gia' scritte nella colonna d'ordine — **e solo quelle**.
+ * Zeroes out quantities already written in the order column, and only those.
  *
- * ⚠ Fino al 12 agosto 2026 si cancellava tutta la colonna in un colpo solo.  Su
- * LARICE quella colonna non porta quantita': porta **641 titoli di sezione**
- * («DENT. E SPAZZ. AQUAFRISK OPPORTUNITA'» alla riga 963), e la copia
- * consegnabile li perdeva tutti.  Azzerare le quantita' preesistenti resta
- * giusto — senza, si spedirebbero righe fantasma — ma una riga che prodotto non
- * e' non ha una quantita' da azzerare: ha del testo, e il testo resta.
+ * Clearing the whole column outright would also erase non-product rows —
+ * some price lists use the same column for section headers, not just
+ * quantities. Zeroing stale quantities is still necessary, since otherwise
+ * a previous run's quantities would ship again as phantom order lines, but
+ * a row that isn't a product has no quantity to zero: it holds text, and
+ * text is left alone.
  *
- * La regola e' quella di sempre in questo programma: **una quantita' e' un
- * numero.**  E' la stessa che `app/xls_writer.py` applica al `.xls` di
- * Noce, dove una cella della colonna d'ordine che non e' un numero a
- * lunghezza fissa ferma tutto.
+ * Same rule as elsewhere in this program: a quantity is a number. It's the
+ * same rule `app/xls_writer.py` applies to its `.xls` target, where an
+ * order-column cell that isn't a fixed-length number stops the write.
  */
 function azzeraQuantitaPreesistenti(sheet, rule, used, usedValues, lastRow) {
   const primaRigaUsata = (used.rowIndex ?? 0) + 1;
@@ -427,35 +415,35 @@ function azzeraQuantitaPreesistenti(sheet, rule, used, usedValues, lastRow) {
   return daAzzerare.length;
 }
 
-/** L'EAN come si confronta: `8000000000011.0` e `8000000000011` sono lo stesso codice. */
+/** EAN normalized for comparison: `8000000000011.0` and `8000000000011` are the same code. */
 function normalizzaEan(valore) {
   if (valore === null || valore === undefined || typeof valore === "boolean") return "";
   const testo = String(valore).trim();
-  // ⚠ Un EAN e' fatto di cifre, ma i fogli di calcolo lo restituiscono spesso
-  // come numero: il piano se lo porta dietro con la coda decimale mentre il
-  // listino lo legge intero (o viceversa), e due scritture dello stesso codice
-  // non devono sembrare due prodotti diversi.
+  // An EAN is digits, but spreadsheets often store it as a number: the
+  // plan can carry a trailing ".0" while the price list reads it as an
+  // integer (or the reverse), and two spellings of the same code must not
+  // look like two different products.
   return /^\d+\.0*$/.test(testo) ? testo.replace(/\.0*$/, "") : testo;
 }
 
 /**
- * La descrizione come si confronta: maiuscole, senza accenti, con qualunque
- * sequenza di caratteri non alfanumerici ridotta a un solo spazio.
+ * Description normalized for comparison: uppercased, accents stripped,
+ * any run of non-alphanumeric characters collapsed to a single space.
  *
- * ⚠ Il confronto e' largo apposta.  La descrizione del piano puo' essere stata
- * ripulita a monte — la data di scadenza tolta, i doppi spazi schiacciati — e
- * confrontarla alla lettera fermerebbe ordini buoni per una virgola.
+ * The comparison is deliberately loose: the plan's description may have
+ * been cleaned upstream (an expiry date removed, double spaces collapsed),
+ * and an exact-text comparison would block a correct order over a comma.
  */
 function normalizzaDescrizione(valore) {
   return senzaAccenti(valore).toUpperCase().replace(/[^A-Z0-9]+/g, " ").trim();
 }
 
 /**
- * Che cosa c'e' scritto in `(riga, colonna)` del listino di partenza.
+ * What's stored at `(row, column)` in the source price list.
  *
- * Si pesca dalla griglia gia' in mano (`griglia()`), come fa
- * `azzeraQuantitaPreesistenti`: una lettura per cella su un listino da
- * migliaia di righe costa.
+ * Reads from the grid already loaded via `griglia()`, same as
+ * `azzeraQuantitaPreesistenti`: a per-cell read on a price list with
+ * thousands of rows adds up.
  */
 function valoreDiCella(used, usedValues, riga, numeroColonna) {
   const primaRigaUsata = (used.rowIndex ?? 0) + 1;
@@ -467,7 +455,7 @@ function valoreDiCella(used, usedValues, riga, numeroColonna) {
   return valori[scarto] ?? null;
 }
 
-/** Il numero di colonna scritto come lo scrive un foglio di calcolo: 1 → «A», 28 → «AB». */
+/** Column number written the way a spreadsheet writes it: 1 -> "A", 28 -> "AB". */
 function letteraDiColonna(numero) {
   let resto = Number(numero);
   let lettera = "";
@@ -480,14 +468,14 @@ function letteraDiColonna(numero) {
 }
 
 /**
- * In quale colonna di quella riga sta davvero il codice che il piano cerca.
+ * Which column of that row actually holds the code the plan is looking for.
  *
- * ⚠ Un `ean_column` dichiarato sulla colonna sbagliata produce **lo stesso
- * errore** di un listino cambiato — «quella riga quel prodotto non ce l'ha
- * piu'» — e manda a cercare il guasto nel posto sbagliato: il listino e' a
- * posto, e' la configurazione che indica un'altra colonna.  Se il codice del
- * piano sta li' accanto, in un'altra colonna della stessa riga, e' la
- * configurazione a doverlo dire.
+ * A misconfigured `ean_column` produces the same symptom as a price list
+ * that genuinely changed — "that row no longer has that product" — and
+ * points debugging at the wrong place: the price list is fine, it's the
+ * config that names the wrong column. If the plan's code sits right next
+ * to it, in another column of the same row, that's worth surfacing in the
+ * error rather than reporting a generic mismatch.
  */
 function colonnaDoveStaDavvero(used, usedValues, riga, ean) {
   if (!ean) return null;
@@ -502,29 +490,30 @@ function colonnaDoveStaDavvero(used, usedValues, riga, ean) {
 }
 
 /**
- * Che la riga di destinazione porti ancora il prodotto che il piano si aspetta.
+ * Whether the destination row still holds the product the plan expects.
  *
- * ⚠ Il 12 agosto 2026 un ordine e' finito sulla riga 2600 — olio Carapelli al
- * posto del prodotto atteso.  Per BETULLA, LARICE ed CIPRESSO la quantita' andava
- * in `colonna+riga` alla cieca: lo sha256 del listino difende dal **file**
- * cambiato, non da un `supplier_source_row` sbagliato, e in tutto il writer non
- * c'era una sola occorrenza di EAN.  Questo e' il controllo che l'avrebbe
- * intercettato, e fino a oggi esisteva solo per Noce (`app/xls_writer.py`).
+ * Writing a quantity by `column+row` alone trusts the row number blindly:
+ * the price list's sha256 guards against the whole file changing, not
+ * against a wrong `supplier_source_row`, and a shifted or reordered price
+ * list can silently move a quantity onto the wrong product's row. This is
+ * the EAN check that guards against that, matching the same check
+ * `app/xls_writer.py` runs for its `.xls` target.
  *
- * Dove si allontana da Noce, e perche':
+ * Where this differs from that check, and why:
  *
- * - **Piano senza EAN e listino con l'EAN e' un avviso, non un errore.**  Per
- *   gli espositori LARICE la riga padre l'EAN ce l'ha e il piano no: fallire
- *   chiuso come fa Noce bloccherebbe ordini legittimi.
- * - **La descrizione diversa e' un avviso.**  Quella del piano puo' essere
- *   stata ripulita a monte, e fermarsi li' butterebbe via ordini buoni.
+ * - A plan with no EAN but a price list row that has one is a warning, not
+ *   an error: some parent rows (e.g. a display's parent line) carry an EAN
+ *   that the plan doesn't, and failing closed there would block legitimate
+ *   orders.
+ * - A mismatched description is also a warning: the plan's description
+ *   may have been cleaned upstream, and treating that as fatal would
+ *   discard good orders.
  *
- * L'EAN che non coincide resta invece un errore: quella riga il prodotto del
- * piano non ce l'ha piu', e per quel fornitore non si crea niente.
+ * A mismatched EAN stays an error: that row no longer holds the plan's
+ * product, so nothing is created for that supplier.
  *
- * Si guarda **riga per riga d'ordine**, non per riga del listino: `verificate` e
- * `nonVerificabili` sommate fanno le righe che il piano porta per quel
- * fornitore.
+ * Counted per order row, not per price-list row: `verificate` plus
+ * `nonVerificabili` add up to the rows the plan carries for that supplier.
  */
 function verificaRigheDiDestinazione({ used, usedValues, rule, supplier, orders }) {
   const nome = supplierName(supplier);
@@ -540,17 +529,19 @@ function verificaRigheDiDestinazione({ used, usedValues, rule, supplier, orders 
       : "";
 
     if (rule.verify.eanColumn && eanDelPiano) {
-      // La cella vuota casca qui dentro apposta: se il piano l'EAN ce l'ha e la
-      // riga non lo porta piu', quella riga quel prodotto non e'.
+      // An empty price-list cell falls into this branch on purpose: if the
+      // plan has an EAN and the row no longer carries it, that row is no
+      // longer that product.
       if (eanDelListino !== eanDelPiano) {
         const altrove = colonnaDoveStaDavvero(used, usedValues, riga, eanDelPiano);
-        // ⚠ Trovare l'EAN del piano in un'altra colonna NON basta a dire che la
-        // colonna dichiarata sia sbagliata: un fornitore che ripete il codice
-        // nella colonna dell'articolo lo mette anche su una riga che il
-        // prodotto non ce l'ha piu'.  Chi crede alla frase sbagliata sposta
-        // `ean_column` e spegne per sempre questa difesa.  Quindi si guarda
-        // anche la descrizione, che qui e' l'unica cosa che sa distinguere i
-        // due casi, e quando non c'e' si dicono tutte e due le possibilita'.
+        // Finding the plan's EAN in another column doesn't by itself mean
+        // the declared column is wrong: a supplier that repeats the code
+        // in the item-name column will also do so on a row that no longer
+        // holds that product. Trusting the wrong signal would lead someone
+        // to repoint `ean_column` and permanently disable this defense, so
+        // the description is checked too, since it's the only other signal
+        // that can tell the two cases apart; when it's unavailable, both
+        // possibilities are stated.
         const descrizioneDelPiano = String(order.supplier_description ?? "").trim();
         const descrizioneDelListino = rule.verify.descriptionColumn
           ? String(valoreDiCella(used, usedValues, riga, rule.verify.descriptionColumn) ?? "").trim()
@@ -563,9 +554,10 @@ function verificaRigheDiDestinazione({ used, usedValues, rule, supplier, orders 
           descrizioneDelPiano && descrizioneDelListino && !laRigaEQuellaGiusta,
         );
         if (altrove !== null && altrove !== rule.verify.eanColumn && !laRigaEUnAltraMerce) {
-          // Ci si ferma lo stesso — su una configurazione che non si sa leggere
-          // non si scrive — ma si dice dove guardare, e lo si dice come una
-          // certezza solo quando la descrizione conferma che la riga e' quella.
+          // The write still stops here — an unresolved configuration
+          // mismatch is not written through — but the message points to
+          // where to look, stated as certain only when the description
+          // confirms it's the right row.
           throw new ErroreCompilazione(
             laRigaEQuellaGiusta
               ? `Nel listino ${nome} la riga ${riga} è quella giusta — la descrizione coincide — ` +
@@ -594,11 +586,9 @@ function verificaRigheDiDestinazione({ used, usedValues, rule, supplier, orders 
     const descrizioneDelPiano = String(order.supplier_description ?? "").trim();
 
     if (rule.verify.eanColumn && eanDelListino) {
-      // ⚠ Prima si usciva di qui con un avviso senza nemmeno guardare la
-      // descrizione, che il registro dichiara e che qui e' l'unica cosa che sa
-      // dire se la riga e' quella (revisione avversariale del 14 agosto 2026).
-      // Per gli espositori LARICE — che nel piano l'EAN non ce l'hanno — voleva
-      // dire un avviso a settimana su una riga che la descrizione conferma.
+      // The description is checked here rather than warning immediately:
+      // for rows whose plan carries no EAN (e.g. a display's parent row),
+      // this is the only signal that can still confirm the row is right.
       const descrizioneDelListino = rule.verify.descriptionColumn
         ? String(valoreDiCella(used, usedValues, riga, rule.verify.descriptionColumn) ?? "").trim()
         : "";
@@ -670,17 +660,17 @@ async function prepareCopy({ source, supplier, rule, orders, outputDir, stagingD
       }
     }
 
-    // Prima di toccare qualunque cella: la riga di destinazione porta ancora il
-    // prodotto del piano?  Sta qui, e non dopo la scrittura, perche' anche
-    // l'azzeramento e' una modifica, e per il fornitore che sbaglia riga non deve
-    // uscire niente.
+    // Before touching any cell: does the destination row still hold the
+    // plan's product? Runs here, before any write, because zeroing is
+    // already a modification, and a supplier whose row mapping is wrong
+    // must get nothing written at all.
     const verifica = verificaRigheDiDestinazione({ used, usedValues, rule, supplier, orders });
 
-    // Sempre prima di toccare una cella: nella colonna d'ordine non ci devono
-    // essere formule, in nessuna riga fra la prima dei dati e l'ultima.  Dal 6
-    // settembre 2026, perche' l'azzeramento tocca solo le celle che portano una
-    // quantita', e una formula senza risultato memorizzato una quantita' non
-    // sembra: usciva dentro la copia e la ricalcolava Excel (R7).
+    // Also before any write: the order column must have no formulas in
+    // any row between the first data row and the last. This has to be a
+    // separate pass, since zeroing only touches cells that already hold a
+    // quantity, and a formula with no cached result doesn't look like one —
+    // it would otherwise survive into the copy and get recalculated by Excel.
     sheet.rifiutaFormuleNellaColonna(rule.orderColumn, rule.dataStartRow, lastRow);
     const azzerate = azzeraQuantitaPreesistenti(sheet, rule, used, usedValues, lastRow);
     for (const [row, quantity] of quantities.entries()) {
@@ -688,16 +678,15 @@ async function prepareCopy({ source, supplier, rule, orders, outputDir, stagingD
     }
 
     const destination = copyDestination(source, supplier, outputDir);
-    // ⚠ Nello spazio temporaneo il nome lo fa l'**identificativo**, non il nome
-    // leggibile: `nomePerIlFile` schiaccia in `_` tutto cio' che non e' A-Z0-9,
-    // quindi «Sapori & Co.» e «Sapori Co» danno lo stesso file. Con il basename
-    // della destinazione, due fornitori che collidono si sovrascrivevano qui
-    // dentro: il secondo `rename` moriva `ENOENT` e cadeva la compilazione di
-    // tutti, lasciando nella cartella un documento col nome di un fornitore e
-    // dentro l'ordine di un altro (revisione del 14 agosto 2026). Gli
-    // identificativi sono le chiavi di `supplier_files`: unici per costruzione.
-    // Il numero davanti chiude anche il caso in cui due identificativi diversi
-    // si riducano allo stesso nome ripulito.
+    // The staged file is named by the supplier id, not the display name:
+    // `nomePerIlFile` collapses anything outside A-Z0-9 to `_`, so two
+    // different display names can sanitize to the same string. Naming the
+    // staged file after the destination's basename would let two colliding
+    // suppliers overwrite each other here, and a later failed `rename`
+    // would fail the whole batch while leaving a mismatched file behind.
+    // Supplier ids are the keys of `supplier_files`, unique by
+    // construction; the leading index also covers the case where two
+    // different ids still sanitize to the same string.
     const nomeTemporaneo = `${indice}_${supplier.replace(/[^a-z0-9_-]+/gi, "_")}`;
     const staged = path.join(stagingDir, `${nomeTemporaneo}${path.extname(destination)}`);
     await libro.salva(staged);
@@ -714,9 +703,9 @@ async function prepareCopy({ source, supplier, rule, orders, outputDir, stagingD
       warnings: verifica.avvisi,
     };
   } catch (errore) {
-    // Il foglio ha detto di no, in italiano: una formula nella colonna
-    // d'ordine, una griglia che non e' quella di un listino.  E' una frase per
-    // l'utente, e va marcata come tale.
+    // The sheet refused (a formula in the order column, a grid shape that
+    // isn't a price list): the message is already user-facing and gets
+    // marked as such.
     if (!(errore instanceof FoglioNonScrivibile)) throw errore;
     throw new ErroreCompilazione(`${errore.message} L'ordine ${nome} non viene creato.`);
   }
@@ -727,28 +716,28 @@ async function removeCopy(destination) {
 }
 
 /**
- * Le copie vecchie di **questo** listino, comunque si chiamassero.
+ * Old copies for this price list, whatever name they were written under.
  *
- * ⚠ `copyDestination` costruisce il nome con il `display_name` di **oggi**.
- * Bastava che il nome del fornitore cambiasse — un fornitore imparato che
- * l'utente ribattezza, un `display_name` corretto nel registro — perche' la
- * copia della volta prima si chiamasse in un altro modo: la pulizia non la
- * toccava, restava nella cartella d'uscita e usciva insieme a quella nuova,
- * con dentro le quantita' di allora.  Due ordini per lo stesso fornitore, e
- * niente che lo dica.
+ * `copyDestination` builds the filename from the current `display_name`.
+ * If a supplier's display name changes between runs — the user renames a
+ * learned supplier, or a `display_name` is corrected in the registry — a
+ * cleanup keyed only on today's name would miss the previous run's copy,
+ * leaving it in the output folder alongside the new one with its stale
+ * quantities. Two orders on file for the same supplier, with nothing
+ * flagging it.
  *
- * Il legame che regge un cambio di nome e' il **listino di partenza**: il
- * nome del file d'ordine finisce sempre con `_<nome del listino>.xlsx`.
- * `protette` sono le copie appena prodotte in questa esecuzione, che non si
- * toccano nemmeno se due fornitori dichiarassero lo stesso listino.
+ * The stable link across a rename is the source price list: an order
+ * filename always ends with `_<price list name>.xlsx`. `protette` are the
+ * copies just produced in this run, left untouched even if two suppliers
+ * happen to declare the same price list.
  *
- * ⚠ Il nome del listino puo' essere la **coda** di quello di un altro
- * fornitore: con `listino` e `mio_listino` fra i documenti configurati,
- * `ORDINE_B_mio_listino.xlsx` finisce per `_listino` e la pulizia del primo si
- * portava via l'ordine del secondo (revisione avversariale del 14 agosto
- * 2026). Fra tutti i listini configurati vince la coda **piu' lunga**: e' la
- * stessa regola con cui si legge un nome di file ovunque, e senza di lei
- * questa funzione cancella per omonimia.
+ * A price list's name can be a suffix of another supplier's price-list
+ * name (e.g. `listino` and `mio_listino` both configured): a naive suffix
+ * match on the shorter name would also match, and delete, the other
+ * supplier's order. Among all configured price-list names, the longest
+ * matching suffix wins — the same rule used anywhere a filename is parsed
+ * this way — otherwise this function deletes files by accidental name
+ * overlap.
  */
 async function removeOldCopies(source, outputDir, protette = new Set(), basiConfigurate = []) {
   const base = path.parse(path.resolve(source)).name;
@@ -790,13 +779,12 @@ async function compila() {
   const configDirectory = argv.config ? path.dirname(path.resolve(argv.config)) : process.cwd();
   const supplierFiles = normalizedObjectMap(config.supplier_files, "supplier_files");
   const supplierRules = normalizedObjectMap(config.supplier_write_rules || {}, "supplier_write_rules");
-  // Prima di qualunque frase: i nomi leggibili si registrano subito, cosi' anche
-  // gli errori sulla configurazione stessa chiamano il fornitore con il suo nome.
+  // Display names are registered before any message is built, so even an
+  // error about the config itself refers to the supplier by name.
   registraNomiDichiarati(supplierRules);
   const outputDir = path.resolve(argv["output-dir"]);
-  // I nomi di tutti i listini configurati: servono alla pulizia delle copie
-  // vecchie per non cancellare per omonimia (`listino` e' la coda di
-  // `mio_listino`).
+  // Names of every configured price list, needed by the old-copy cleanup
+  // to avoid deleting by accidental suffix overlap.
   const basiConfigurate = Object.values(supplierFiles)
     .filter((originale) => typeof originale === "string" && originale.trim())
     .map((originale) => path.parse(
@@ -833,9 +821,9 @@ async function compila() {
         indice: prepared.length,
       }));
     }
-    // Due fornitori diversi che finirebbero sullo stesso documento: il writer
-    // non sa quale dei due ordini consegnare, e sceglierne uno vorrebbe dire
-    // mandare a un fornitore la merce di un altro.
+    // Two different suppliers that would land on the same document: the
+    // writer has no way to know which order to deliver, and picking one
+    // would mean sending another supplier's goods to the wrong recipient.
     const perDestinazione = new Map();
     for (const preparedCopy of prepared) {
       const gia = perDestinazione.get(preparedCopy.destination);
@@ -849,18 +837,19 @@ async function compila() {
       perDestinazione.set(preparedCopy.destination, preparedCopy.supplier);
     }
 
-    // Chi si scrive in posizione non passa di qui: a Noce si rimanda il
-    // **loro** `.xls`, compilato dal servizio locale (`app/xls_writer.py`).  Qui
-    // le sue righe si contano soltanto, per dirlo nel riepilogo — e chi sia lo
-    // dice la configurazione, non un nome scritto in questo file.
+    // A supplier written by in-place `.xls` patching doesn't go through
+    // this path; their own `.xls` is filled by the local service
+    // (`app/xls_writer.py`) instead. Here, only its row count is tallied
+    // for the summary — and which supplier that is comes from the
+    // config, never a hardcoded name in this file.
     const noceOrders = orders.filter(
       (entry) => scrittoAltrove(supplierRules, normalizeSupplierId(entry.supplier)),
     );
 
-    // Tutte le verifiche, importazioni e esportazioni sono già riuscite nello
-    // spazio temporaneo. Solo ora vengono sostituite le copie visibili — e con
-    // loro se ne vanno anche le copie vecchie dello stesso listino che oggi si
-    // chiamerebbero in un altro modo.
+    // All checks and writes have already succeeded in the staging
+    // directory. Only now are the visible copies replaced — and with
+    // them, old copies of the same price list that would be named
+    // differently today are removed too.
     for (const preparedCopy of prepared) {
       await removeOldCopies(preparedCopy.source, outputDir, new Set(), basiConfigurate);
     }
@@ -874,10 +863,9 @@ async function compila() {
       if (active) {
         results.push({
           supplier,
-          // Il nome leggibile viaggia accanto all'identificativo tecnico: chi
-          // legge il riepilogo non deve rifarsi la tabella dei nomi per conto
-          // suo — e' esattamente il modo in cui `NUOVO_FORNITORE` e' finito
-          // sotto gli occhi dell'utente.
+          // The display name travels alongside the technical id, so a
+          // reader of the summary doesn't have to reconstruct the name
+          // table itself.
           supplier_name: supplierName(supplier),
           destination: active.destination,
           written_rows: active.written_rows,
@@ -890,14 +878,14 @@ async function compila() {
         continue;
       }
       const originalPath = path.resolve(path.isAbsolute(original) ? original : path.join(configDirectory, original));
-      // Configurato ma non ordinato: se una compilazione precedente aveva
-      // lasciato qui la sua copia, quella copia se ne va — anche se allora il
-      // fornitore si chiamava in un altro modo.  Le copie appena prodotte in
-      // questa esecuzione sono protette: due fornitori che dichiarassero lo
-      // stesso listino non devono cancellarsi l'ordine a vicenda.
+      // Configured but not ordered this time: a copy left behind by a
+      // previous run is removed, even if the supplier's name was
+      // different back then. Copies just produced in this run are
+      // protected, so two suppliers sharing the same price list can't
+      // delete each other's order.
       await removeOldCopies(originalPath, outputDir, appenaProdotte, basiConfigurate);
-      // Le stesse chiavi anche qui: un riepilogo dove i conteggi ci sono solo
-      // per certi fornitori si legge male e si somma peggio.
+      // Same fields as an active copy: a summary where the counts only
+      // exist for some suppliers is harder to read and to sum.
       results.push({
         supplier,
         supplier_name: supplierName(supplier),
@@ -918,18 +906,15 @@ async function compila() {
         ? "Le righe Noce le compila il servizio locale dentro una copia del loro .xls."
         : null,
     };
-    // Il riepilogo esce due volte, e non e' una svista: quello marcato e' per il
-    // programma che ci chiama, quello indentato per gli occhi sulla console.
-    //
-    // ⚠ La marca resta anche adesso che su `stdout` scriviamo solo noi — fino
-    // al 5 settembre 2026 la libreria dei fogli di calcolo ci aggiungeva una
-    // riga sua a ogni salvataggio, e chi leggeva tutto lo `stdout` come JSON si
-    // fermava li'.  Fa per i conteggi quello che `ERRORE_COMPILAZIONE:` fa per
-    // le frasi: una riga sola, riconoscibile, che chi ci chiama sa cercare.
+    // The summary is printed twice on purpose: the marked line for the
+    // calling program to grep, the indented block for a human reading the
+    // console. The marker lets the caller find the summary line reliably
+    // even if this process's `stdout` ever carries other output, the same
+    // way `ERRORE_COMPILAZIONE:` marks error lines.
     console.log(MARCA_RIEPILOGO + JSON.stringify(riepilogo));
-    // ⚠ E il blocco indentato resta l'**ultima** cosa che esce: chi lo legge oggi
-    // (`tests/test_web_app.py`) taglia `stdout` dal primo `{\n  "supplier_copies"`
-    // fino in fondo, e una riga in piu' dopo di lui gli darebbe «Extra data».
+    // The indented block stays the LAST thing printed: `tests/test_web_app.py`
+    // slices `stdout` from the first `{\n  "supplier_copies"` to the end, and
+    // any line printed after it would break that JSON parse with "Extra data".
     console.log(JSON.stringify(riepilogo, null, 2));
   } finally {
     await fs.rm(stagingDir, { recursive: true, force: true });
@@ -939,10 +924,10 @@ async function compila() {
 try {
   await compila();
 } catch (errore) {
-  // In pagina arriva UNA riga marcata, in italiano, senza traccia di Node ne'
-  // percorsi assoluti — e soltanto se la frase l'ha scritta il writer.  Tutto
-  // il resto (la traccia, il `cause`) esce NON marcato: `app/server.py` lo
-  // tiene sulla console del programma, che e' il posto dove serve.
+  // Only ONE marked line reaches the user-facing page, and only if the
+  // writer itself composed the message — no Node stack trace, no absolute
+  // paths. Everything else (the stack, the `cause`) is printed unmarked;
+  // `app/server.py` keeps that on the program's console, where it belongs.
   if (errore instanceof ErroreCompilazione) {
     if (errore.cause !== undefined) {
       console.error(String(errore.cause?.stack ?? errore.cause));

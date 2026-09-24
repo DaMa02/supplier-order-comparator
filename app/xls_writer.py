@@ -1,36 +1,34 @@
 #!/usr/bin/env python3
-"""Compila la colonna d'ordine dentro una copia del `.xls` di Noce.
+"""Fill the order-quantity column into a copy of a supplier's `.xls` file.
 
-**A Noce si rimanda il LORO documento** (deciso da Daniele il 12 agosto
-2026): la consegna e' il loro file con la sola colonna d'ordine riempita e
-tutto il resto identico.  Non un foglio a parte, non un `.xlsx` convertito.
+The delivery to this supplier is their own file back, with only the order
+column filled in and everything else byte-identical — not a separate sheet,
+not a converted `.xlsx`.
 
-Questo si puo' fare senza scrivere un writer BIFF, e la ragione e' una misura:
-nel listino vero la colonna d'ordine ha **17.145 celle, zero formule, tutte
-codificate RK** — cioe' a lunghezza fissa di quattro byte.  Mettere una
-quantita' intera al posto dello zero **non sposta un solo byte**: niente offset
-da ricalcolare, nessun record da spostare, il resto del file resta identico
-byte per byte.
+This is possible without writing a full BIFF writer because, on the real
+price list, the order column is 17,145 cells, zero formulas, all RK-encoded
+(fixed 4-byte numbers). Replacing a stored zero with an integer quantity
+moves no other byte: no offsets to recompute, no records to shift, the rest
+of the file stays identical.
 
-⚠ Quella facilita' dipende da *quel* file, e il controllo va rifatto **a ogni
-file**: se una settimana la colonna arrivasse con una cella vuota, una formula
-o un numero a virgola mobile lungo otto byte, la patch a lunghezza fissa non
-basterebbe.  Qui il controllo si fa prima di toccare un byte, e se non passa la
-compilazione Noce **fallisce e lo dice** — non ripiega su un formato che il
-fornitore non accetta.
+That shortcut depends on the column staying that shape, so the check is
+redone for every file: if a cell ever arrived blank, as a formula, or as an
+8-byte float, the fixed-length patch would no longer apply. The check runs
+before any byte is touched, and if it fails the fill for this supplier
+raises rather than falling back to a format the supplier won't accept.
 
-Due difese che gli altri tre fornitori non hanno, e che qui costano zero perche'
-il file va letto comunque:
+Two extra checks this supplier's file gets, at no added read cost since the
+file is parsed anyway:
 
-1. **L'EAN della riga dev'essere quello del piano.**  Gli altri si fidano del
-   numero di riga dopo aver verificato impronta e intestazione; per Noce si
-   controlla riga per riga, e al primo disallineamento ci si ferma.  E' l'unico
-   controllo che avrebbe intercettato il difetto trovato il 12 agosto — la riga
-   2600 che era olio Carapelli invece del prodotto atteso.
-2. **Il totale che il file calcola da solo dev'essere quello del piano.**  La
-   formula della colonna `Importo` e' `quantita x prezzo x pezzi_per_cartone`,
-   cioe' esattamente il modello del comparatore: se il totale non torna, non si
-   consegna.
+1. The row's EAN must match the plan's. Other suppliers trust the row
+   number once the file's fingerprint and header are verified; here every
+   row is checked and the fill stops at the first mismatch, guarding
+   against a shifted or reordered price list slipping a wrong product's
+   quantity into the wrong row.
+2. The total the spreadsheet itself computes must match the plan's total.
+   The `Importo` column's formula is `quantity x price x pieces_per_carton`,
+   the same model the comparator uses; if the totals disagree, nothing is
+   delivered.
 """
 
 from __future__ import annotations
@@ -61,7 +59,7 @@ _BOOLERR = 0x0205
 _RECALCID = 0x01C1
 _TIPO_FOGLIO_DATI = 0x00
 
-# Il valore piu' grande che un RK intero puo' portare: trenta bit con segno.
+# The largest value a signed 30-bit RK integer can hold.
 MASSIMA_QUANTITA_RK = (1 << 29) - 1
 
 NOME_TIPO_CELLA = {
@@ -78,16 +76,16 @@ NOME_TIPO_CELLA = {
 
 
 class CompilazioneXlsError(XlsError):
-    """La compilazione Noce non si può fare, e il motivo è dichiarato."""
+    """The order fill can't be done; the message says why."""
 
 
 @dataclass
 class _CellaOrdine:
-    """Una cella della colonna d'ordine e dove stanno i suoi quattro byte."""
+    """A cell of the order column and where its four bytes live."""
 
-    riga: int          # numero di riga come lo vede l'utente, a partire da 1
-    posizione: int     # dove sta il valore RK dentro il flusso del libro
-    valore: Any        # che cosa c'e' scritto adesso
+    riga: int          # row number as the user sees it, 1-based
+    posizione: int     # offset of the RK value within the workbook stream
+    valore: Any        # what's currently stored there
 
 
 @dataclass
@@ -97,12 +95,12 @@ class _Scansione:
 
 
 def codifica_rk_intero(valore: int) -> int:
-    """Un intero nei quattro byte di un RK.
+    """Pack an integer into the four bytes of an RK value.
 
-    Due bit di coda: quello basso dice «dividi per cento» e resta a zero, quello
-    sopra dice «e' un intero» e si accende.  I trenta bit alti portano il
-    numero.  E' l'inverso esatto di `_decodifica_rk` del lettore, e il test lo
-    verifica facendo il giro completo.
+    Two trailing bits: the low one means "divide by 100" and stays off, the
+    one above means "integer" and is set. The high 30 bits carry the number.
+    Exact inverse of the reader's `_decodifica_rk`; the round trip is
+    covered by a test.
     """
 
     if isinstance(valore, bool) or not isinstance(valore, int):
@@ -115,7 +113,7 @@ def codifica_rk_intero(valore: int) -> int:
 
 
 def _scorri_record(flusso: bytes, posizione: int) -> Iterable[tuple[int, int, bytes]]:
-    """`(codice, posizione dell'intestazione, dati)` di ogni record, da qui in poi."""
+    """`(code, header offset, data)` for every record from here onward."""
 
     while posizione + 4 <= len(flusso):
         (codice, lunghezza) = struct.unpack_from("<HH", flusso, posizione)
@@ -128,10 +126,10 @@ def _scorri_record(flusso: bytes, posizione: int) -> Iterable[tuple[int, int, by
 
 
 def _scansiona_colonna(flusso: bytes, inizio_foglio: int, colonna: int) -> _Scansione:
-    """Dove sta ogni cella della colonna d'ordine, e di che tipo e'.
+    """Locate every cell of the order column and its type.
 
-    Si guarda **tutto** il foglio, non le sole righe da compilare: il controllo
-    che la colonna sia ancora tutta RK ha senso solo se le ha viste tutte.
+    Scans the whole sheet, not just the rows to fill: the "is the column
+    still all RK" check only means something if every row was seen.
     """
 
     scansione = _Scansione()
@@ -177,19 +175,17 @@ def _scansiona_colonna(flusso: bytes, inizio_foglio: int, colonna: int) -> _Scan
 
 
 def _posizione_recalcid(flusso: bytes) -> int | None:
-    """Dove sta il numero del motore di calcolo, nelle globali del libro.
+    """Find the calculation-engine id in the workbook globals.
 
-    ⚠ Serve, e non e' un dettaglio: **cambiare il valore memorizzato di una
-    cella non sporca le formule che la usano.**  Misurato il 12 agosto 2026 su
-    questo file: dopo la patch, la quantita' in `I` era giusta e l'`Importo` in
-    `K` era ancora zero, come il totale in `K4` — perche' Excel mostra il
-    risultato che ha trovato scritto nel file.  Noce avrebbe ricevuto un
-    ordine con le quantita' giuste e i totali a zero.
+    Overwriting a cell's stored value does not dirty the formulas that
+    reference it: Excel shows whatever result it last found written in the
+    file, so patching quantities without this step would leave the
+    dependent totals stuck at their old (usually zero) value.
 
-    `RECALCID` porta il numero del motore che ha calcolato l'ultima volta:
-    azzerarlo dice a Excel «l'ha calcolato qualcosa di piu' vecchio di te», e
-    Excel rifa' tutti i conti aprendo il file.  Sono quattro byte, e non
-    spostano niente come il resto della patch.
+    `RECALCID` carries the id of the engine that last recalculated. Zeroing
+    it tells Excel "an older engine computed this", which forces a full
+    recalculation on open. It's four bytes, and like the rest of the patch
+    it overwrites in place without moving anything.
     """
 
     posizione = 0
@@ -198,19 +194,19 @@ def _posizione_recalcid(flusso: bytes) -> int | None:
         if codice == _RECALCID and lunghezza >= 8:
             return posizione + 4 + 4
         if codice == _EOF:
-            # Le globali finiscono qui: piu' avanti ci sono i fogli.
+            # Globals end here; sheets follow after this point.
             return None
         posizione += 4 + lunghezza
     return None
 
 
 def _indice_di_colonna(lettera: Any) -> int:
-    """`I` diventa 8, e `9` diventa 8.  La colonna arriva dal registro.
+    """Resolve a column reference: `I` and `9` both become 8.
 
-    Il numero e' ammesso perche' la colonna dell'EAN nel registro e' dichiarata
-    per **nome** di intestazione, e chi chiama la risolve leggendo la riga di
-    intestazione del file: quello che arriva qui e' gia' un numero di colonna,
-    a partire da uno come in Excel.
+    An int is accepted because the EAN column is declared by header name in
+    the adapter registry, and the caller resolves it by reading the file's
+    header row before calling this; what arrives here is already a 1-based
+    column number, as in Excel.
     """
 
     if isinstance(lettera, bool):
@@ -244,7 +240,7 @@ def _foglio_scelto(flusso: bytes, nome_atteso: str | None) -> tuple[str, int]:
 
 
 def _mappa_posizioni(segmenti: list[tuple[int, int]], quante: int) -> list[tuple[int, int, int]]:
-    """`(inizio nel flusso, inizio nel file, quanti)`, per tradurre gli offset."""
+    """`(stream offset, file offset, length)` triples, to translate offsets."""
 
     mappa: list[tuple[int, int, int]] = []
     scorso = 0
@@ -268,15 +264,15 @@ def _posizione_nel_file(mappa: list[tuple[int, int, int]], posizione: int) -> in
 
 def _leggi_dal_flusso(dati: bytes, mappa: list[tuple[int, int, int]],
                       posizione: int, quanti: int) -> bytes:
-    """I `quanti` byte che nel FLUSSO stanno di fila, presi dove stanno nel file.
+    """Read `quanti` bytes that are contiguous in the STREAM, from their file offsets.
 
-    ⚠ Nel flusso sono contigui; **nel file no**. Un `.xls` e' un contenitore
-    OLE: il flusso e' spezzato in settori (qui da 512 byte) che nel file stanno
-    in ordine sparso. Una cella RK a cavallo di un confine ha i suoi quattro
-    byte in due settori lontani, e leggerli (o scriverli) di fila a partire dal
-    primo significa prendere — o peggio, coprire — i byte di un altro settore.
-    Sul listino Noce vero: 10.652 segmenti e circa cento celle a cavallo per
-    ogni colonna.
+    Stream bytes are contiguous; file bytes are not. A `.xls` is an OLE
+    container: the stream is split into sectors (512 bytes here) that sit
+    out of order in the file. An RK cell straddling a sector boundary has
+    its four bytes in two distant sectors, so reading (or writing) them as
+    one run starting from the first byte's file offset would read — or
+    worse, overwrite — bytes belonging to another sector. On the real price
+    list this affects roughly a hundred cells per column.
     """
 
     return bytes(dati[_posizione_nel_file(mappa, posizione + scarto)] for scarto in range(quanti))
@@ -284,14 +280,13 @@ def _leggi_dal_flusso(dati: bytes, mappa: list[tuple[int, int, int]],
 
 def _scrivi_nel_flusso(dati: bytearray, mappa: list[tuple[int, int, int]],
                        posizione: int, contenuto: bytes) -> None:
-    """Scrive `contenuto` dove quei byte stanno **nel file**, uno per uno.
+    """Write `contenuto` byte by byte, at each byte's real file offset.
 
-    Il gemello di `_leggi_dal_flusso`, e la ragione e' la stessa: qui c'era
-    `dati[posizione:posizione + 4] = ...`, che scrive quattro byte di fila a
-    partire da un offset tradotto per il PRIMO. Per una cella a cavallo di due
-    settori quei quattro byte finivano sopra dati di un altro settore, e il
-    documento che si manda al fornitore usciva rotto — Excel si rifiutava di
-    aprirlo (difetto del 26 agosto 2026).
+    The write-side twin of `_leggi_dal_flusso`, for the same reason: writing
+    four bytes as one run from a single translated offset corrupts a cell
+    that straddles a sector boundary, since the offset is only correct for
+    the first byte. The other bytes then land over unrelated sector data
+    and the file Excel receives fails to open.
     """
 
     for scarto, byte in enumerate(contenuto):
@@ -306,12 +301,11 @@ def controlla_colonna_ordine(
     prima_riga: int = 1,
     ultima_riga: int | None = None,
 ) -> dict[str, Any]:
-    """Guarda la colonna d'ordine **prima** di scriverci, e dice che cosa ha visto.
+    """Inspect the order column before writing to it, and report what's there.
 
-    E' il controllo che il piano chiede a ogni file: quante celle, quante RK,
-    quante di altro tipo.  Se non sono tutte RK la patch a lunghezza fissa non
-    e' applicabile, e chi chiama deve fermarsi invece di scrivere qualcosa che
-    somiglia a un ordine.
+    Reports how many cells are RK vs. some other type. If they aren't all
+    RK the fixed-length patch doesn't apply, and the caller must stop
+    instead of writing something that only looks like a valid order.
     """
 
     dati = Path(origine).read_bytes()
@@ -330,12 +324,9 @@ def controlla_colonna_ordine(
         "ultima_riga": fine,
         "celle_rk": len(rk),
         "celle_di_altro_tipo": altre,
-        # ⚠ Una colonna d'ordine con ZERO celle scrivibili non e' compilabile:
-        # e' una colonna che non c'e'. `not altre` diceva «compilabile» anche
-        # li', il pre-volo non trovava niente da segnalare, e la compilazione
-        # falliva piu' avanti con «Il piano indica N righe che nel listino non
-        # hanno una cella d'ordine» — un ripiego che sembrava un dato vero
-        # (revisione del 14 agosto 2026).
+        # An order column with zero writable cells isn't fillable: it's a
+        # missing column. `not altre` alone would say "fillable" for that
+        # case too, deferring the failure to a less clear error later.
         "compilabile": not altre and bool(rk),
     }
 
@@ -351,11 +342,11 @@ def compila_ordine(
     colonna_ean: str | int | None = None,
     prima_riga: int = 1,
 ) -> dict[str, Any]:
-    """Scrive le quantita' nella colonna d'ordine di una **copia** del file.
+    """Write quantities into the order column of a copy of the file.
 
-    L'originale non si tocca mai: si legge, si modificano i byte in memoria e si
-    scrive la copia.  Restituisce che cosa e' stato fatto, perche' l'audit della
-    compilazione deve poterlo raccontare senza riaprire il file.
+    The original is never touched: it's read, patched in memory, and
+    written to a copy. Returns what was done, so the fill can be audited
+    without reopening the file.
     """
 
     origine = Path(origine)
@@ -372,16 +363,12 @@ def compila_ordine(
     colonna = _indice_di_colonna(colonna_ordine)
     scansione = _scansiona_colonna(flusso, inizio, colonna)
 
-    # 1. La colonna dev'essere ancora tutta RK, dalla prima riga di dati in
-    #    giu'.  Il controllo si rifa' a ogni file.
-    #
-    #    ⚠ Fino al 6 settembre 2026 ci si fermava all'ultima riga che il piano
-    #    tocca, e piu' sotto poteva restare una formula: l'azzeramento la salta
-    #    — non e' un numero a lunghezza fissa e non ha una quantita' da
-    #    azzerare — e finisce intatta nella copia, che Excel ricalcola
-    #    all'apertura.  E' R7, lo stesso buco dell'altro scrittore.  Il
-    #    controllo preventivo (`controlla_colonna_ordine`) tutta la colonna la
-    #    guardava gia': adesso i due dicono la stessa cosa.
+    # 1. The column must still be all RK, from the first data row down.
+    #    Re-checked for every file: this must scan every row the fill can
+    #    touch, not just the rows the plan mentions, or a formula further
+    #    down would be skipped by the zeroing step (it isn't a fixed-length
+    #    number and has no quantity to zero) and survive untouched into the
+    #    copy, which mirrors what `controlla_colonna_ordine` already checks.
     fuori = {riga: tipo for riga, tipo in scansione.non_rk.items() if riga >= prima_riga}
     if fuori:
         esempi = ", ".join(f"riga {riga} ({tipo})" for riga, tipo in sorted(fuori.items())[:5])
@@ -391,7 +378,7 @@ def compila_ordine(
             f"({esempi}). L'ordine Noce non viene compilato."
         )
 
-    # 2. Ogni riga del piano dev'essere una cella d'ordine vera.
+    # 2. Every row the plan mentions must be a real order cell.
     mancanti = sorted(riga for riga in righe if riga not in scansione.celle)
     if mancanti:
         raise CompilazioneXlsError(
@@ -399,9 +386,9 @@ def compila_ordine(
             f"d'ordine (per esempio la {mancanti[0]}). L'ordine Noce non viene compilato."
         )
 
-    # 3. L'EAN della riga dev'essere quello del piano.  Costa una lettura, e il
-    #    file va letto comunque: e' l'unico controllo che avrebbe intercettato
-    #    il difetto del 12 agosto.
+    # 3. The row's EAN must match the plan's. Costs one extra read, but the
+    #    file is parsed anyway, and this is the only check that catches a
+    #    row shifted to the wrong product.
     controllati = 0
     if ean_attesi and colonna_ean:
         indice_ean = _indice_di_colonna(colonna_ean)
@@ -412,13 +399,13 @@ def compila_ordine(
             trovato = str(valori[indice_ean][0] or "").strip() if indice_ean < len(valori) else ""
             atteso_pulito = str(atteso or "").strip()
             if not atteso_pulito:
-                # ⚠ Il piano non porta l'EAN per questa riga.  Se **nel listino
-                # l'EAN c'e'**, la riga e' stata scelta senza il dato che la
-                # identifica: resterebbe in piedi il solo numero di riga, cioe'
-                # esattamente quello che il 12 agosto 2026 ha mandato l'ordine
-                # sulla riga 2600 (olio Carapelli invece del prodotto atteso).
-                # Se invece nemmeno il listino ha l'EAN li' — un espositore, una
-                # riga di servizio — non c'e' niente da confrontare e si passa.
+                # The plan carries no EAN for this row. If the price list
+                # does have one there, the row was picked without the data
+                # that identifies it, and only the row number is left to
+                # rely on — the exact failure mode this check exists to
+                # catch. If the price list has no EAN there either (a
+                # display, a service row), there's nothing to compare and
+                # the row is skipped.
                 if trovato:
                     raise CompilazioneXlsError(
                         f"Il piano non dice quale prodotto sia la riga {riga} di «{origine.name}», "
@@ -434,17 +421,13 @@ def compila_ordine(
                 )
             controllati += 1
 
-    # 4. Prima si azzera quello che c'era gia' nella colonna d'ordine, e poi si
-    #    scrive il piano.  ⚠ Questo pezzo mancava, e i due scrittori facevano
-    #    due cose diverse: `write_supplier_orders.mjs` azzera le quantita'
-    #    preesistenti — «senza, si spedirebbero righe fantasma» — e qui si
-    #    scrivevano solo le righe del piano, lasciando tutto il resto com'era.
-    #    Il caso che morde e' quello che capita: come origine finisce la copia
-    #    compilata della settimana prima, e Noce riceve anche le sue righe
-    #    mentre gli altri fornitori no.  Si toccano soltanto le celle RK della
-    #    colonna d'ordine dalla prima riga di dati in giu': una cella che non e'
-    #    un numero a lunghezza fissa non ha una quantita' da azzerare, ed e' la
-    #    stessa regola dell'altro scrittore — **una quantita' e' un numero**.
+    # 4. Zero out whatever was already in the order column, then write the
+    #    plan. Matches `write_supplier_orders.mjs`, which also zeroes
+    #    pre-existing quantities: the source file for a run is often last
+    #    week's filled copy, and without this step its stale quantities
+    #    would ship alongside the new plan. Only RK cells in the order
+    #    column from the first data row down are touched; a cell that isn't
+    #    a fixed-length number has no quantity to zero.
     zero = struct.pack("<I", codifica_rk_intero(0))
     azzerate = 0
     for riga, cella in sorted(scansione.celle.items()):
@@ -459,19 +442,16 @@ def compila_ordine(
         codificato = codifica_rk_intero(int(quantita))
         _scrivi_nel_flusso(dati, mappa, cella.posizione, struct.pack("<I", codificato))
 
-    # 5. E si dice a Excel di rifare i conti aprendo il file: senza, le
-    #    quantita' sarebbero giuste e i totali fermi a zero.
+    # 5. Tell Excel to recompute on open; without this the quantities would
+    #    be correct but the dependent totals would stay at zero.
     posizione_recalcid = _posizione_recalcid(flusso)
     ricalcolo_forzato = posizione_recalcid is not None
     if ricalcolo_forzato:
         _scrivi_nel_flusso(dati, mappa, posizione_recalcid, struct.pack("<I", 0))
 
-    # ⚠ Temporaneo, `fsync` e `os.replace`, come le cinque memorie: qui c'era un
-    # `write_bytes` diretto, cioe' l'unico posto del programma che pubblica un
-    # documento aprendo e troncando il file finale.  Disco pieno o processo
-    # ucciso a meta' lasciavano al suo posto un `.xls` monco — e se la
-    # destinazione esisteva gia', al posto della copia buona di prima.  Il
-    # documento che va a Noce merita la stessa disciplina di `state.json`.
+    # Written via a temp file, `fsync` and `os.replace` rather than a
+    # direct `write_bytes`, so a full disk or a killed process can't leave
+    # a truncated `.xls` in place of a good previous copy.
     destinazione.parent.mkdir(parents=True, exist_ok=True)
     scrittura_sicura.scrivi_bytes(destinazione, bytes(dati))
     return {
@@ -482,9 +462,8 @@ def compila_ordine(
         "colli_totali": int(sum(int(valore) for valore in righe.values())),
         "ean_controllati": controllati,
         "celle_rk_nella_colonna": len(scansione.celle),
-        # Quando `RECALCID` non c'e' affatto, Excel ricalcola comunque
-        # all'apertura: e' l'assenza del numero a dirgli che non sa chi ha
-        # fatto i conti l'ultima volta.
+        # When `RECALCID` is absent entirely, Excel recalculates anyway on
+        # open: the missing field itself tells it there's no known engine.
         "ricalcolo_forzato": ricalcolo_forzato,
         "byte_origine": len(dati),
         "byte_copia": destinazione.stat().st_size,

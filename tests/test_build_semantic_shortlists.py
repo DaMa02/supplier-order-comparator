@@ -1,15 +1,17 @@
-"""Le righe con l'EAN del prodotto entrano sempre in shortlist.
+"""Rows with the product's EAN always enter the shortlist.
 
-Il punteggio guarda solo i token della descrizione, e i due testi li scrivono
-due persone diverse. Misurato sulle 1160 coppie `EAN_ESATTO` della run vera —
-dove la riga giusta e' certa perche' l'EAN la identifica — la shortlist per sola
-descrizione l'avrebbe mostrata 1014 volte su 1160: **il 12,6% delle volte no**.
+The score only looks at description tokens, and the two texts are written by
+different people. Measured on the 1160 `EAN_ESATTO` pairs of a real run —
+where the right row is certain because the EAN identifies it — a
+description-only shortlist would have shown it 1014 times out of 1160: wrong
+12.6% of the time.
 
-Per un `EAN_ASSENTE` non c'e' rimedio ed e' il caso normale. Ma su un
-`EAN_AMBIGUO` la riga giusta e' una di quelle con l'EAN, e lasciarla fuori vuol
-dire far scegliere il modello fra le sbagliate — con `ALTA` e senza conferma a
-schermo. E' anche il presupposto della regola che `merge_match_decisions.py`
-applica a valle: senza la forzatura sarebbe insoddisfabile.
+For `EAN_ASSENTE` there is no remedy, and that is the normal case. But on
+`EAN_AMBIGUO` the right row is one of the ones with that EAN, and leaving it
+out means letting the model choose among the wrong ones — with `ALTA`
+confidence and no on-screen confirmation. This is also the assumption
+`merge_match_decisions.py` relies on downstream: without the forced inclusion
+that rule could never be satisfied.
 """
 
 from __future__ import annotations
@@ -60,9 +62,9 @@ def esegui(normalized: dict[str, Any], queue: list[dict[str, Any]], top_k: int =
 
 class LEanEntraSempreInShortlistTests(unittest.TestCase):
     def test_la_riga_con_lo_stesso_ean_entra_anche_se_la_descrizione_non_somiglia(self) -> None:
-        """Il caso vero: `CHANTE BRILL ANTICALCARE ACETO 625ML` contro
-        `CHANTEBR. A/CALCARE 625 EXTRARAPIDO` non condivide un token, quindi non
-        entra nemmeno nel gruppo dei candidati."""
+        """A real case: `CHANTE BRILL ANTICALCARE ACETO 625ML` versus
+        `CHANTEBR. A/CALCARE 625 EXTRARAPIDO` shares no token, so it would not
+        even enter the candidate pool by description alone."""
         normalized = {"betulla": [
             riga(100, "8001", "CHANTEBR. A/CALCARE 625 EXTRARAPIDO"),
             *[riga(200 + i, f"999{i}", f"CHANTE BRILL ANTICALCARE ALTRO {i}") for i in range(6)],
@@ -77,8 +79,8 @@ class LEanEntraSempreInShortlistTests(unittest.TestCase):
         self.assertEqual(righe[0], 100, "l'EAN è una prova, il punteggio una somiglianza")
 
     def test_piu_righe_con_lo_stesso_ean_ci_stanno_tutte_anche_oltre_il_taglio(self) -> None:
-        """Su un `EAN_AMBIGUO` la scelta sta dentro quel gruppo: tagliarlo a
-        `top_k` vorrebbe dire togliere di mezzo la risposta giusta."""
+        """On `EAN_AMBIGUO` the answer lives inside that group: capping it at
+        `top_k` would remove the right answer along with the rest."""
         normalized = {"betulla": [riga(100 + i, "8001", f"STESSO PRODOTTO LOTTO {i}") for i in range(7)]}
         shortlists = esegui(normalized, [{
             "gestionale_source_row": 12, "supplier": "betulla", "ean": "8001",
@@ -89,9 +91,9 @@ class LEanEntraSempreInShortlistTests(unittest.TestCase):
         self.assertTrue(all(candidato["stesso_ean"] for candidato in candidati))
 
     def test_una_riga_non_utilizzabile_non_entra_nemmeno_con_l_ean_giusto(self) -> None:
-        """`EAN_PRESENTE_NON_UTILIZZABILE` esiste apposta: una riga senza prezzo
-        o non ordinabile non e' un'offerta, e mostrarla al modello lo farebbe
-        scegliere qualcosa che non si puo' comprare."""
+        """`EAN_PRESENTE_NON_UTILIZZABILE` exists for this: a row without a
+        price or that cannot be ordered is not an offer, and showing it to the
+        model would let it pick something that cannot be bought."""
         normalized = {"betulla": [
             riga(100, "8001", "IL PRODOTTO", usable=False),
             riga(101, "9999", "IL PRODOTTO SIMILE"),
@@ -104,9 +106,8 @@ class LEanEntraSempreInShortlistTests(unittest.TestCase):
         self.assertNotIn(100, righe)
 
     def test_senza_ean_non_cambia_niente(self) -> None:
-        """E' il caso normale — 948 su 948 nella run vera — e la forzatura non
-        deve toccarlo: nessun candidato viene aggiunto, e il taglio resta a
-        `top_k`."""
+        """This is the normal case, and the forced inclusion must not touch it:
+        no candidate gets added, and the cut stays at `top_k`."""
         normalized = {"betulla": [riga(100 + i, f"800{i}", f"PRODOTTO SIMILE {i}") for i in range(8)]}
         shortlists = esegui(normalized, [{
             "gestionale_source_row": 12, "supplier": "betulla", "ean": "",
@@ -127,14 +128,15 @@ class LEanEntraSempreInShortlistTests(unittest.TestCase):
 
 
 class IlCandidatoPortaLaRigaInteraTests(unittest.TestCase):
-    """La prima riga della shortlist puo' diventare un'offerta: deve essere intera.
+    """The shortlist's top row can become a proposed offer: it must carry the
+    full row.
 
-    Quando l'AI rifiuta un abbinamento ma il candidato migliore somigliava
-    molto, `build_review_data.offer_from_match` promuove quella riga a proposta
-    da accettare.  Con le sole quattro colonne di prima nasceva senza pezzi per
-    collo — quindi `available: false` — e il «Si» della pagina rispondeva «la
-    riga proposta non ha prezzo e confezione utilizzabili»: sul confronto vero
-    del 17 agosto 2026, **48 proposte e zero accettabili**.
+    When the AI rejects a match but the best candidate scored close, `build_
+    review_data.offer_from_match` promotes that row to a proposal for the user
+    to accept. Without pieces-per-carton the row comes back `available:
+    false`, and the "Yes" button answers "the proposed row has no usable
+    price and packaging": on a real comparison run, that meant 48 proposals
+    and zero acceptable.
     """
 
     CAMPI_COMMERCIALI = (
@@ -162,7 +164,7 @@ class IlCandidatoPortaLaRigaInteraTests(unittest.TestCase):
         self.assertEqual(candidato["supplier_code"], "0000000429063")
 
     def test_e_la_riga_diventa_un_offerta_ordinabile(self) -> None:
-        """La prova che conta: la stessa funzione del confronto vero."""
+        """The test that matters: the same function the real comparison uses."""
 
         sys.path.insert(0, str(SCRIPTS))
         try:
@@ -187,9 +189,9 @@ class IlCandidatoPortaLaRigaInteraTests(unittest.TestCase):
         self.assertEqual(offerta["orderUnitPriceNet"], 20.07)
 
     def test_il_modello_pero_non_vede_niente_di_nuovo(self) -> None:
-        """L'impronta sigilla `(riga, descrizione, punteggio)`: quella che il
-        modello legge. Se cambiasse, ogni decisione gia' pagata verrebbe buttata
-        da `merge_match_decisions.py` come «presa su un elenco diverso»."""
+        """The fingerprint seals `(row, description, score)`, the same triple the
+        model reads. If it changed, every decision already paid for would be
+        discarded by `merge_match_decisions.py` as taken on a different list."""
 
         sys.path.insert(0, str(SCRIPTS))
         try:
@@ -222,16 +224,17 @@ def modulo():
 
 
 class LeQuantitaNelNomeTests(unittest.TestCase):
-    """Le quantita' si leggono anche con l'unita' davanti: «X 18», «PZ.18».
+    """Quantities are read even with the unit written before the number: "X 18", "PZ.18".
 
-    Caso vero, 18 settembre 2026: il gestionale scrive `LINDA SETA ULTRA LUNGO
-    ALI 18PZ`, LARICE `ASS. LINDA SETAMORBI X 18 LUNGO`. Nessuna delle due forme
-    LARICE si leggeva, e in testa alla shortlist c'era `X 9`, un altro prodotto:
-    la riga giusta non e' stata accettata e il prodotto e' andato a NOCE a
-    2,31 invece che a LARICE a 2,25.
+    A real case: the management software writes `LINDA SETA ULTRA LUNGO ALI
+    18PZ`, one supplier writes `ASS. LINDA SETAMORBI X 18 LUNGO`. Without
+    reading either form, the top of the shortlist holds `X 9`, a different
+    product: the right row never gets accepted, and the product goes to a
+    pricier supplier instead of the cheaper one with the same barcode.
 
-    Il principio che queste prove difendono: meglio non leggere un numero che
-    leggerlo sbagliato, perche' un falso conflitto toglie 0,35 alla riga giusta.
+    The principle these tests defend: better to not read a number than to
+    read it wrong, because a false conflict subtracts 0.35 from the correct
+    row's score.
     """
 
     def leggi(self, testo: str) -> dict[str, list[float]]:
@@ -255,8 +258,8 @@ class LeQuantitaNelNomeTests(unittest.TestCase):
                 self.assertEqual(self.leggi(testo), attesa)
 
     def test_litri_e_grammi_scritti_attaccati(self) -> None:
-        """«3LT» e «250GR» prima non si leggevano: il confine di parola dopo `L`
-        o `G` cadeva dentro `LT` e `GR`."""
+        """"3LT" and "250GR" need a word boundary that doesn't fall inside `LT`
+        or `GR`, right after the `L`/`G`."""
 
         self.assertEqual(self.leggi("AXO 3LT"), {"ML": [3000.0]})
         self.assertEqual(self.leggi("PATE 250GR"), {"G": [250.0]})
@@ -282,9 +285,8 @@ class LeQuantitaNelNomeTests(unittest.TestCase):
         self.assertEqual(self.leggi("VITAFORZA 7 PZ 70 GR"), {"PEZZI": [7.0], "G": [70.0, 490.0]})
 
     def test_l_unita_col_punto_attaccato_ha_il_suo_numero(self) -> None:
-        """Trovato dalla revisione del 21 settembre 2026 sui listini veri: in
-        «X 2 GR.90» si leggevano 2 grammi, e la riga giusta prendeva un falso
-        conflitto contro «GR.90 X 2» e usciva dalla shortlist."""
+        """Found on real price lists: reading "X 2 GR.90" as 2 grams gives the
+        right row a false conflict against "GR.90 X 2" and drops it from the shortlist."""
 
         attese = {
             "LUXA SAPONETTA ORIGINAL X 2 GR.90": {"PEZZI": [2.0], "G": [90.0, 180.0]},
@@ -304,19 +306,19 @@ class LeQuantitaNelNomeTests(unittest.TestCase):
         self.assertEqual(esito["attribute_conflicts"], [])
 
     def test_il_volume_con_l_unita_davanti_e_lo_spazio(self) -> None:
-        """ACERO scrive «PH 3.5 ML 200»: 200 ML, non 3,5. Trovato sul banco
-        fra listini del 21 settembre 2026 (la riga giusta passava dal primo al
-        quarantaquattresimo posto). Se il numero dopo ha un'unita' sua, invece,
-        l'unita' resta al numero di prima."""
+        """One supplier writes "PH 3.5 ML 200": that's 200 ML, not 3.5.
+        Found by comparing real price lists (the right row moved from first to
+        forty-fourth place). But if the following number carries its own unit,
+        the unit stays with the earlier number."""
 
         self.assertEqual(self.leggi("CHIARY INTIMO PH 3.5 ML 200"), {"ML": [200.0]})
         self.assertEqual(self.leggi("LUXA DEO SPRAY ITA ML 150 FRESH"), {"ML": [150.0]})
         self.assertEqual(self.leggi("SPUGNE 10 PZ 1276"), {"PEZZI": [10.0]})
         self.assertEqual(self.leggi("SACCHI 50 LT 10 PZ")["PEZZI"], [10.0])
-        # Un numero attaccato a lettere non e' una quantita': sono 250 ml.
+        # A number glued to letters is not a quantity: this is 250 ml.
         self.assertEqual(self.leggi("NORD&SHAMPO SH. 250 ML 2IN1 APPLE"), {"ML": [250.0]})
-        # Punto e spazio con un numero prima che non conta pezzi: i grammi sono
-        # quelli di prima, «100 PIU'» e' il nome.
+        # A dot and space with a leading number that isn't a piece count: the
+        # grams are the earlier ones, "100 PIU'" is part of the name.
         self.assertEqual(self.leggi("OMONE B. ADDITIVO 500 GR. 100 PIU' CLASS"), {"G": [500.0]})
         self.assertIn(50000.0, self.leggi("SACCHI 50 LT 10 PZ")["ML"])
 
@@ -333,10 +335,10 @@ class LeQuantitaNelNomeTests(unittest.TestCase):
         self.assertEqual(esito["attribute_conflicts"], [])
 
     def test_fasce_taglie_e_formule_non_sono_la_confezione(self) -> None:
-        """Verifica avversariale del 21 settembre 2026: i pannolini scrivono il
-        peso del bambino («11-25 KG», «KG. 11/25»), e ogni listino ne leggeva
-        un estremo diverso; «5°MIS.» e' una taglia, non cinque misurini; in
-        «54 DOSI X 12=648 GR» 12 sono i grammi di una dose."""
+        """Adversarial check: diapers print the child's weight range ("11-25
+        KG", "KG. 11/25"), and reading it naively picks a different end
+        depending on the price list; "5°MIS." is a size, not five scoops; in
+        "54 DOSI X 12=648 GR", 12 is the weight of one dose."""
 
         for testo in (
             "HUGLIES Pannolini Bimbi Unisole Junior Taglia 5 11-25kg 14 P",
@@ -353,7 +355,7 @@ class LeQuantitaNelNomeTests(unittest.TestCase):
         self.assertEqual(self.leggi("Drynite 9 Pz.30-48 KG"), {"PEZZI": [9.0]})
         self.assertEqual(self.leggi("BIO LESTOS Power Caps 54 Dosi x 12=648 Gr"), {"G": [648.0]})
         self.assertEqual(self.leggi("DIXOR Busta Power 44 Dosi x14 616 Gr"), {"G": [616.0]})
-        # Il numero dopo senza unita' sua non toglie i pezzi alla X.
+        # A following number with no unit of its own does not take the pieces from the X.
         self.assertEqual(self.leggi("FAZZ. TEMPE BOX X 80 4veli"), {"PEZZI": [80.0]})
         self.assertEqual(self.leggi("TOV. VIX CLASS DUEVELI X50 33x33"), {"PEZZI": [50.0]})
 
@@ -376,8 +378,8 @@ class LeQuantitaNelNomeTests(unittest.TestCase):
         self.assertEqual(self.leggi("SACCHI 110LT"), {"ML": [110000.0]})
 
     def test_normalize_text_resta_quello_di_prima(self) -> None:
-        """Token, indice dei candidati e somiglianza del testo non cambiano:
-        il «+» si tiene solo per leggere le quantita'."""
+        """Tokens, the candidate index, and text similarity are unchanged: the
+        "+" is kept only for reading quantities."""
 
         self.assertEqual(modulo().normalize_text("A+B 70+8"), "A B 70 8")
 

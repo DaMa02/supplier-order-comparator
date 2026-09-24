@@ -1,20 +1,18 @@
 #!/usr/bin/env python3
-"""La rete sotto le memorie che nessun ricalcolo sa rifare.
+"""Backup copy of the state that recomputing the pipeline cannot regenerate.
 
-Il commit `ae2e214` (18 agosto 2026) aveva messo sotto git stato, conferme,
-storico ordini e memoria AI, con la ragione scritta: «se muore il disco non si
-recuperano». Il commit `6007574`, la sera dopo, le ha tolte — giustamente,
-perche' cambiano mentre il programma gira e l'avvio del PC del negozio riporta
-indietro i file tracciati — e non ha messo niente al loro posto. Da quel giorno
-al 19 agosto quelle memorie vivevano **solo** sul disco del negozio.
+`app/data/` (state, confirmations, order history, AI answer cache) is
+git-ignored, because those files change while the program runs and starting
+the store PC restores tracked files to their committed state. Without an
+external backup, those files would live only on the store's disk.
 
-Qui si prova la copia che le rimette al sicuro, e le tre proprieta' che la
-rendono una rete e non un altro modo di rompersi:
+This module tests the copy that backs them up, and the three properties that
+make it a safety net rather than another way to fail:
 
-1. lo zip contiene le memorie che ci sono, e le trova anche in sottocartella;
-2. **non solleva mai**: una cartella non scrivibile lascia il programma acceso;
-3. le copie vecchie non si accumulano all'infinito, e la piu' recente non e'
-   quella che si cancella.
+1. the archive includes whatever memory files exist, found recursively;
+2. it never raises: an unwritable destination folder must not block startup;
+3. old copies don't accumulate forever, and pruning never deletes the most
+   recent one.
 """
 
 from __future__ import annotations
@@ -75,8 +73,8 @@ class LoZipContieneLeMemorie(BancoDelleCopie):
             self.assertEqual(archivio.read("current/state.json"), b'{"stateVersion": 145}')
 
     def test_quelle_che_non_ci_sono_ancora_non_sono_un_errore(self) -> None:
-        """Un'installazione nuova non ha ne' ordini ne' conferme: la copia si
-        fa lo stesso, con quello che c'e'."""
+        """A fresh install has no orders or confirmations yet: the backup still
+        runs, with whatever exists."""
 
         self.scrivi_le_memorie(tutte=False)
 
@@ -107,8 +105,7 @@ class LoZipContieneLeMemorie(BancoDelleCopie):
 
 class UnaCopiaNonSpegneIlProgramma(BancoDelleCopie):
     def test_una_cartella_che_non_si_scrive_non_solleva(self) -> None:
-        """La proprieta' che conta: se la copia potesse fermare l'avvio,
-        sarebbe un modo nuovo di non far partire il programma."""
+        """A backup failure must never be a new way to prevent the program from starting."""
 
         self.scrivi_le_memorie()
         self.copie.mkdir()
@@ -121,8 +118,8 @@ class UnaCopiaNonSpegneIlProgramma(BancoDelleCopie):
         self.assertIsNone(self.copia())
 
     def test_una_memoria_che_sparisce_mentre_si_copia_non_solleva(self) -> None:
-        """Il programma gira: fra il momento in cui si guarda che il file c'e'
-        e quello in cui lo si legge, un ricalcolo puo' averlo sostituito."""
+        """The program keeps running: between checking a file exists and
+        reading it, a recompute can replace it."""
 
         self.scrivi_le_memorie()
         vera = launcher.MEMORIE_DA_COPIARE
@@ -155,13 +152,13 @@ class LeCopieVecchieNonSiAccumulano(BancoDelleCopie):
 
 
 class DoveFinisconoLeCopie(unittest.TestCase):
-    """Il percorso cambia col sistema, e va provato su tutti e due: il negozio
-    e' Windows, ma chi sviluppa e chi fa girare la CI non lo sono sempre."""
+    """The backup path depends on the OS; both must be tested since the store
+    runs Windows but development and CI don't always."""
 
     def test_sta_fuori_dal_progetto(self) -> None:
-        """La condizione che rende la copia una copia. Dentro il repository
-        tornerebbe il problema di partenza: `.gitignore` ignora `app/data/`, e
-        l'avvio riporta indietro i file tracciati."""
+        """The backup must live outside the repo, or it hits the same problem
+        it exists to solve: `.gitignore` ignores `app/data/`, and startup
+        restores tracked files to their committed state."""
 
         cartella = launcher.cartella_delle_copie()
 
@@ -170,8 +167,8 @@ class DoveFinisconoLeCopie(unittest.TestCase):
         self.assertEqual(cartella.parent.name, "ComparaOrdini")
 
     def test_su_windows_segue_localappdata(self) -> None:
-        """Il ramo del negozio, provato da qui: e' l'unico che conta davvero e
-        sarebbe l'unico a non essere mai eseguito da nessuna prova."""
+        """The path taken on the store's own OS; without this test it would be
+        the one branch never exercised."""
 
         cartella = launcher.cartella_delle_copie(
             sistema="nt", ambiente={"LOCALAPPDATA": "/tmp/AppData/Local"},
@@ -187,8 +184,8 @@ class DoveFinisconoLeCopie(unittest.TestCase):
         self.assertEqual(cartella, Path("/tmp/AppData/Roaming/ComparaOrdini/copie"))
 
     def test_senza_localappdata_c_e_un_ripiego(self) -> None:
-        """Se saltasse anche il ripiego, il programma resterebbe senza copie
-        proprio sulla macchina configurata in modo strano."""
+        """Without this fallback, the program would have no backup path at all
+        on a machine with unusual environment configuration."""
 
         cartella = launcher.cartella_delle_copie(sistema="nt", ambiente={})
 
@@ -211,13 +208,12 @@ class DoveFinisconoLeCopie(unittest.TestCase):
 
 
 class IlPonteAManoStaNellaCopia(BancoDelleCopie):
-    """`decisioni_schemi.json` non era nell'elenco, e invece e' una memoria.
+    """`decisioni_schemi.json` must be backed up along with the other state.
 
-    Ci finiscono le colonne scritte a mano per i listini che il programma non
-    e' riuscito a imparare: sopravvive al ricalcolo e a «Inizia nuova
-    comparazione», e per quei fornitori e' l'unica cosa che rende il listino
-    ancora leggibile. Perderla vuol dire riscriverla senza sapere che cosa
-    c'era scritto.
+    It holds manually mapped columns for price lists the adapter learner
+    couldn't handle on its own. It survives a recompute and "Inizia nuova
+    comparazione", and for those suppliers it's the only thing that keeps
+    the price list readable; losing it means rebuilding the mapping blind.
     """
 
     def test_ci_finisce_dentro(self) -> None:
@@ -232,7 +228,7 @@ class IlPonteAManoStaNellaCopia(BancoDelleCopie):
             self.assertIn(b"quercia.xlsx", archivio.read("current/decisioni_schemi.json"))
 
     def test_se_non_c_e_non_cambia_niente(self) -> None:
-        """Il caso normale: nessun listino ha avuto bisogno del ponte a mano."""
+        """The normal case: no price list needed a manual mapping."""
 
         self.scrivi_le_memorie()
 
@@ -243,13 +239,12 @@ class IlPonteAManoStaNellaCopia(BancoDelleCopie):
 
 
 class UnaCopiaCheNonRiesceLoDice(BancoDelleCopie):
-    """⚠ «Non solleva mai» non vuol dire «non lo dice a nessuno».
+    """Never raising doesn't mean never reporting failure.
 
-    Tornava `None` sia quando non c'era niente da copiare sia quando la copia
-    non si era potuta fare, e chi la chiama stampava una riga solo in caso di
-    successo: cartella non scrivibile, disco pieno, antivirus sul temporaneo, e
-    l'avvio sembrava normale. Si continuava a lavorare credendo che la rete di
-    sicurezza ci fosse, e l'unica copia di `conferme.db` e' quella.
+    A `None` result must be distinguishable between "nothing to back up" and
+    "the backup failed": an unwritable folder, a full disk, or antivirus
+    locking the temp file must not look like a normal, silent success, since
+    `conferme.db` has no other copy.
     """
 
     def test_il_motivo_arriva_a_chi_chiama(self) -> None:
@@ -258,19 +253,19 @@ class UnaCopiaCheNonRiesceLoDice(BancoDelleCopie):
 
         percorso = launcher.copia_le_memorie(
             dati=self.dati,
-            destinazione=self.dati / "current" / "state.json",  # non e' una cartella
+            destinazione=self.dati / "current" / "state.json",  # not a directory
             quando="2026-08-22",
             su_guasto=motivi.append,
         )
 
         self.assertIsNone(percorso)
         self.assertEqual(len(motivi), 1, motivi)
-        # Il tipo del guasto e la sua frase: chi legge deve poter capire se e'
-        # un permesso, uno spazio o un percorso.
+        # The failure reason must say enough to tell a permission error from
+        # a full disk from a bad path.
         self.assertTrue(motivi[0].strip(), motivi)
 
     def test_niente_da_copiare_non_e_un_guasto(self) -> None:
-        """Un'installazione nuova non ha ancora nessuna memoria: non c'e' niente da dire."""
+        """A fresh install has no memory files yet: there's nothing to report."""
 
         motivi: list[str] = []
 

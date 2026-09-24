@@ -1,4 +1,4 @@
-"""Configurazione guidata degli schemi sconosciuti."""
+"""Guided configuration of unrecognised document schemas."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from pipeline_jobs import ConfigurazionePipeline, PipelineJobManager  # noqa: E4
 
 
 def profilo_caricato(percorso: Path) -> dict:
-    """Il profilo che `POST /api/upload` scrive per un documento caricato."""
+    """Build the profile `POST /api/upload` writes for an uploaded document."""
 
     profilo = profile_file(percorso)
     profilo["upload_role"] = "supplier"
@@ -127,7 +127,7 @@ class SchemaMappingTests(unittest.TestCase):
             "profileId": profilo["profile_id"], "role": "supplier",
             "supplierName": "Nuovo", "sheet": "Listino", "headerRow": 1,
             "dataStartRow": 2,
-            # Prezzo e nome invertiti: il lettore non produrra' righe usabili.
+            # Price and name columns swapped: the reader will produce no usable rows.
             "columns": {"supplier_code": 1, "description": 4,
                         "pieces_per_carton": 3, "unit_price_net": 2},
             "orderColumn": 5,
@@ -163,8 +163,8 @@ class SchemaMappingTests(unittest.TestCase):
         }]}
 
     def test_un_gestionale_senza_codici_non_passa_per_buono(self) -> None:
-        # La colonna dei codici e' mappata su celle vuote: il ricalcolo
-        # costruirebbe un confronto in cui nessun prodotto ha un'offerta.
+        # The code column maps to empty cells: recomputing would build a comparison
+        # where no product can be matched to any supplier offer.
         profilo = self.gestionale("senza-codici.xlsx", [
             ["EAN", "DESCRIZIONE", "UM", "COLLI", "PREZZO", "IVA"],
             ["", "Prodotto uno", "PZ", 1, 2.5, 22],
@@ -200,9 +200,9 @@ class SchemaMappingTests(unittest.TestCase):
         self.assertEqual(documento["sample"][0]["ean"], "8000000000001")
 
     def test_qualche_riga_sporca_non_ferma_un_gestionale_buono(self) -> None:
-        # Totali di reparto e righe di separazione: il documento e' sporco, non
-        # mappato male, e la prova deve dire quante righe restano fuori senza
-        # togliere all'utente il ricalcolo.
+        # Department subtotals and separator rows make the document dirty, not
+        # badly mapped; the test asserts how many rows get discarded without
+        # blocking the recompute.
         profilo = self.gestionale("con-totali.xlsx", [
             ["EAN", "DESCRIZIONE", "UM", "COLLI", "PREZZO", "IVA"],
             ["8000000000001", "Prodotto uno", "PZ", 1, 2.5, 22],
@@ -240,11 +240,11 @@ class SchemaMappingTests(unittest.TestCase):
             schema_mapping.decisione_da_mappatura(profilo, scelta, self.adapters)
 
     def test_la_decisione_porta_l_impronta_del_documento_confermato(self) -> None:
-        """La mappatura vale per questo file, non per il suo nome.
+        """The mapping is keyed to the file's content hash, not to its name.
 
-        Senza l'impronta bastava eliminare un listino configurato male e
-        ricaricarne un altro con lo stesso nome perché il ricalcolo gli
-        riapplicasse le colonne vecchie.
+        Without the fingerprint, deleting a badly mapped price list and
+        re-uploading a different one under the same name would silently
+        reapply the old column mapping to it.
         """
 
         profilo = self.workbook("betulla.xlsx", [
@@ -265,12 +265,12 @@ class SchemaMappingTests(unittest.TestCase):
 
 
 class LaProposta(unittest.TestCase):
-    """Quando il programma propone un fornitore gia' selezionato, e quando no.
+    """When the wizard proposes an already-known supplier, and when it must not.
 
-    ⚠ Il 21 agosto 2026 la mappatura guidata ha proposto **BETULLA** per un
-    foglio di offerte, con affinita' 0,20: una intestazione su cinque, e
-    quell'una era la parola «ORDINE». Chi conferma sostituisce il listino vero
-    di quel fornitore, ed e' successo in negozio.
+    A weak match (one header out of five, coincidentally "ORDINE") once got
+    proposed as a specific supplier with a low similarity score. Confirming
+    that suggestion overwrites that supplier's real price list, so a proposal
+    below a sane similarity threshold must come back empty instead.
     """
 
     LISTINI = ROOT / "listini-storici"
@@ -298,7 +298,7 @@ class LaProposta(unittest.TestCase):
                 self.assertEqual(self.proposta(nome)["supplierId"], "")
 
     def test_i_listini_veri_continuano_a_essere_proposti(self) -> None:
-        """La soglia non deve smettere di proporre quando la proposta è giusta."""
+        """The similarity threshold must not suppress a correct proposal."""
 
         for nome, atteso in (("LISTINO BETULLA VALIDO FINO AL 28-07-26.xlsx", "betulla"),
                              ("3listino_Cipresso.xlsx", "cipresso"),
@@ -324,7 +324,7 @@ class LaProposta(unittest.TestCase):
         self.assertIn("scegli il fornitore", str(errore.exception))
 
     def test_senza_colonne_dice_quali_colonne_non_come_e_fatto_il_json(self) -> None:
-        """«completa columns deve essere un oggetto» era la frase vera."""
+        """The error must name the missing fields, not describe the JSON shape."""
 
         percorso = self.LISTINI / "OFFERTE AGOSTO 4.xlsx"
         if not percorso.is_file():
@@ -362,11 +362,11 @@ class LaProposta(unittest.TestCase):
 
 
 class InizioDeiProdottiTests(unittest.TestCase):
-    """Dire «i prodotti cominciano dopo la riga che dice LISTINO», non «alla 69».
+    """The data-start rule is "after the row that says LISTINO", not a fixed row number.
 
-    Il numero non sopravvive a una settimana: su QUERCIA le righe 7-67 sono un
-    blocco promozionale che cambia lunghezza da un listino all'altro, e il
-    listino vero comincia dopo l'unico `A68 = 'LISTINO'` del file.
+    A hardcoded row doesn't survive a week: on one supplier's price list the rows
+    before the product table are a promotional block whose length changes between
+    price lists, so the real data starts after the single marker row in column A.
     """
 
     maxDiff = None
@@ -407,7 +407,7 @@ class InizioDeiProdottiTests(unittest.TestCase):
         return base
 
     def test_l_anteprima_mostra_il_taglio_invece_di_farlo_indovinare(self) -> None:
-        """Il difetto misurato: digitando 28 si continuavano a vedere le righe 1-20."""
+        """The preview must show the actual cut point, not leave the operator guessing it."""
 
         profilo = self.listino()
         foglio = schema_mapping.serializza_foglio(schema_mapping.fogli_del_profilo(profilo)[0])
@@ -415,17 +415,17 @@ class InizioDeiProdottiTests(unittest.TestCase):
         self.assertEqual([voce["row"] for voce in foglio["sectionBreaks"]], [27])
         self.assertEqual(foglio["sectionBreaks"][0]["text"], "LISTINO")
         self.assertEqual(foglio["sectionBreaks"][0]["data_from"], 28)
-        # La finestra che la pagina disegna: da headerRow-1 a dataStartRow+7.
+        # The window the page renders: from headerRow-1 to dataStartRow+7.
         visibili = {voce["row"] for voce in foglio["rows"]}
         self.assertLessEqual({26, 27, 28, 29, 30}, visibili)
 
     def test_le_righe_del_taglio_non_cacciano_la_fine_del_documento(self) -> None:
-        """L'anteprima porta piu' righe di prima, e non al posto di altre.
+        """Adding rows around the section break must not push out the document's tail rows.
 
-        Il tetto delle righe visibili tiene le piu' basse: con le righe attorno
-        al separatore in mezzo, e il tetto fermo a quello di prima, sparivano
-        in silenzio le ultime righe del listino — l'unico punto in cui si vede
-        se il documento finisce con dei prodotti o con dei totali.
+        A fixed cap on visible rows keeps the lowest-numbered ones; with the
+        separator rows inserted in the middle, that would silently drop the
+        last rows of the price list — the only place to see whether the
+        document ends with products or with totals.
         """
 
         profilo = self.listino()
@@ -433,8 +433,7 @@ class InizioDeiProdottiTests(unittest.TestCase):
 
         visibili = {voce["row"] for voce in foglio["rows"]}
         self.assertIn(foglio["maxRow"], visibili)
-        # E le righe del taglio ci sono lo stesso: non e' un tetto che sceglie
-        # fra le une e le altre.
+        # The section-break rows are still there too: the cap doesn't trade one for the other.
         self.assertLessEqual({26, 27, 28}, visibili)
 
     def test_la_decisione_porta_la_regola_e_il_numero_a_cui_si_e_risolta(self) -> None:
@@ -445,12 +444,13 @@ class InizioDeiProdottiTests(unittest.TestCase):
         mappatura = decisione["field_mapping"]
         self.assertEqual(mappatura["data_start_marker"],
                          {"column": "A", "equals": "LISTINO", "offset": 1})
-        # Il numero resta, e serve a chi scrive la copia dell'ordine: chi legge
-        # non lo guarda mai.
+        # The resolved row number is kept too, for the order-file writer;
+        # the reader itself never looks at it once the marker exists.
         self.assertEqual(mappatura["data_start_row"], 28)
 
     def test_la_regola_si_verifica_sul_documento_prima_di_entrare(self) -> None:
-        """Una regola confermata alla cieca sarebbe peggio del numero che sostituisce."""
+        """A data-start marker that isn't checked against the document would be
+        worse than the fixed row number it's meant to replace."""
 
         profilo = self.listino()
         scelta = self.scelta(profilo, dataStartMarker={
@@ -464,7 +464,7 @@ class InizioDeiProdottiTests(unittest.TestCase):
         self.assertIn("LISTINO", messaggio)
 
     def test_la_riga_dichiarata_deve_stare_sotto_il_separatore(self) -> None:
-        """Se «prima riga dei prodotti» e lo scarto non tornano, non si indovina."""
+        """If the declared data-start row and the marker's offset disagree, fail rather than guess."""
 
         profilo = self.listino()
         scelta = self.scelta(profilo, dataStartRow=30)
@@ -489,7 +489,7 @@ class InizioDeiProdottiTests(unittest.TestCase):
         self.assertEqual(decisioni[0]["field_mapping"]["data_start_marker"]["equals"], "LISTINO")
 
     def test_senza_regola_la_mappatura_resta_quella_di_prima(self) -> None:
-        """La chiave è facoltativa: chi non ne ha bisogno non la vede."""
+        """The marker key is optional: documents that don't need it never see it."""
 
         profilo = self.listino()
         scelta = self.scelta(profilo)
@@ -502,16 +502,13 @@ class InizioDeiProdottiTests(unittest.TestCase):
 
 
 class LeColonneSiRivedonoQuandoSiVuole(unittest.TestCase):
-    """Il selettore aperto a mano su un listino gia' riconosciuto.
+    """The manual column selector for a price list the pipeline already recognises.
 
-    ⚠ La mappatura guidata lo apre soltanto quando la catena si ferma su uno
-    schema che il registro non conosce. Con i fornitori riconosciuti non si
-    ferma mai, e non c'era nessun modo di rivedere le colonne di un listino
-    noto — a partire dalla colonna d'ordine, che decide dove finiscono le
-    quantita' nella copia da mandare al fornitore. «Prima avevo il selettore
-    manuale dove potevo confermare quale colonna contenesse quale dato, con
-    anteprima, mentre ora non lo vedo piu'» (Daniele, 15 agosto 2026): non era
-    sparito, non c'era piu' nessuna porta per arrivarci.
+    The schema-mapping wizard only opens for a document the adapter registry
+    doesn't recognise; a recognised supplier never triggers it, which left no
+    way to revise the columns of an already-known price list — including the
+    order column, which decides where quantities land in the file sent back
+    to the supplier. The reader still exists and works; it was just unreachable.
     """
 
     NOME = "listino-betulla.xlsx"
@@ -522,8 +519,8 @@ class LeColonneSiRivedonoQuandoSiVuole(unittest.TestCase):
         self.radice = Path(self.temporanea.name)
         self.uploads = self.radice / "uploads"
         self.uploads.mkdir(parents=True)
-        # Un listino come quelli veri: un Excel con la colonna d'ordine vuota,
-        # che e' quella che a Daniele interessa poter cambiare.
+        # A realistic price list: an Excel file with an empty order column,
+        # which is the column this test suite exercises overriding.
         percorso = self.uploads / self.NOME
         libro = Workbook()
         foglio = libro.active
@@ -551,7 +548,7 @@ class LeColonneSiRivedonoQuandoSiVuole(unittest.TestCase):
         self.assertTrue(esito["ok"])
         self.assertEqual(len(esito["documents"]), 1)
         self.assertEqual(esito["documents"][0]["fileName"], self.NOME)
-        # L'anteprima serve a scegliere: senza le righe non si sceglie niente.
+        # The preview exists to let the operator choose; without sample rows there's nothing to choose from.
         self.assertTrue(esito["documents"][0]["sheets"][0]["rows"])
 
     def test_un_nome_che_non_e_fra_i_caricamenti_non_si_apre(self) -> None:
@@ -561,14 +558,12 @@ class LeColonneSiRivedonoQuandoSiVuole(unittest.TestCase):
                     self.gestore.colonne_del_documento(nome)
 
     def test_un_documento_cancellato_da_fuori_lo_dice_subito(self) -> None:
-        """⚠ Controprova rimasta VERDE al primo giro, sul ramo dove questo
-        codice e' nato.
+        """A separate guard is needed for a file removed from disk after upload.
 
-        I nomi inventati li fermava gia' il controllo sul registro dei profili:
-        la guardia sul disco non la distingueva nessuna prova. Questo e' il
-        caso che ferma davvero — il file tolto dalla cartella con Esplora
-        risorse, che nel registro c'e' ancora — e senza di lei l'errore
-        arrivava piu' tardi e da un'altra parte.
+        A made-up file name is already rejected by the check against the
+        profile registry; that check alone can't catch a file that's still
+        listed in the registry but has since been deleted outside the app.
+        Without this guard, the error would surface later, somewhere else.
         """
 
         (self.uploads / self.NOME).unlink()
@@ -609,16 +604,16 @@ class LeColonneSiRivedonoQuandoSiVuole(unittest.TestCase):
         salvata = decisioni["decisions"][0]
         self.assertEqual(salvata["file_name"], self.NOME)
         self.assertEqual(salvata["field_mapping"]["order_column"], "C")
-        # ⚠ Non riparte niente: dieci minuti non si prendono senza che l'utente
-        # li abbia chiesti. Ma la pagina deve sapere che i prezzi che mostra
-        # sono stati letti con le colonne di prima.
+        # Saving a column correction must not trigger a recompute on its own: an
+        # AI-assisted run costs real time and shouldn't start without the operator
+        # asking for it. The page must still know the shown prices are stale.
         self.assertEqual(esito["pipeline"]["stato"], pipeline_jobs.IN_ATTESA)
         cambiamento = esito["pipeline"]["cambiamento"]
         self.assertEqual(cambiamento["tipo"], "colonne")
         self.assertIn(self.NOME, cambiamento["documenti"])
 
     def test_e_si_puo_cambiare_da_una_settimana_all_altra(self) -> None:
-        """È proprio il caso d'uso: la colonna d'ordine è un'altra."""
+        """This is the actual use case: the order column shifts from one week's file to the next."""
 
         self.gestore.salva_colonne_del_documento(self.mappatura("3"))
         self.gestore.salva_colonne_del_documento(self.mappatura("7"))

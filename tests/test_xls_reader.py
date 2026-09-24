@@ -1,23 +1,22 @@
-"""Collaudo del lettore .xls scritto con la sola libreria standard.
+"""Tests for the stdlib-only `.xls` reader.
 
-Ci sono due tipi di prova, e servono tutti e due.
+Two kinds of test, both needed.
 
-1. LE PROVE COSTRUITE A MANO.  Qui sotto c'e' un piccolo scrittore di file
-   .xls: impacchetta un contenitore OLE2 vero e ci mette dentro record BIFF8
-   veri.  Serve per mettere il lettore davanti ai casi che nel listino di
-   Noce non capitano: il grassetto, i quattro modi di comprimere un
-   numero, le formule che restituiscono testo o errore, la tabella dei testi
-   tagliata proprio in mezzo a una parola.  Questi test girano ovunque, non
-   chiedono file esterni e sono veloci.
+1. Hand-built fixtures. A small `.xls` writer below packs a real OLE2
+   container with real BIFF8 records, exercising cases a single real price
+   list may not cover: bold formatting, the four ways to pack a compressed
+   number, formulas that resolve to text or an error, and a shared-string
+   table split mid-word. These run anywhere, need no external files, and are
+   fast.
 
-2. IL CONFRONTO CON IL LISTINO VERO.  Il file di Noce viene letto due
-   volte: una con questo lettore e una, in copia convertita da Excel, con
-   openpyxl.  Poi si confrontano tutte le celle di tutti i fogli, una per una,
-   valore e grassetto.  E' la prova che conta: un lettore BIFF sbagliato non
-   fallisce subito, sporca il testo in fondo al file dove nessuno guarda.
-   La copia convertita sta fuori dal progetto, quindi se manca il test salta
-   dicendo dove andrebbe messa; openpyxl serve solo qui, il codice che legge i
-   listini non lo usa.
+2. Comparison against a real price list. The real `.xls` is read twice: once
+   with this reader, once via openpyxl from an Excel-converted `.xlsx` copy.
+   Every cell of every sheet is compared, value and bold flag. This is the
+   test that matters: a subtly wrong BIFF reader doesn't fail outright, it
+   corrupts data far enough into the file that no one notices. The converted
+   copy lives outside the repo, so the test skips with a message pointing to
+   it when missing; openpyxl is only a comparison oracle here, not a
+   dependency of the reader itself.
 """
 
 from __future__ import annotations
@@ -36,11 +35,11 @@ RADICE = Path(__file__).resolve().parents[1]
 PERCORSO_LETTORE = RADICE / "app" / "xls_reader.py"
 
 _SPEC = importlib.util.spec_from_file_location("xls_reader_in_collaudo", PERCORSO_LETTORE)
-if _SPEC is None or _SPEC.loader is None:  # pragma: no cover - solo se il file sparisce
+if _SPEC is None or _SPEC.loader is None:  # pragma: no cover - only if the file goes missing
     raise RuntimeError(f"Impossibile importare {PERCORSO_LETTORE}")
 LETTORE = importlib.util.module_from_spec(_SPEC)
-# Il modulo va registrato prima di eseguirlo: le dataclass cercano il proprio
-# modulo dentro sys.modules mentre vengono costruite.
+# Register the module before executing it: its dataclasses look themselves
+# up in sys.modules while being constructed.
 sys.modules[_SPEC.name] = LETTORE
 _SPEC.loader.exec_module(LETTORE)
 
@@ -49,8 +48,8 @@ read_workbook = LETTORE.read_workbook
 read_sheet_values = LETTORE.read_sheet_values
 
 
-# I due file veri.  Sono fuori dal progetto: si possono spostare con queste due
-# variabili d'ambiente senza toccare il codice del test.
+# The two real files. They live outside the repo; their location can be
+# overridden with these two environment variables without touching the test.
 LISTINO_XLS = Path(
     os.environ.get(
         "LISTINO_XLS_DI_PROVA",
@@ -65,16 +64,15 @@ LISTINO_XLSX = Path(
     )
 )
 
-# Tolleranza del confronto fra numeri: i due lettori arrivano allo stesso
-# numero per strade diverse (record RK compresso da una parte, testo decimale
-# dall'altra), quindi si ammette lo scarto dell'ultima cifra di un numero a
-# doppia precisione, non un centesimo di euro.
+# Numeric comparison tolerance: the two readers reach the same number by
+# different paths (packed RK record vs. decimal text), so allow drift in the
+# last digit of a double, not a cent of currency.
 TOLLERANZA_ASSOLUTA = 1e-9
 TOLLERANZA_RELATIVA = 1e-9
 
 
 # ---------------------------------------------------------------------------
-# Scrittore di file .xls per le prove costruite a mano
+# Minimal .xls writer for the fixtures below
 # ---------------------------------------------------------------------------
 
 DIMENSIONE_SETTORE = 512
@@ -110,11 +108,11 @@ def _voce_direttorio(
 
 
 def costruisci_ole2(flussi: list[tuple[str, bytes]]) -> bytes:
-    """Impacchetta dei flussi in un contenitore OLE2 minimo ma vero.
+    """Pack streams into a minimal but real OLE2 container.
 
-    I flussi sotto i 4096 byte finiscono nel mini-stream, come fa Excel: cosi'
-    un libro di lavoro piccolo mette alla prova la mini-FAT e uno grande la
-    catena dei settori normali.
+    Streams under 4096 bytes go into the mini-stream, matching Excel's own
+    behavior: a small workbook exercises the mini-FAT, a large one the normal
+    sector chain.
     """
     mini_dati = bytearray()
     mini_fat: list[int] = []
@@ -215,7 +213,7 @@ def costruisci_ole2(flussi: list[tuple[str, bytes]]) -> bytes:
     return bytes(intestazione) + b"".join(settori)
 
 
-# -- i record BIFF8 ---------------------------------------------------------
+# -- BIFF8 records -----------------------------------------------------------
 
 
 def rec(codice: int, dati: bytes) -> bytes:
@@ -231,7 +229,7 @@ def eof() -> bytes:
 
 
 def font(peso: int, nome: str = "Calibri") -> bytes:
-    # Il peso sta all'offset 6: 400 e' normale, 700 e' grassetto.
+    # Weight is at offset 6: 400 is normal, 700 is bold.
     dati = struct.pack("<HHHHHBBBB", 220, 0, 0x7FFF, peso, 0, 0, 0, 0, 0)
     dati += bytes([len(nome), 0x01]) + nome.encode("utf-16-le")
     return rec(0x0031, dati)
@@ -304,7 +302,7 @@ def boolerr(riga: int, colonna: int, valore: int, e_errore: bool, indice_xf: int
 
 def formula(riga: int, colonna: int, memorizzato: bytes, indice_xf: int = 0) -> bytes:
     assert len(memorizzato) == 8
-    rgce = b"\x1e\x01\x00"  # una costante qualsiasi: il lettore non la guarda
+    rgce = b"\x1e\x01\x00"  # arbitrary constant: the reader ignores the formula bytes
     corpo = struct.pack("<HHH", riga, colonna, indice_xf) + memorizzato
     corpo += struct.pack("<HIH", 0, 0, len(rgce)) + rgce
     return rec(0x0006, corpo)
@@ -346,11 +344,10 @@ def costruisci_xls(
     protetto: bool = False,
     extra_globali: bytes = b"",
 ) -> bytes:
-    """Costruisce un .xls completo: contenitore, globali e sottoflussi.
+    """Build a complete `.xls`: container, globals, and sheet substreams.
 
-    `extra_globali` serve a `test_xls_writer`, che ha bisogno di un `RECALCID`
-    nelle globali: e' il record che la compilazione azzera per far rifare i
-    conti a Excel all'apertura.
+    `extra_globali` lets `test_xls_writer` inject a `RECALCID` record into the
+    globals, the record compilation zeroes to force Excel to recompute on open.
     """
     tipi = tipi_foglio if tipi_foglio is not None else tuple(0 for _ in fogli)
 
@@ -369,8 +366,8 @@ def costruisci_xls(
             coda += rec(0x003C, blocco)
     coda += eof()
 
-    # I BOUNDSHEET hanno lunghezza fissa: si calcola prima quanto occupano i
-    # globali, poi si sa dove comincia ogni foglio.
+    # BOUNDSHEET records have a fixed layout: compute the globals' total
+    # length first, then each sheet's start offset follows from it.
     segnaposto = b"".join(
         boundsheet(nome, 0, tipo, nomi_compressi) for (nome, _), tipo in zip(fogli, tipi)
     )
@@ -392,15 +389,15 @@ def costruisci_xls(
     assert len(globali) == lunghezza_globali
 
     flusso = globali + b"".join(sottoflussi) + b"\x00" * riempimento
-    # Prima del libro di lavoro si mette un flusso piccolo qualsiasi, come nei
-    # file veri (i resti delle macro).  Serve a spostare il libro dall'inizio
-    # del mini-stream: se cominciasse a zero, leggerlo dalla catena sbagliata
-    # darebbe lo stesso i dati giusti e il collaudo non proverebbe niente.
+    # A small unrelated stream precedes the workbook, as in real files (macro
+    # leftovers). This offsets the workbook from the start of the
+    # mini-stream, so following the wrong chain would still land on
+    # plausible data instead of failing the test outright.
     return costruisci_ole2([("Ctls", b"resti di un modulo" * 6), ("Workbook", flusso)])
 
 
 class BaseXls(unittest.TestCase):
-    """Comodita' condivise: scrivere un .xls temporaneo e rileggerlo."""
+    """Shared helpers: write a temporary `.xls` and read it back."""
 
     def scrivi(self, contenuto: bytes, nome: str = "prova.xls") -> Path:
         cartella = Path(tempfile.mkdtemp(prefix="collaudo_xls_"))
@@ -417,17 +414,16 @@ class BaseXls(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Il contenitore OLE2
+# The OLE2 container
 # ---------------------------------------------------------------------------
 
 
 class ContenitoreOle2Test(BaseXls):
     def test_libro_piccolo_passa_dal_mini_stream(self):
-        """Un libro sotto i 4096 byte sta nei mini settori, non in quelli grandi."""
+        """A workbook under 4096 bytes lives in the mini sectors, not the normal ones."""
         contenuto = costruisci_xls([("Foglio1", label(0, 0, "ciao"))])
-        # Nel contenitore il flusso e' davvero sotto soglia, quindi la lettura
-        # passa per la mini-FAT: se quel percorso fosse sbagliato non uscirebbe
-        # nemmeno una cella.
+        # The stream is genuinely under the threshold here, so reading goes
+        # through the mini-FAT; a bug in that path would yield no cells at all.
         contenitore = LETTORE._ContenitoreOle2(contenuto)
         self.assertLess(len(contenitore.flusso("Workbook")), 4096)
         self.assertEqual(contenitore.flusso("Ctls"), b"resti di un modulo" * 6)
@@ -435,7 +431,7 @@ class ContenitoreOle2Test(BaseXls):
         self.assertEqual(self.valori(fogli[0]), [["ciao"]])
 
     def test_libro_grande_passa_dai_settori_normali(self):
-        """Sopra la soglia il flusso sta nella catena dei settori grandi."""
+        """Above the threshold, the stream lives in the normal sector chain."""
         contenuto = costruisci_xls([("Foglio1", label(0, 0, "ciao"))], riempimento=9000)
         contenitore = LETTORE._ContenitoreOle2(contenuto)
         self.assertGreater(len(contenitore.flusso("Workbook")), 4096)
@@ -443,10 +439,10 @@ class ContenitoreOle2Test(BaseXls):
         self.assertEqual(self.valori(fogli[0]), [["ciao"]])
 
     def test_file_grande_usa_piu_settori_di_fat(self):
-        """Con molti settori la FAT non entra in un settore solo."""
-        # Un settore di mappa descrive 128 settori: oltre quella soglia servono
-        # piu' pagine di FAT.  Se venisse letta solo la prima, la catena si
-        # spezzerebbe a meta' e mancherebbero le ultime righe del listino.
+        """With enough sectors, the FAT spans more than one sector."""
+        # One FAT sector describes 128 sector entries; beyond that, more FAT
+        # pages are needed. Reading only the first would break the chain
+        # partway through, silently dropping the tail of the price list.
         celle = b"".join(label(riga, 0, f"riga {riga}") for riga in range(6000))
         contenuto = costruisci_xls([("Foglio1", celle)])
         contenitore = LETTORE._ContenitoreOle2(contenuto)
@@ -462,14 +458,14 @@ class ContenitoreOle2Test(BaseXls):
         self.assertIn("Excel 97-2003", str(errore.exception))
 
     def test_xlsx_scambiato_per_xls(self):
-        """Chi rinomina un .xlsx in .xls deve leggere una spiegazione, non un crash."""
+        """Renaming a `.xlsx` to `.xls` should raise a clear error, not crash."""
         percorso = self.scrivi(b"PK\x03\x04" + b"\x00" * 600)
         with self.assertRaises(XlsError) as errore:
             read_workbook(percorso)
         self.assertIn(".xlsx", str(errore.exception))
 
     def test_contenitore_senza_libro_di_lavoro(self):
-        """Un OLE2 di un altro programma non è un file "rovinato": è un altro file."""
+        """An OLE2 file from another program is not "corrupted": it's a different file."""
         contenuto = costruisci_ole2([("Ctls", b"quattro salti")])
         with self.assertRaises(XlsError) as errore:
             read_workbook(self.scrivi(contenuto))
@@ -482,18 +478,18 @@ class ContenitoreOle2Test(BaseXls):
         self.assertIn("password", str(errore.exception))
 
     def test_record_tagliato_a_meta(self):
-        """Un file rovinato deve spiegarsi, non uscire con un errore di struct."""
+        """A corrupted file should raise a clear error, not a raw struct exception."""
         celle = label(0, 0, "buona") + rec(0x00FD, b"\x00\x00")
         with self.assertRaises(XlsError) as errore:
             read_workbook(self.scrivi(costruisci_xls([("Foglio1", celle)])))
         self.assertIn("rovinato", str(errore.exception))
 
     def test_l_originale_non_viene_toccato(self):
-        """Principio numero uno: il file del fornitore resta com'e' arrivato.
+        """The supplier's file must never be modified by the reader.
 
-        Il file viene messo in sola lettura prima di aprirlo: cosi' non si
-        controlla la data di modifica, che sul momento potrebbe non cambiare,
-        ma si chiede al sistema operativo di impedire fisicamente la scrittura.
+        The file is made read-only before opening: rather than checking its
+        mtime afterward, which might not change even if written, this asks
+        the OS to refuse the write outright.
         """
         percorso = self.scrivi(costruisci_xls([("Foglio1", label(0, 0, "ciao"))]))
         prima = percorso.read_bytes()
@@ -505,16 +501,16 @@ class ContenitoreOle2Test(BaseXls):
 
 
 # ---------------------------------------------------------------------------
-# I record delle celle
+# Cell records
 # ---------------------------------------------------------------------------
 
 
 class RecordCelleTest(BaseXls):
     def test_quattro_modi_del_record_rk(self):
-        """I quattro modi di comprimere un numero in quattro byte.
+        """The four ways an RK record packs a number into four bytes.
 
-        Sbagliare il bit dei centesimi non fa fallire la lettura: fa comparire
-        prezzi cento volte piu' grandi.
+        Getting the "x100" flag wrong doesn't fail the read: it silently
+        produces prices a hundred times too large.
         """
         celle = (
             rk(0, 0, rk_reale(1.5))
@@ -535,7 +531,7 @@ class RecordCelleTest(BaseXls):
         self.assertEqual(fogli[0].rows[3][4][0], 30.5)
 
     def test_mulblank_occupa_le_colonne_senza_valore(self):
-        """Le celle vuote formattate esistono: contano per la larghezza del foglio."""
+        """Formatted empty cells still exist and count toward the sheet's row width."""
         celle = label(0, 0, "intestazione") + mulblank(1, 1, [0, 0, 0])
         fogli = self.leggi(costruisci_xls([("Foglio1", celle)]))
         self.assertEqual(len(fogli[0].rows), 2)
@@ -548,7 +544,7 @@ class RecordCelleTest(BaseXls):
         self.assertEqual(self.valori(fogli[0]), [[12.25, "Città", None]])
 
     def test_numero_intero_resta_intero(self):
-        """Pezzi per cartone e quantità sono interi: non devono diventare 24.0."""
+        """Carton sizes and quantities are integers; they must not turn into 24.0."""
         celle = numero(0, 0, 24.0) + rk(0, 1, rk_intero(6))
         fogli = self.leggi(costruisci_xls([("Foglio1", celle)]))
         valori = self.valori(fogli[0])[0]
@@ -562,13 +558,13 @@ class RecordCelleTest(BaseXls):
         self.assertEqual(self.valori(fogli[0]), [[True, False, "#DIV/0!"]])
 
     def test_formula_restituisce_il_valore_memorizzato(self):
-        """Della formula serve il risultato che Excel ha salvato, non la formula."""
+        """A formula cell exposes Excel's cached result, not the formula itself."""
         celle = formula(0, 0, formula_numero(21.0)) + formula(0, 1, formula_numero(3.75))
         fogli = self.leggi(costruisci_xls([("Foglio1", celle)]))
         self.assertEqual(self.valori(fogli[0]), [[21, 3.75]])
 
     def test_formula_con_risultato_di_testo(self):
-        """Quando la formula da' testo, il testo sta nel record STRING che segue."""
+        """When a formula's result is text, the text is in the STRING record that follows."""
         celle = formula(0, 0, formula_testo()) + record_string("NOCE") + numero(0, 1, 1.0)
         fogli = self.leggi(costruisci_xls([("Foglio1", celle)]))
         self.assertEqual(self.valori(fogli[0]), [["NOCE", 1]])
@@ -583,7 +579,7 @@ class RecordCelleTest(BaseXls):
         self.assertEqual(self.valori(fogli[0]), [[True, "#N/A", None]])
 
     def test_righe_dense_e_celle_mancanti(self):
-        """rows[r][c] non deve mai esplodere: le celle assenti sono (None, False)."""
+        """rows[r][c] must never raise: missing cells read as (None, False)."""
         celle = label(0, 0, "a") + label(3, 5, "b")
         fogli = self.leggi(costruisci_xls([("Foglio1", celle)]))
         righe = fogli[0].rows
@@ -599,41 +595,41 @@ class RecordCelleTest(BaseXls):
 
 
 # ---------------------------------------------------------------------------
-# La tabella dei testi condivisi
+# The shared string table
 # ---------------------------------------------------------------------------
 
 
 def blocchi_sst_di_prova() -> tuple[list[bytes], list[str]]:
-    """Una SST tagliata di proposito nei quattro punti che fanno sbagliare.
+    """Build an SST deliberately split at the four points that trip up a naive parser.
 
-    1. una stringa spezzata che riprende con una codifica diversa (da un byte
-       per carattere a due);
-    2. una spezzata nel verso opposto (da due byte a uno);
-    3. una la cui intestazione finisce esattamente in fondo al record, con i
-       caratteri tutti nel pezzo successivo;
-    4. una che finisce esattamente in fondo al record, cosi' il pezzo dopo
-       comincia con una intestazione e NON con il byte delle bandiere.
-    In coda una stringa con formattazioni interne e una con la coda fonetica:
-    quei dati vanno saltati per intero, altrimenti si mangiano l'intestazione
-    della stringa che viene dopo.  Per questo dopo di loro ce n'e' un'altra.
+    1. a string that resumes with a different encoding (1-byte chars to 2-byte);
+    2. one split the other way (2-byte chars to 1-byte);
+    3. one whose header ends exactly at the record boundary, with all its
+       characters in the next chunk;
+    4. one that ends exactly at the record boundary, so the next chunk starts
+       with a fresh header rather than a continuation flag byte.
+
+    A string with rich formatting and one with a phonetic run follow: that
+    extra data must be skipped in full, or it eats into the next string's
+    header, which is why another plain string comes after them.
     """
     blocchi = [
-        # SST: due contatori e poi la prima stringa, tagliata a meta'.
+        # SST: two counters, then the first string, cut halfway through.
         struct.pack("<II", 12, 7) + struct.pack("<HB", 8, 0x00) + b"ALFA",
-        # riprende in UTF-16, poi comincia la seconda stringa e si taglia ancora
+        # resumes as UTF-16, then the second string starts and is cut again
         b"\x01" + "BETA".encode("utf-16-le") + struct.pack("<HB", 4, 0x01) + "WX".encode("utf-16-le"),
-        # la seconda riprende compressa; la terza mette qui solo l'intestazione
+        # the second string resumes compressed; the third's header lands here
         b"\x00" + b"YZ" + struct.pack("<HB", 3, 0x00),
-        # i caratteri della terza, che finisce esattamente in fondo al blocco
+        # the third string's characters, ending exactly at the chunk boundary
         b"\x00" + b"TRE",
-        # nessuna bandiera: qui comincia direttamente una intestazione nuova
+        # no continuation flag: a fresh header starts right here
         struct.pack("<HB", 6, 0x00)
         + b"QUINTA"
-        # con formattazioni interne: due tratti da quattro byte da saltare
+        # rich formatting: two 4-byte runs to skip
         + struct.pack("<HBH", 4, 0x08, 2)
         + b"RICH"
         + b"\x00" * 8
-        # con coda fonetica: sei byte da saltare
+        # phonetic extension: six bytes to skip
         + struct.pack("<HBI", 3, 0x04, 6)
         + b"SEI"
         + b"\x00" * 6
@@ -663,26 +659,26 @@ class TestiCondivisiTest(BaseXls):
         self.assertEqual(self.valori(fogli[0]), [["UNO ", "DUE"]])
 
     def test_testo_compresso_con_accenti(self):
-        """Il testo "compresso" è latin-1, non ASCII: le accentate ci stanno."""
+        """"Compressed" text is latin-1, not ASCII: accented characters must decode."""
         blocchi = [struct.pack("<II", 1, 1) + struct.pack("<HB", 6, 0x00) + "però!".encode("latin-1") + b"?"]
         fogli = self.leggi(costruisci_xls([("Foglio1", labelsst(0, 0, 0))], blocchi_sst=blocchi))
         self.assertEqual(self.valori(fogli[0]), [["però!?"]])
 
 
 # ---------------------------------------------------------------------------
-# Il grassetto
+# Bold formatting
 # ---------------------------------------------------------------------------
 
 
 class GrassettoTest(BaseXls):
     def test_grassetto_dalla_cella_al_font(self):
-        """cella -> XF -> FONT: e' cosi' che Noce segnala un prezzo in offerta.
+        """Resolves bold via cell -> XF -> FONT, the chain this supplier uses to flag a promo price.
 
-        I due passaggi sono incrociati apposta: il formato numero 0 usa il font
-        numero 1 e viceversa.  Chi saltasse il record XF e prendesse il font con
-        il numero del formato otterrebbe il grassetto sulla cella sbagliata.
-        Il grassetto qui e' scritto solo nel peso del carattere, non nel vecchio
-        bit delle opzioni: dal BIFF5 in poi vale quello.
+        The mapping is deliberately crossed: XF 0 points at font 1 and vice
+        versa, so following the format's own number instead of its XF record
+        would resolve bold on the wrong cell. Bold is read from the font
+        weight, the field that has been authoritative since BIFF5, not the
+        legacy options bit.
         """
         celle = label(0, 0, "normale", indice_xf=0) + label(0, 1, "offerta", indice_xf=1)
         contenuto = costruisci_xls(
@@ -695,10 +691,10 @@ class GrassettoTest(BaseXls):
         self.assertEqual(fogli[0].rows[0][1], ("offerta", True))
 
     def test_il_font_numero_quattro_non_esiste(self):
-        """Excel salta l'indice 4: chi non lo sa sposta il grassetto di una cella.
+        """Excel skips font index 4; ignoring that offsets bold by one font.
 
-        Qui i font scritti sono sei, quindi l'ultimo ha indice 6 e non 5.  Se il
-        salto non venisse rispettato il grassetto finirebbe sul font sbagliato.
+        Six fonts are written here, so the last one has index 6, not 5. If the
+        skip isn't accounted for, bold resolves against the wrong font.
         """
         celle = label(0, 0, "normale", indice_xf=0) + label(0, 1, "offerta", indice_xf=1)
         contenuto = costruisci_xls(
@@ -722,14 +718,14 @@ class GrassettoTest(BaseXls):
         self.assertEqual(fogli[0].rows[0][1], (None, True))
 
     def test_indice_xf_fuori_elenco_non_fa_saltare_la_lettura(self):
-        """Un formato che non c'è vale "niente grassetto", non un errore."""
+        """A missing format index means "not bold", not a crash."""
         celle = label(0, 0, "ciao", indice_xf=99)
         fogli = self.leggi(costruisci_xls([("Foglio1", celle)]))
         self.assertEqual(fogli[0].rows[0][0], ("ciao", False))
 
 
 # ---------------------------------------------------------------------------
-# Piu' fogli
+# Multiple sheets
 # ---------------------------------------------------------------------------
 
 
@@ -784,7 +780,7 @@ class PiuFogliTest(BaseXls):
 
 
 # ---------------------------------------------------------------------------
-# Il confronto con il listino vero
+# Comparison against a real price list
 # ---------------------------------------------------------------------------
 
 
@@ -797,7 +793,7 @@ def _numeri_uguali(mio: object, suo: object) -> bool:
 
 
 class ListinoVeroTest(unittest.TestCase):
-    """Confronto cella per cella con la copia convertita da Excel."""
+    """Cell-by-cell comparison against the Excel-converted copy."""
 
     @classmethod
     def setUpClass(cls):
@@ -815,7 +811,7 @@ class ListinoVeroTest(unittest.TestCase):
             )
         try:
             from openpyxl import load_workbook
-        except ImportError:  # pragma: no cover - dipende dall'ambiente
+        except ImportError:  # pragma: no cover - depends on the environment
             raise unittest.SkipTest(
                 "openpyxl non è installato: serve solo a questo confronto, "
                 "non al codice che legge i listini."
@@ -885,13 +881,13 @@ class ListinoVeroTest(unittest.TestCase):
             file=sys.stderr,
         )
         self.assertFalse(differenze, "\n".join(differenze))
-        # Se il confronto girasse su poche celle non proverebbe niente: il
-        # listino vero ne ha piu' di trecentomila e devono esserci tutte.
+        # A comparison over too few cells would prove nothing: the real price
+        # list has well over 300,000 and all of them must be present.
         self.assertGreater(confrontate, 300_000)
         self.assertGreater(non_vuote, 250_000)
 
     def test_le_offerte_in_grassetto_vengono_lette(self):
-        """Il grassetto è il segnale delle offerte: va letto, non stimato."""
+        """Bold is the promo signal: it must be read exactly, never guessed."""
         libro = self.load_workbook(LISTINO_XLSX, data_only=True, read_only=True)
         try:
             attesi = sum(
@@ -904,9 +900,8 @@ class ListinoVeroTest(unittest.TestCase):
             libro.close()
         letti = sum(1 for riga in self.fogli[0].rows for _valore, grassetto in riga if grassetto)
         self.assertEqual(letti, attesi)
-        # In questo listino non ci sono offerte attive, ma l'intestazione e'
-        # scritta in grassetto: se il conteggio fosse zero il confronto non
-        # direbbe nulla sul segnale che ci interessa.
+        # This price list has no active promos, but its header row is bold:
+        # a zero count here would say nothing about the signal that matters.
         self.assertGreater(letti, 0)
 
     def test_il_listino_vero_non_viene_modificato(self):

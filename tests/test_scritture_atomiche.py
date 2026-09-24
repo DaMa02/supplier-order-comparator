@@ -1,15 +1,15 @@
-"""Due fili che salvano lo stesso file non si rubano il temporaneo.
+"""Two threads writing the same file must not race on a shared temp file.
 
-`state.json` lo scrivono in due: la pagina, che si autosalva 450 ms dopo ogni
-modifica (`atomic_json` di `server.py`), e la catena, che lo ripulisce a fine
-ricalcolo (`scrivi_json` di `pipeline_jobs.py`).  Fino al 20 agosto 2026 tutti
-e due passavano da un temporaneo dal nome fisso — `state.json.tmp` — e i due
-nomi erano identici.  Quel che ne usciva non era un errore rumoroso: la
-sostituzione del primo pubblicava il contenuto del secondo, cioe' lo stato
-salvato non era quello che l'utente aveva appena scritto.
+`state.json` is written from two places: the page, which autosaves 450ms
+after each change (`atomic_json` in `server.py`), and the pipeline, which
+rewrites it at the end of a recompute (`scrivi_json` in `pipeline_jobs.py`).
+If both used a temp file with a fixed name, one thread's atomic replace could
+publish the other thread's content — silently, with no error, just the wrong
+state on disk.
 
-Le prove qui sotto mettono i due fili nell'ordine peggiore invece di sperare
-che capiti: senza il nome unico diventano rosse tutt'e due.
+These tests force the two threads into the worst possible interleaving
+instead of hoping it occurs naturally: without a unique temp-file name per
+writer, both fail.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ import server  # noqa: E402
 
 
 class ScrittureCheSiIncrociano(unittest.TestCase):
-    """Il filo lento arriva per ultimo e vince: è l'ordine peggiore."""
+    """The slow thread finishes last and wins the write: the worst-case order."""
 
     def setUp(self) -> None:
         self.temporanea = tempfile.TemporaryDirectory()
@@ -43,12 +43,12 @@ class ScrittureCheSiIncrociano(unittest.TestCase):
         self.percorso = Path(self.temporanea.name) / "state.json"
 
     def _incrocia(self, scrittore_lento, scrittore_veloce) -> None:
-        """Ferma il primo scrittore un istante prima della sostituzione.
+        """Pause the first writer right before its atomic replace.
 
-        Nel frattempo il secondo scrive e sostituisce per intero.  Con un
-        temporaneo condiviso, quando il primo riprende il suo file non esiste
-        piu': `os.replace` solleva, e il contenuto pubblicato e' quello del
-        secondo.
+        The second writer runs to completion in the meantime. With a shared
+        temp file, the first writer's file is gone by the time it resumes:
+        `os.replace` raises, and the published content is the second
+        writer's.
         """
 
         replace_vero = os.replace
@@ -103,11 +103,11 @@ class ScrittureCheSiIncrociano(unittest.TestCase):
         self.assertEqual(salvato["chi"], "la catena")
 
     def test_due_fili_diversi_non_si_danno_lo_stesso_temporaneo(self) -> None:
-        """Il nome e' unico per chi scrive, non per la singola scrittura.
+        """Each writer thread gets its own temp-file name; a single thread may reuse it.
 
-        Due chiamate dallo stesso filo riusano lo stesso nome, e va bene:
-        un filo non puo' incrociare se stesso.  Quello che non deve ripetersi
-        e' il nome fra fili diversi, perche' sono loro che si incrociano.
+        Two calls from the same thread can reuse the same name, since a
+        thread can't race itself. What must differ is the name across
+        different threads, since those are the ones that can race.
         """
 
         nomi: list[str] = []
@@ -117,9 +117,9 @@ class ScrittureCheSiIncrociano(unittest.TestCase):
             nomi.append(Path(sorgente).name)
             return replace_vero(sorgente, destinazione)
 
-        # ⚠ I due fili devono essere vivi nello stesso momento: uno dopo
-        # l'altro CPython riassegna lo stesso `get_ident()` al filo nuovo, e
-        # la prova passerebbe — o cadrebbe — per un motivo che non c'entra.
+        # The two threads must be alive at the same time: run one after the
+        # other and CPython can reuse the same `get_ident()` for the new
+        # thread, making the test pass or fail for an unrelated reason.
         insieme = threading.Barrier(2, timeout=10)
 
         def dalla_pagina() -> None:
@@ -145,8 +145,8 @@ class ScrittureCheSiIncrociano(unittest.TestCase):
         self.assertNotEqual(nomi[0], nomi[1])
         for nome in nomi:
             self.assertTrue(nome.startswith("state.json."), nome)
-            # Resta un `.tmp`: `.gitignore` lo esclude, e `consegna.e_documento`
-            # non lo conta fra i documenti di una cartella consegnata.
+            # Keeps the `.tmp` suffix: `.gitignore` excludes it, and
+            # `consegna.e_documento` doesn't count it among a delivered folder's documents.
             self.assertTrue(nome.endswith(".tmp"), nome)
             self.assertIn(str(os.getpid()), nome)
 
@@ -165,18 +165,19 @@ class ScrittureCheSiIncrociano(unittest.TestCase):
         finally:
             os.replace = replace_vero
 
-        # Con un nome unico nessuno riscrivera' mai piu' quei due file: se non
-        # li cancella chi li ha creati, restano li' per sempre.
+        # With a unique name, nothing will ever write to those two temp files
+        # again; if the writer doesn't clean them up, they stay forever.
         self.assertEqual(sorted(p.name for p in self.percorso.parent.glob("*.tmp")), [])
 
 
 class LaChiaveNasceGiaStretta(unittest.TestCase):
-    """`secrets.json` e' l'unico file del programma con dei permessi da tenere.
+    """`secrets.json` is the only file in the program with permissions to enforce.
 
-    ⚠ Fino al 20 agosto la chiave toccava il disco con i permessi di umask e
-    veniva ristretta un istante dopo, mentre il docstring dichiarava il
-    contrario. Qui si guarda il temporaneo **nel momento in cui viene creato**,
-    che e' l'unico modo di distinguere le due cose.
+    The key file must be created with restrictive permissions from the first
+    write, not written with default umask permissions and tightened
+    afterward — a window where the key sits world-readable on disk. This
+    test inspects the temp file's mode at creation time, the only way to
+    tell the two apart.
     """
 
     @unittest.skipIf(os.name == "nt", "su Windows il modo di `os.open` non significa granche'")
@@ -204,12 +205,12 @@ class LaChiaveNasceGiaStretta(unittest.TestCase):
 
 
 class IlLucchettoEUnoSolo(unittest.TestCase):
-    """La catena e le rotte devono condividere lo stesso oggetto, non due uguali.
+    """The service and the pipeline it drives must share the same lock object, not two equal ones.
 
-    E' la meta' che i collaudi di `pipeline_jobs` non possono vedere: li' il
-    lucchetto glielo passa il test.  Se il servizio ne costruisse uno suo, le
-    prove dell'attivazione resterebbero verdi e in negozio non escluderebbero
-    niente.
+    `pipeline_jobs`'s own tests can't catch this, since they get a lock
+    injected directly. If the service built its own instead of passing its
+    lock down, those tests would stay green while the real deployment had
+    no mutual exclusion at all.
     """
 
     def test_il_servizio_passa_alla_catena_il_proprio_lucchetto(self) -> None:
@@ -227,14 +228,13 @@ class IlLucchettoEUnoSolo(unittest.TestCase):
 
 
 class IByteArrivanoSulDiscoPrimaDiSostituire(unittest.TestCase):
-    """`os.replace` e' atomico rispetto ai metadati, non rispetto ai dati.
+    """`os.replace` is atomic with respect to metadata, not to data durability.
 
-    Garantisce che nessuno veda il file a meta' fra il vecchio e il nuovo; non
-    garantisce che i byte del nuovo siano gia' sul disco.  Se il computer del
-    negozio va giu' per una mancanza di corrente nell'istante sbagliato, al
-    riavvio si trova uno `state.json` o un `orders.json` **presente ma vuoto o
-    tronco** — e da quando `app/data/` e' ignorato per intero da git, dentro il
-    repository di quelle memorie non resta niente.
+    It guarantees no reader ever sees a half-written file mid-swap; it does
+    not guarantee the new file's bytes have reached disk. A power loss at the
+    wrong moment can leave `state.json` or `orders.json` present but empty or
+    truncated on restart — and since `app/data/` is entirely git-ignored,
+    the repository holds no other copy to recover from.
     """
 
     def setUp(self) -> None:
@@ -243,7 +243,7 @@ class IByteArrivanoSulDiscoPrimaDiSostituire(unittest.TestCase):
         self.cartella = Path(self.temporanea.name)
 
     def sincronizzati(self, scrittura) -> list[int]:
-        """I descrittori su cui `fsync` è stato chiamato durante la scrittura."""
+        """Return the file descriptors `fsync` was called on during the write."""
 
         fsync_vero = os.fsync
         visti: list[int] = []
@@ -276,9 +276,8 @@ class IByteArrivanoSulDiscoPrimaDiSostituire(unittest.TestCase):
                 self.assertEqual(len(self.sincronizzati(scrittura)), 1, chi)
 
     def test_si_puo_spegnere_per_una_scrittura_sola(self) -> None:
-        """La via d'uscita se in negozio il salvataggio diventasse lento: si
-
-        spegne dove serve, non dappertutto."""
+        """Escape hatch if saving gets slow on the store's hardware: disable
+        the fsync for one call site, not everywhere."""
 
         visti = self.sincronizzati(lambda: scrittura_sicura.scrivi_json(
             self.cartella / "senza.json", {"a": 1}, forza_su_disco=False))
@@ -287,17 +286,18 @@ class IByteArrivanoSulDiscoPrimaDiSostituire(unittest.TestCase):
         self.assertTrue((self.cartella / "senza.json").is_file())
 
     def test_quello_che_scrivono_finisce_a_capo_come_tutto_il_resto(self) -> None:
-        """In binario e LF: su Windows `write_text` farebbe `\r\n`, e ci sono
+        """Written files must use LF line endings, in binary, not `write_text`'s
+        platform-dependent newline translation.
 
-        cinque collaudi che pretendono il contrario sui file che il programma
-        si riscrive.  `atomic_json` e `save_history` passavano da `write_text`.
+        On Windows, `write_text` would emit `\r\n`, which other tests reading
+        these files back assume never happens. `atomic_json` and
+        `save_history` must write bytes directly.
 
-        ⚠ **Fuori da Windows questa prova non puo' fallire**: `write_text` non
-        traduce niente su POSIX, quindi rimettendo il difetto resta verde. Vale
-        sulla CI, che gira su `windows-latest` apposta per somigliare al PC del
-        negozio; sul Mac e' un promemoria, non una difesa. Il progetto ha gia'
-        lo stesso caso in `test_proprieta_non_provate`, e lo dichiara: qui
-        mancava.
+        This test can only fail on Windows: `write_text` doesn't translate
+        anything on POSIX, so a regression here stays green on macOS or
+        Linux. It's meaningful on CI, which runs `windows-latest` to match
+        the store's OS; on other platforms it's not a real check, a gap this
+        project also documents in `test_proprieta_non_provate`.
         """
 
         server.atomic_json(self.cartella / "state.json", {"products": [1, 2]})

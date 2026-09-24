@@ -1,9 +1,9 @@
-"""Spostamento massivo dei prodotti da un fornitore a un altro (preventivo).
+"""Tests for the bulk product move preview (moving products from one supplier to another).
 
-Il preventivo e' l'unico punto in cui l'utente vede quanto costa cambiare
-fornitore prima di decidere: se i numeri qui non coincidono con quelli della
-compilazione, l'utente sceglie sulla base di un conto sbagliato. Questi test
-difendono proprio quella coincidenza.
+The preview is the only place where the user sees the cost of changing
+supplier before deciding; if these numbers don't match what the final order
+compilation produces, the user decides based on a wrong estimate. These
+tests protect that match.
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ def offer(
     requires_confirmation: bool = False,
     units_per_order_unit: float | None = None,
 ) -> dict[str, Any]:
-    """Offerta di un fornitore su un prodotto, nella forma prodotta dalla pipeline."""
+    """Build a supplier offer for a product, shaped like the pipeline's output."""
 
     built = {
         "supplierId": supplier,
@@ -66,11 +66,11 @@ def offer(
 
 
 def move_review() -> dict[str, Any]:
-    """Confronto sintetico costruito attorno alla trappola del prezzo al pezzo.
+    """Synthetic comparison built around the per-piece price trap.
 
-    Su PASTA il collo piu' economico e' quello di cipresso (7,20 euro) ma il
-    suo pezzo e' il piu' caro (1,20 euro): chi confronta i totali in colli
-    consiglia cipresso, chi confronta il prezzo al pezzo consiglia betulla.
+    On PASTA the cheapest carton is cipresso's (7.20 EUR) but its per-piece
+    price is the highest (1.20 EUR): comparing carton totals recommends
+    cipresso, comparing per-piece price recommends betulla.
     """
 
     return {
@@ -140,8 +140,8 @@ def move_review() -> dict[str, Any]:
                 "offers": [
                     offer("larice", unit_price=1.0, factor=10, order_price=10.0),
                     offer("betulla", unit_price=0.8, factor=10, order_price=8.0),
-                    # Riga presente nel listino ma dichiarata non ordinabile:
-                    # e' la piu' economica di tutte e non deve essere scelta.
+                    # Present in the price list but flagged not orderable: it's
+                    # the cheapest of the three and must not be picked.
                     offer("cipresso", unit_price=0.5, factor=10, order_price=5.0, available=False),
                 ],
             },
@@ -155,10 +155,10 @@ def move_review() -> dict[str, Any]:
                 "selectedSupplierId": "larice",
                 "confirmed": True,
                 "requiresConfirmation": False,
-                # Un espositore si ordina a espositori e si consegna a pezzi:
-                # `factor` sono i pezzi che contiene, `unitPriceNet` il prezzo
-                # del pezzo, `orderUnitPriceNet` quello dell'espositore intero.
-                # 100 / 24 = 4,1667 e 90 / 24 = 3,75.
+                # A display is ordered as displays but delivered as pieces:
+                # `factor` is the pieces it contains, `unitPriceNet` is the
+                # per-piece price, `orderUnitPriceNet` is the whole display's
+                # price. 100 / 24 = 4.1667 and 90 / 24 = 3.75.
                 "offers": [
                     offer("larice", unit_price=4.1667, factor=24, order_price=100.0, units_per_order_unit=24),
                     offer("betulla", unit_price=3.75, factor=24, order_price=90.0, units_per_order_unit=24),
@@ -214,8 +214,8 @@ def move_review() -> dict[str, Any]:
     }
 
 
-# Quantita' decise dall'utente: sono colli (espositori per l'espositore) e non
-# cambiano mai per effetto di uno spostamento.
+# Quantities the user decided: cartons (displays for the display row), and
+# never changed by a supplier move.
 ORDERED = {
     "product:10": 5,
     "product:11": 3,
@@ -227,9 +227,9 @@ ORDERED = {
     "product:31": 0,
 }
 
-# Prezzo dell'unita' d'ordine per fornitore, ricopiato a mano dal confronto:
-# se il server cambiasse il modo di leggere i prezzi, questi numeri restano un
-# metro di paragone indipendente.
+# Order-unit price per supplier, copied by hand from the comparison: an
+# independent reference that stays correct even if the server's own price
+# reading changes.
 ORDER_UNIT_PRICE = {
     "product:10": {"larice": 12.0, "betulla": 21.6, "cipresso": 7.2},
     "product:11": {"larice": 12.0, "betulla": 9.0, "cipresso": 0.6},
@@ -250,16 +250,16 @@ class SilentHandler(SERVER.AppHandler):
 
 
 class MoveTestCase(unittest.TestCase):
-    """Impianto comune: confronto sintetico, store isolato, conti indipendenti."""
+    """Shared fixture: synthetic comparison, isolated store, independent totals."""
 
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.review_path = self.root / "review_data.json"
-        # Lo stato vive in una sottocartella "run": lo storico degli ordini
-        # viene ricavato da state_path.parent.parent e senza questo livello
-        # finirebbe fuori dalla cartella temporanea.
+        # State lives under a "run" subfolder: order history is derived from
+        # state_path.parent.parent, so without this level it would land
+        # outside the temp directory.
         self.run_dir = self.root / "run-corrente"
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.state_path = self.run_dir / "review_state.json"
@@ -282,7 +282,7 @@ class MoveTestCase(unittest.TestCase):
         quantities: dict[str, int] | None = None,
         run_id: str = RUN_ID,
     ) -> dict[str, Any]:
-        """Lo stesso identico snapshot che il browser manda a PUT /api/state."""
+        """Build the same snapshot payload the browser sends to PUT /api/state."""
 
         quantities = ORDERED if quantities is None else quantities
         products = []
@@ -323,10 +323,10 @@ class MoveTestCase(unittest.TestCase):
         return {str(item["productId"]): item for item in option["assignments"]}
 
     def order_total(self, moves: dict[str, str], quantities: dict[str, int] | None = None) -> float:
-        """Totale netto dell'ordine intero ricalcolato riga per riga dal listino.
+        """Recompute the whole order's net total row by row, from the price data.
 
-        Non usa nessuna funzione del server: e' il conto indipendente con cui
-        si verifica il preventivo.
+        Uses no server function; this is the independent computation the
+        preview result is checked against.
         """
 
         quantities = ORDERED if quantities is None else quantities
@@ -340,7 +340,7 @@ class MoveTestCase(unittest.TestCase):
         return round(total, 2)
 
     def tree_fingerprint(self) -> dict[str, tuple[int, str]]:
-        """Impronta di ogni file sotto la cartella di lavoro: data e contenuto."""
+        """Fingerprint every file under the working directory by mtime and content hash."""
 
         fingerprint = {}
         for path in sorted(self.root.rglob("*")):
@@ -353,9 +353,7 @@ class MoveTestCase(unittest.TestCase):
 
 
 class SupplierMoveTests(MoveTestCase):
-    # ------------------------------------------------------------------
-    # 1. Il totale del preventivo e' quello dell'ordine intero.
-    # ------------------------------------------------------------------
+    # -- 1. The preview total is the whole order's total. --
 
     def test_delta_net_coincide_con_la_somma_dei_totali_di_riga(self) -> None:
         result = self.preview()
@@ -375,8 +373,8 @@ class SupplierMoveTests(MoveTestCase):
                 atteso,
                 f"L'opzione {option['id']} non dichiara la differenza sull'ordine intero",
             )
-            # La stessa differenza deve leggersi nei totali di riga mostrati
-            # all'utente: le righe non spostate non cambiano di un centesimo.
+            # The same delta must show up in the per-row totals shown to the
+            # user: rows that don't move must not change by a cent.
             somma_righe = round(
                 sum(item["newLineNet"] for item in option["assignments"])
                 - sum(item["previousLineNet"] for item in option["assignments"]),
@@ -384,14 +382,12 @@ class SupplierMoveTests(MoveTestCase):
             )
             self.assertEqual(option["deltaNet"], somma_righe)
 
-        # Spostare tutto su betulla costa 11 euro in piu': va mostrato anche
-        # quando il numero e' positivo.
+        # Moving everything to betulla costs 11 euros more: must show up even
+        # when the number is positive.
         self.assertEqual(self.option(result, "betulla")["deltaNet"], 11.0)
         self.assertEqual(self.option(result, "cipresso")["deltaNet"], -24.0)
 
-    # ------------------------------------------------------------------
-    # 2. Chi non ha offerta alla destinazione resta dov'e'.
-    # ------------------------------------------------------------------
+    # -- 2. A product with no offer at the destination stays where it is. --
 
     def test_prodotto_senza_offerta_alla_destinazione_resta_dovera(self) -> None:
         opzione = self.option(self.preview(), "betulla")
@@ -402,33 +398,31 @@ class SupplierMoveTests(MoveTestCase):
         self.assertEqual(rimasti["product:12"]["reason"], "NESSUNA_OFFERTA")
         self.assertEqual(rimasti["product:12"]["productName"], "RISO")
 
-        # Non viene azzerato: le sue 2 confezioni continuano a pesare sul
-        # totale di larice anche dopo lo spostamento di tutto il resto.
+        # Not zeroed out: its 2 cartons keep counting toward larice's total
+        # even after everything else moves.
         larice = next(item for item in opzione["supplierTotalsAfter"] if item["supplierId"] == "larice")
         self.assertEqual(larice["netTotalAfter"], 24.0)
         self.assertEqual(opzione["movedCount"], 4)
         self.assertEqual(opzione["movableCount"], 5)
 
     def test_offerta_dichiarata_non_disponibile_non_e_una_destinazione(self) -> None:
-        # SALE ha su cipresso il prezzo piu' basso in assoluto, ma la riga e'
-        # dichiarata non ordinabile: spostarlo li' sarebbe un ordine impossibile.
+        # SALE has the lowest absolute price on cipresso, but that row is
+        # flagged not orderable: moving it there would be an impossible order.
         opzione = self.option(self.preview(), "cipresso")
 
         self.assertEqual(list(self.assignments_by_product(opzione)), ["product:10"])
         rimasti = {str(item["productId"]): str(item["reason"]) for item in opzione["leftBehind"]}
         self.assertEqual(rimasti["product:13"], "NESSUNA_OFFERTA")
 
-    # ------------------------------------------------------------------
-    # 3. La trappola del prezzo al pezzo.
-    # ------------------------------------------------------------------
+    # -- 3. The per-piece price trap. --
 
     def test_best_sceglie_sul_prezzo_al_pezzo_non_sul_prezzo_del_collo(self) -> None:
         opzione = self.option(self.preview(), "best")
         assegnazione = self.assignments_by_product(opzione)["product:10"]
 
-        # Collo cipresso 7,20 contro collo betulla 21,60: chi guarda i totali in
-        # colli sceglie cipresso. Ma il collo cipresso contiene 6 pezzi a 1,20
-        # e quello betulla ne contiene 24 a 0,90.
+        # Cipresso's carton is 7.20 against betulla's 21.60: comparing carton
+        # totals picks cipresso. But cipresso's carton holds 6 pieces at 1.20
+        # each, while betulla's holds 24 at 0.90 each.
         self.assertEqual(assegnazione["toSupplierId"], "betulla")
         self.assertEqual(assegnazione["previousFactor"], 12)
         self.assertEqual(assegnazione["newFactor"], 24)
@@ -437,8 +431,8 @@ class SupplierMoveTests(MoveTestCase):
         self.assertEqual(opzione["label"], "Migliore alternativa per ciascun prodotto")
 
     def test_best_puo_mandare_prodotti_diversi_su_fornitori_diversi(self) -> None:
-        # Se un prodotto sta meglio altrove, "best" non deve appiattire tutto
-        # sullo stesso fornitore.
+        # When a product is better off elsewhere, "best" must not flatten
+        # everything onto the same supplier.
         review = move_review()
         olio = next(item for item in review["products"] if item["id"] == "product:11")
         olio["offers"].append(offer("cipresso", unit_price=0.1, factor=6, order_price=0.6))
@@ -450,9 +444,7 @@ class SupplierMoveTests(MoveTestCase):
         self.assertEqual(assegnazioni["product:10"]["toSupplierId"], "betulla")
         self.assertEqual(assegnazioni["product:11"]["toSupplierId"], "cipresso")
 
-    # ------------------------------------------------------------------
-    # 4. Il preventivo non scrive niente.
-    # ------------------------------------------------------------------
+    # -- 4. The preview writes nothing to disk. --
 
     def test_il_preventivo_non_scrive_niente_su_disco(self) -> None:
         self.assertFalse(self.state_path.exists())
@@ -468,10 +460,10 @@ class SupplierMoveTests(MoveTestCase):
     def test_il_preventivo_non_modifica_uno_stato_gia_salvato(self) -> None:
         self.store.save_state(self.snapshot())
         salvato = json.loads(self.state_path.read_text(encoding="utf-8"))
-        # Marcatore che nessuna scrittura del server ricopierebbe. Serve
-        # perche' confrontare data e contenuto non basta: due salvataggi molto
-        # ravvicinati possono produrre un file identico e la riscrittura
-        # passerebbe inosservata.
+        # A marker no server write would ever reproduce. Needed because
+        # comparing mtime and content isn't enough: two saves close in time
+        # can produce an identical file, and a silent rewrite would pass
+        # unnoticed.
         salvato["marcatoreDelTest"] = "questo file non va riscritto"
         self.state_path.write_text(json.dumps(salvato), encoding="utf-8")
         prima = self.tree_fingerprint()
@@ -483,9 +475,7 @@ class SupplierMoveTests(MoveTestCase):
         self.assertEqual(rimasto.get("marcatoreDelTest"), "questo file non va riscritto")
         self.assertEqual(self.tree_fingerprint(), prima, "Il preventivo ha riscritto lo stato salvato")
 
-    # ------------------------------------------------------------------
-    # 5. Totali per fornitore e soglie.
-    # ------------------------------------------------------------------
+    # -- 5. Per-supplier totals and thresholds. --
 
     def test_totali_per_fornitore_e_superamento_soglia(self) -> None:
         opzione = self.option(self.preview(), "betulla")
@@ -496,8 +486,8 @@ class SupplierMoveTests(MoveTestCase):
         self.assertEqual(righe["larice"]["netTotalBefore"], 360.0)
         self.assertEqual(righe["larice"]["netTotalAfter"], 24.0)
         self.assertEqual(righe["larice"]["threshold"], 100.0)
-        # Svuotando larice si perde una soglia gia' raggiunta: e' l'avviso piu'
-        # importante di tutta la schermata.
+        # Emptying larice loses a threshold it already met: the single most
+        # important warning on this screen.
         self.assertTrue(righe["larice"]["meetsThresholdBefore"])
         self.assertFalse(righe["larice"]["meetsThresholdAfter"])
 
@@ -507,7 +497,7 @@ class SupplierMoveTests(MoveTestCase):
         self.assertFalse(righe["betulla"]["meetsThresholdBefore"])
         self.assertTrue(righe["betulla"]["meetsThresholdAfter"])
 
-        # I totali dopo lo spostamento ricompongono l'ordine intero.
+        # The per-supplier totals after the move must add up to the whole order.
         dopo = self.order_total({
             "product:10": "betulla",
             "product:11": "betulla",
@@ -518,8 +508,8 @@ class SupplierMoveTests(MoveTestCase):
         self.assertEqual(round(righe["larice"]["netTotalAfter"] + righe["betulla"]["netTotalAfter"], 2), dopo)
 
     def test_un_fornitore_senza_ordine_non_ha_soglia_da_raggiungere(self) -> None:
-        # cipresso non compare nell'ordine di partenza: prima dello spostamento
-        # non e' "sotto soglia", semplicemente non ha un ordine.
+        # cipresso doesn't appear in the starting order: before the move it's
+        # not "below threshold", it simply has no order.
         opzione = self.option(self.preview(), "cipresso")
         righe = {str(item["supplierId"]): item for item in opzione["supplierTotalsAfter"]}
 
@@ -529,27 +519,25 @@ class SupplierMoveTests(MoveTestCase):
         self.assertEqual(righe["cipresso"]["threshold"], 30.0)
         self.assertTrue(righe["cipresso"]["meetsThresholdAfter"])
 
-    # ------------------------------------------------------------------
-    # Il resto del contratto.
-    # ------------------------------------------------------------------
+    # -- The rest of the contract. --
 
     def test_il_numero_di_colli_e_di_espositori_non_cambia_mai(self) -> None:
         assegnazioni = self.assignments_by_product(self.option(self.preview(), "betulla"))
 
-        # L'espositore resta 2 espositori: 2 x 100 diventa 2 x 90.
+        # The display stays 2 displays: 2 x 100 becomes 2 x 90.
         espositore = assegnazioni["display:espositore"]
         self.assertEqual(espositore["previousLineNet"], 200.0)
         self.assertEqual(espositore["newLineNet"], 180.0)
-        # L'unita' d'ordine e' l'espositore, ma la merce consegnata sono i suoi
-        # pezzi: il fattore e' 24 da entrambi i fornitori, quindi i colli non
-        # cambiano e nemmeno i pezzi.
+        # The order unit is the display, but the delivered goods are its
+        # pieces: the factor is 24 from both suppliers, so neither the carton
+        # count nor the piece count changes.
         self.assertEqual(espositore["previousFactor"], 24)
         self.assertEqual(espositore["newFactor"], 24)
         self.assertFalse(espositore["factorChanged"])
         self.assertEqual(espositore["previousPieces"], 48)
         self.assertEqual(espositore["newPieces"], 48)
 
-        # SALE: stesso numero di colli, stesso fattore, solo prezzo diverso.
+        # SALE: same carton count, same factor, only the price changes.
         sale = assegnazioni["product:13"]
         self.assertEqual(sale["previousLineNet"], 40.0)
         self.assertEqual(sale["newLineNet"], 32.0)
@@ -632,8 +620,8 @@ class SupplierMoveTests(MoveTestCase):
         self.assertEqual(result["options"], [])
 
     def test_opzione_che_non_sposta_niente_non_viene_proposta(self) -> None:
-        # Con il solo RISO ordinato non esiste nessuna destinazione: niente
-        # opzioni da mostrare, e il prodotto resta ordinato a larice.
+        # With only RISO ordered, there's no valid destination: no options to
+        # show, and the product stays ordered from larice.
         result = self.preview(quantities={"product:12": 2})
 
         self.assertEqual(result["movableCount"], 1)
@@ -641,13 +629,12 @@ class SupplierMoveTests(MoveTestCase):
         self.assertEqual(result["currentNetTotal"], 24.0)
 
     def test_le_opzioni_si_ordinano_sul_prezzo_al_pezzo_non_sul_totale(self) -> None:
-        """L'ordine di lettura non può essere il totale speso.
+        """Options can't be ranked by total spend alone.
 
-        Ordini che contengono quantità di merce diverse non sono confrontabili
-        sul totale: è la stessa trappola del confronto fra offerte, spostata
-        nell'elenco delle destinazioni. CIPRESSO fa spendere meno in assoluto
-        ma consegna meno merce e fa pagare di più ogni pezzo, quindi non può
-        comparire per primo.
+        Orders that deliver different quantities of goods aren't comparable
+        by total: it's the same trap as comparing offers, applied to the
+        list of destinations. CIPRESSO spends less overall but delivers less
+        goods and costs more per piece, so it must not rank first.
         """
 
         result = self.preview()
@@ -658,18 +645,18 @@ class SupplierMoveTests(MoveTestCase):
 
         cipresso = self.option(result, "cipresso")
         betulla = self.option(result, "betulla")
-        # La prova che l'ordine non è casuale: cipresso è più economico sul
-        # totale e più caro al pezzo. Se qualcuno rimettesse l'ordinamento sul
-        # totale, cipresso tornerebbe davanti.
+        # Proof the ordering isn't arbitrary: cipresso is cheaper by total
+        # and more expensive per piece. Ranking by total again would put
+        # cipresso back in front.
         self.assertLess(cipresso["deltaNet"], betulla["deltaNet"])
         self.assertGreater(cipresso["deltaCostPerPiece"], betulla["deltaCostPerPiece"])
 
     def test_ogni_opzione_dichiara_la_merce_consegnata_oltre_alla_spesa(self) -> None:
-        """La differenza di spesa da sola inganna: serve anche la merce.
+        """The spend delta alone is misleading; the goods delta must ship with it.
 
-        A parità di colli i pezzi consegnati cambiano con il fornitore. Senza
-        deltaPieces l'interfaccia può scrivere "si risparmia" su un'opzione che
-        consegna meno roba.
+        At the same carton count, delivered pieces differ by supplier.
+        Without `deltaPieces`, the UI could label an option as savings when
+        it actually delivers less goods.
         """
 
         result = self.preview()
@@ -681,25 +668,25 @@ class SupplierMoveTests(MoveTestCase):
             cipresso["deliveredPiecesAfter"] - cipresso["deliveredPiecesBefore"],
             cipresso["deltaPieces"],
         )
-        # Il prezzo al pezzo dichiarato deve tornare con la spesa dichiarata.
+        # The declared per-piece price must be consistent with the declared spend.
         moved = cipresso["assignments"]
         speso_dopo = round(sum(item["newLineNet"] for item in moved), 2)
         pezzi_dopo = sum(item["newPieces"] for item in moved)
         self.assertAlmostEqual(cipresso["costPerPieceAfter"], speso_dopo / pezzi_dopo, places=2)
 
     def test_un_fornitore_senza_ordine_dichiara_di_non_averne_avuto_uno(self) -> None:
-        """Senza hadOrderBefore la pagina racconta il contrario del vero.
+        """Without `hadOrderBefore` the page would state the opposite of the truth.
 
-        meets_threshold segue la regola della compilazione, per cui chi non
-        ordina niente non è "sotto soglia": restituisce quindi vero anche per
-        un fornitore a zero. Letto da solo, quel vero diventa "prima la soglia
-        la raggiungeva", e l'interfaccia scrive che un fornitore partito da
-        zero è sceso e non raggiunge più una soglia che non ha mai avuto.
+        `meets_threshold` follows the order-compilation rule that a supplier
+        with no order at all isn't "below threshold", so it also returns
+        true for a supplier at zero. Read alone, that true reads as "it used
+        to meet the threshold", and the UI would then claim a supplier that
+        started at zero dropped below a threshold it never had.
         """
 
         result = self.preview()
-        # Si guarda l'opzione CIPRESSO, dove cipresso è la destinazione: prima
-        # non aveva nessun prodotto ordinato.
+        # Looking at the CIPRESSO option, where cipresso is the destination:
+        # it had no ordered product before the move.
         righe = {str(row["supplierId"]): row for row in self.option(result, "cipresso")["supplierTotalsAfter"]}
         cipresso = righe["cipresso"]
 
@@ -712,18 +699,19 @@ class SupplierMoveTests(MoveTestCase):
         self.assertTrue(larice["hadOrderBefore"])
 
     def test_una_conferma_mancante_altrove_non_impedisce_il_preventivo(self) -> None:
-        """Un preventivo non scrive niente: non può essere rifiutato per questo.
+        """A preview writes nothing, so it must not be rejected for a missing confirmation elsewhere.
 
-        Se una conferma manca su un prodotto di un ALTRO fornitore, l'utente si
-        vedeva rifiutare il calcolo con un messaggio tecnico e senza il nome del
-        prodotto, in uno stato che l'applicazione stessa lascia raggiungere.
+        A missing confirmation on a product belonging to a DIFFERENT
+        supplier must not reject the whole preview with a technical message
+        and no product name, in a state the application itself allows the
+        user to reach.
         """
 
         request = self.payload()
         for decision in request["products"]:
             if decision["id"] == "product:11":
-                # L'offerta betulla di questo prodotto chiede conferma: qui non
-                # viene data, ed è un prodotto che non appartiene a larice.
+                # This product's betulla offer requires confirmation; here it
+                # isn't given, and the product doesn't belong to larice.
                 decision["selectedSupplierId"] = "betulla"
                 decision["confirmed"] = False
 
@@ -758,7 +746,7 @@ class SupplierMoveTests(MoveTestCase):
 
 
 class SupplierMoveHttpTests(MoveTestCase):
-    """La rotta vera: stesso contratto, più i codici di risposta."""
+    """Same contract as `SupplierMoveTests`, exercised through the real HTTP route, plus status codes."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -817,14 +805,13 @@ class SupplierMoveHttpTests(MoveTestCase):
 
 
 def espositori_review() -> dict[str, Any]:
-    """Due espositori dello stesso prodotto con un numero di pezzi diverso.
+    """Two display offers for the same product with a different piece count.
 
-    E' la trappola vera degli espositori, la stessa del collo ma piu' grossa:
-    l'espositore di BETULLA costa meno da comprare (50 contro 60) e di piu' da
-    consumare (1,04 al pezzo contro 0,4167), perche' ne contiene 48 invece di
-    144. Chi confronta gli espositori interi consiglia BETULLA; chi confronta la
-    merce consiglia LARICE, ed e' quello che la pagina scrive sullo stesso
-    schermo del preventivo.
+    The same per-piece-price trap as the carton case, but larger: BETULLA's
+    display costs less to buy (50 against 60) and more to consume (1.04 per
+    piece against 0.4167), because it holds 48 pieces instead of 144.
+    Comparing whole displays recommends BETULLA; comparing the goods
+    recommends LARICE, which is what the preview page must show.
     """
 
     return {
@@ -848,11 +835,11 @@ def espositori_review() -> dict[str, Any]:
                 "requiresConfirmation": False,
                 "offers": [
                     offer("cipresso", unit_price=1.5, factor=40, order_price=60.0),
-                    # 60 / 144 = 0,4167 al pezzo: l'espositore piu' caro dei tre
-                    # e la merce piu' economica.
+                    # 60 / 144 = 0.4167 per piece: the most expensive display
+                    # of the three, and the cheapest goods.
                     offer("larice", unit_price=0.4167, factor=144, order_price=60.0),
-                    # 50 / 48 = 1,0417 al pezzo: l'espositore piu' economico e
-                    # la merce piu' cara.
+                    # 50 / 48 = 1.0417 per piece: the cheapest display, and
+                    # the most expensive goods.
                     offer("betulla", unit_price=1.0417, factor=48, order_price=50.0),
                 ],
             },
@@ -862,13 +849,13 @@ def espositori_review() -> dict[str, Any]:
 
 
 class EspositoriPezziEPrezzoTests(MoveTestCase):
-    """La «Migliore alternativa» sceglie sul prezzo al pezzo anche fra espositori.
+    """"Best alternative" must rank by per-piece price for display offers too.
 
-    Fino al 14 agosto 2026 `display_offer` scriveva `quantityFactor: 1` e il
-    prezzo dell'espositore intero in `unitPriceNet`: il preventivo ordinava
-    quindi sul prezzo dell'espositore, cioe' su un numero che non e'
-    confrontabile fra espositori di taglia diversa, e consigliava il contrario
-    di quello che consigliava la pagina.
+    `display_offer` must not write `quantityFactor: 1` with the whole
+    display's price in `unitPriceNet`: that would rank offers by the display
+    price, a number that isn't comparable across displays of different
+    sizes, and could recommend the opposite of what the comparison page
+    itself recommends.
     """
 
     def setUp(self) -> None:
@@ -901,11 +888,11 @@ class EspositoriPezziEPrezzoTests(MoveTestCase):
         self.assertEqual(assegnazione["newFactor"], 144)
 
     def test_l_opzione_col_totale_piu_basso_non_e_quella_consigliata(self) -> None:
-        """La prova che l'ordinamento non e' tornato sul totale.
+        """Regression guard: catches a ranking that falls back to total price.
 
-        BETULLA fa spendere meno (150 contro 180) e consegna meno merce: se
-        qualcuno rimettesse il confronto sul prezzo dell'espositore intero,
-        questo test tornerebbe rosso da solo.
+        BETULLA spends less (150 against 180) and delivers less goods; if
+        the ranking went back to the whole display's price, this test would
+        fail on its own.
         """
 
         risultato = self.preview("cipresso")
@@ -919,7 +906,7 @@ class EspositoriPezziEPrezzoTests(MoveTestCase):
     def test_i_pezzi_dichiarati_sono_pezzi_e_non_espositori(self) -> None:
         opzione = self.option(self.preview("cipresso"), "larice")
 
-        # 3 espositori restano 3 espositori; la merce passa da 3x40 a 3x144.
+        # 3 displays stay 3 displays; the goods go from 3x40 to 3x144.
         self.assertEqual(opzione["deliveredPiecesBefore"], 120)
         self.assertEqual(opzione["deliveredPiecesAfter"], 432)
         self.assertEqual(opzione["deltaPieces"], 312)
@@ -927,7 +914,7 @@ class EspositoriPezziEPrezzoTests(MoveTestCase):
         self.assertEqual(opzione["assignments"][0]["newPieces"], 432)
 
     def test_il_totale_resta_quello_dell_espositore_intero(self) -> None:
-        """I pezzi cambiano il confronto, non la fattura: si compra l'espositore."""
+        """Piece count changes the comparison, not the invoice: what's bought is the display."""
 
         opzione = self.option(self.preview("cipresso"), "larice")
 

@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
-"""Il magazzino delle conferme attaccato al servizio.
+"""Tests for the confirmation store wired into the service.
 
-`app/conferme.py` esisteva dal 15 agosto 2026, con 48 prove sue, e non era
-collegato a niente: le conferme vivevano solo dentro `state.json`, cioe'
-appese al **numero di riga** del prodotto nell'export del gestionale. Misurato
-sui due export veri: dei 457 identificativi presenti in tutti e due, 449
-portano un articolo diverso. Una risposta data lunedi' o si perdeva, o —
-peggio — si riapplicava a merce mai vista.
+Before this wiring, confirmations lived only inside `state.json`, keyed to
+the product's row number in the management-software export. Measured on real
+exports: of the 457 ids present in both, 449 carry a different item. An
+answer given one week would either get lost, or worse, reapply to an item
+that was never actually confirmed.
 
-Qui si prova quello che l'aggancio deve garantire, e nient'altro:
+This module tests exactly what the wiring has to guarantee, nothing more:
 
-1. rispondere «si'» **scrive** nel magazzino;
-2. la risposta vale per l'**articolo**, quindi sopravvive all'export nuovo e
-   al numero di riga nuovo;
-3. una riga di listino che porta un **altro** articolo non eredita niente;
-4. togliere la spunta **revoca**, mentre una scadenza non revoca niente —
-   sono le due cose che la pagina manda scritte allo stesso modo;
-5. un magazzino che non si apre **non ferma il salvataggio** e lo dice.
+1. answering "yes" writes to the store;
+2. the answer is keyed to the item, so it survives a new export and a new row
+   number;
+3. a price-list row carrying a different item inherits nothing;
+4. unchecking a confirmation revokes it, while an expiry does not — the page
+   sends both as the same `confirmed: false` payload;
+5. a store that fails to open does not block saving, and says so.
 """
 
 from __future__ import annotations
@@ -40,7 +39,7 @@ from server import ReviewStore  # noqa: E402
 
 
 def offerta(supplier: str, *, ean: str, descrizione: str, riga: int, prezzo: float = 12.0) -> dict[str, Any]:
-    """Un'offerta che **chiede conferma**: è il caso in cui il magazzino serve."""
+    """An offer that requires confirmation: the case the store exists for."""
 
     return {
         "supplierId": supplier,
@@ -86,7 +85,7 @@ def confronto(prodotti: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 class BancoDelleConferme(unittest.TestCase):
-    """Un negozio vero, con il magazzino delle conferme nella sua cartella."""
+    """A real store instance, with the confirmation store in its own folder."""
 
     def setUp(self) -> None:
         temporanea = tempfile.TemporaryDirectory()
@@ -158,12 +157,12 @@ class RispondereSiSiScriveTests(BancoDelleConferme):
         self.assertEqual(righe[0]["valida_dal"], esito["savedAt"])
 
     def test_lo_stesso_salvataggio_ripetuto_non_riempie_lo_storico(self) -> None:
-        """L'autosalvataggio della pagina batte ogni 450 ms.
+        """The page autosaves every 450 ms.
 
-        `ricorda` non riscrive una risposta identica, ed è la difesa che rende
-        possibile chiamarlo a ogni salvataggio senza pensarci: senza,
-        rimanere fermi sulla pagina scriverebbe centinaia di righe di storico
-        che raccontano decisioni mai prese.
+        `ricorda` doesn't rewrite an identical answer, which is what makes it
+        safe to call on every save without special-casing: otherwise, sitting
+        on the page would write hundreds of history rows describing decisions
+        that were never made.
         """
 
         store = self.negozio(confronto([
@@ -189,14 +188,12 @@ class RispondereSiSiScriveTests(BancoDelleConferme):
         self.assertEqual(self.conferme(), [])
 
     def test_un_abbinamento_certo_non_diventa_una_conferma(self) -> None:
-        """⚠ Il filtro che tiene leggibile il magazzino.
+        """The filter that keeps the store readable.
 
-        Il confronto marca `confirmed` anche sugli abbinamenti che nessuno ha
-        dovuto confermare — sono la stragrande maggioranza — e la pagina li
-        rimanda indietro così. Senza il filtro, un ordine di 450 righe
-        scriverebbe 450 «risposte» mai date, e le poche vere non si
-        troverebbero più. Una memoria che l'utente non può rileggere non è
-        una memoria.
+        The comparison marks `confirmed` even on matches nobody had to
+        confirm (the large majority), and the page sends them back that way.
+        Without this filter, a 450-row order would write 450 "answers" that
+        were never actually given, burying the few real ones.
         """
 
         certa = offerta("larice", ean="8000000000010", descrizione="TONNO", riga=42)
@@ -211,11 +208,12 @@ class RispondereSiSiScriveTests(BancoDelleConferme):
 
 
 class LaConfermaSopravviveAllExportNuovoTests(BancoDelleConferme):
-    """Il punto di tutto il magazzino, provato sul caso vero.
+    """The whole point of the store, tested on the real case.
 
-    La settimana dopo l'export del gestionale è un altro file: lo stesso
-    articolo sta su un'altra riga, quindi ha un altro identificativo e la sua
-    decisione non esiste. Prima la domanda tornava; adesso no.
+    The next week's management-software export is a different file: the same
+    item sits on a different row, so it gets a different id and its decision
+    would otherwise not exist. Before this store, the question came back
+    every week; now it doesn't.
     """
 
     ARTICOLO = ("TONNO MAR BLUE 3X80", "8000000000010")
@@ -228,14 +226,14 @@ class LaConfermaSopravviveAllExportNuovoTests(BancoDelleConferme):
         store.save_state(self.scelte("product:3", fornitore="larice", quantita=2, confermato=True))
         self.chiudi(store)
         store._conferme = None
-        # L'export nuovo cancella lo stato: è quello che fa il ricalcolo.
+        # A new export deletes the state: that's what a recompute does.
         store.state_path.unlink()
 
     def test_la_riga_nuova_dello_stesso_articolo_e_gia_confermata(self) -> None:
         self.settimana_prima()
 
-        # Stesso articolo, altro numero di riga nel gestionale **e** altra riga
-        # di listino: l'identità è il codice a barre più il nome, non la riga.
+        # Same item, different row number in the management software and a
+        # different price-list row: identity is barcode plus name, not row.
         store = self.negozio(confronto([
             prodotto("product:517", *self.ARTICOLO, [offerta("larice", **self.OFFERTA)], riga=517),
         ]))
@@ -246,15 +244,15 @@ class LaConfermaSopravviveAllExportNuovoTests(BancoDelleConferme):
         self.assertTrue(prodotti[0]["confirmation"]["since"])
 
     def test_e_la_compilazione_non_richiede_di_riconfermare(self) -> None:
-        """La catena intera, come la percorre la pagina.
+        """The full chain, as the page actually walks it.
 
-        ⚠ Il magazzino semina `product.confirmed` in `review()`; `snapshot()`
-        rimanda indietro **quel** campo senza toccarlo (`app.js:1254`), e il
-        cancello della compilazione legge lo snapshot. Il magazzino di
-        proposito non viene riguardato al salvataggio: se potesse dire di sì
-        anche lì, una spunta appena tolta verrebbe rimessa dal ricordo di ieri
-        nello stesso salvataggio in cui l'utente l'ha tolta — cioè la revoca
-        non esisterebbe. Questo test percorre la catena vera invece di saltarla.
+        The store seeds `product.confirmed` in `review()`; `snapshot()` sends
+        that same field back unchanged (`app.js:1586`), and the compile gate
+        reads the snapshot. The store is deliberately not consulted again on
+        save: if it were, a checkbox the user just unchecked would be put back
+        by yesterday's memory in the same save that removed it, meaning
+        revocation couldn't work. This test walks the real chain instead of
+        stubbing it out.
         """
 
         self.settimana_prima()
@@ -275,12 +273,13 @@ class LaConfermaSopravviveAllExportNuovoTests(BancoDelleConferme):
         self.assertTrue(clean["products"][0]["confirmed"])
 
     def test_una_riga_di_listino_con_un_altro_articolo_non_eredita_niente(self) -> None:
-        """⚠ Il confine, ed è quello che rende il magazzino sicuro.
+        """The boundary that makes the store safe.
 
-        La conferma vale per la corrispondenza «questo mio articolo ↔ quella
-        riga del fornitore». Se la riga di listino porta merce diversa, la
-        risposta di prima non la copre e la domanda torna: perdere una
-        conferma costa un clic, applicarne una sbagliata costa un ordine.
+        A confirmation is valid for the match "this item of mine to that
+        supplier row". If the price-list row now carries a different item,
+        the previous answer doesn't cover it and the question comes back:
+        losing a confirmation costs a click, applying a wrong one costs an
+        order.
         """
 
         self.settimana_prima()
@@ -302,12 +301,12 @@ class LaConfermaSopravviveAllExportNuovoTests(BancoDelleConferme):
 
 
 class RevocareSiPuoScadereNoTests(BancoDelleConferme):
-    """Le due cose che la pagina manda scritte allo stesso modo.
+    """The two cases the page sends as the same payload.
 
-    `confirmed: false` arriva sia quando l'utente toglie la spunta, sia quando
-    il ricalcolo ha fatto scadere la conferma perché la riga porta un altro
-    articolo. Trattarle allo stesso modo svuoterebbe il magazzino proprio nella
-    settimana in cui deve servire.
+    `confirmed: false` arrives both when the user unchecks the box and when a
+    recompute expired the confirmation because the row now carries a
+    different item. Treating them the same way would empty the store right
+    when it's supposed to help.
     """
 
     ARTICOLO = ("TONNO MAR BLUE 3X80", "8000000000010")
@@ -333,11 +332,11 @@ class RevocareSiPuoScadereNoTests(BancoDelleConferme):
         self.assertTrue(righe[0]["valida_fino_a"])
 
     def test_una_conferma_scaduta_dal_ricalcolo_resta_in_vigore(self) -> None:
-        """⚠ Il caso che il difetto avrebbe distrutto.
+        """The case a regression here would silently break.
 
-        Lo stato arriva senza `confirmedArticle` — è quello che il ricalcolo
-        lascia quando fa scadere una conferma — e con `confirmed: false`. Non è
-        l'utente che ha cambiato idea: la memoria non si tocca.
+        The state arrives without `confirmedArticle` (what a recompute leaves
+        behind when it expires a confirmation) and with `confirmed: false`.
+        The user hasn't changed their mind, so the store must not be touched.
         """
 
         stato = json.loads(self.store.state_path.read_text(encoding="utf-8"))
@@ -357,13 +356,13 @@ class RevocareSiPuoScadereNoTests(BancoDelleConferme):
 
 
 class UnMagazzinoRottoNonFermaIlProgrammaTests(BancoDelleConferme):
-    """Il file non si apre: si continua senza memoria, e si dice.
+    """The file won't open: the app keeps going without memory, and says so.
 
-    Rispondere «nessuna conferma» in silenzio farebbe tornare tutte le domande
-    senza spiegare perché, e l'utente le rifarebbe a mano credendo che il
-    programma non avesse mai saputo niente. Ma **non** si ferma il salvataggio:
-    un `PUT /api/state` che fallisce non perde una risposta, perde tutte
-    quelle che vengono dopo.
+    Silently reporting "no confirmations" would bring back every question
+    with no explanation, and the user would redo them by hand assuming the
+    app had never known anything. Saving must not be blocked either: a failed
+    `PUT /api/state` wouldn't just lose one answer, it would lose every one
+    that comes after.
     """
 
     def negozio_rotto(self) -> ReviewStore:
@@ -399,8 +398,8 @@ class UnMagazzinoRottoNonFermaIlProgrammaTests(BancoDelleConferme):
         self.assertFalse(voce["blocking"])
 
     def test_il_file_non_si_riapre_a_ogni_richiesta(self) -> None:
-        """Un guasto si dice una volta: riprovare a ogni prodotto costerebbe
-        un tentativo di apertura per riga di confronto."""
+        """A failure is reported once; retrying per product would cost one
+        open attempt per comparison row."""
 
         store = self.negozio_rotto()
         store.review()
@@ -410,14 +409,14 @@ class UnMagazzinoRottoNonFermaIlProgrammaTests(BancoDelleConferme):
 
 
 class IlFileSiCreaSoloSeServeESiRestituisceTests(BancoDelleConferme):
-    """⚠ Due difese che solo la **suite intera** ha fatto emergere.
+    """Two safeguards that only surfaced by running the whole suite.
 
-    SQLite tiene il file aperto finché la connessione vive, e su Windows un
-    file aperto non si cancella e non si rinomina — compresa la cartella che lo
-    contiene. Alla prima versione dell'aggancio il magazzino si apriva a ogni
-    salvataggio, anche quando non c'era niente da ricordare: ventinove prove
-    morivano alla pulizia della cartella temporanea con «Il file è utilizzato
-    da un altro processo», e nessun test mirato lo vedeva.
+    SQLite keeps the file open for as long as the connection lives, and on
+    Windows an open file can't be deleted or renamed, including its parent
+    folder. In an earlier version of this wiring, the store opened on every
+    save, even with nothing to remember: dozens of unrelated tests failed at
+    temp-folder cleanup with a file-in-use error, and no single targeted test
+    caught it.
     """
 
     def test_un_programma_senza_conferme_non_crea_nessun_file(self) -> None:
@@ -440,11 +439,11 @@ class IlFileSiCreaSoloSeServeESiRestituisceTests(BancoDelleConferme):
 
         store.chiudi()
 
-        # Il file si può spostare: su Windows è la prova che nessuno lo tiene.
+        # The file can be moved: on Windows, that's proof nothing holds it open.
         spostato = self.conferme_path.with_suffix(".db.spostato")
         self.conferme_path.rename(spostato)
         self.assertTrue(spostato.is_file())
-        # E il negozio riapre da capo alla prima domanda, senza lamentarsi.
+        # The store reopens on the next request, without complaint.
         store.save_state(self.scelte(
             "product:3", fornitore="larice", quantita=3, confermato=True,
             versione=json.loads(store.state_path.read_text(encoding="utf-8"))["stateVersion"],
@@ -463,12 +462,11 @@ class IlFileSiCreaSoloSeServeESiRestituisceTests(BancoDelleConferme):
 
 
 class LeConfermeSiScaricanoTests(BancoDelleConferme):
-    """`conferme.db` e' la memoria «per sempre» del programma, e non si legge.
+    """`conferme.db` is the app's permanent memory, and it isn't human-readable.
 
-    `MagazzinoConferme.esporta` esisteva dal primo giorno, col suo perche'
-    scritto nel docstring — «un `.db` non si legge a occhio, e l'utente deve
-    poter guardare che cosa ha confermato» — e non la chiamava nessuno fuori
-    dai collaudi. Da qui l'esportazione da Impostazioni.
+    `MagazzinoConferme.esporta` existed from the start for exactly that
+    reason, but nothing outside the tests called it. Hence the export from
+    Settings.
     """
 
     def test_quello_che_si_scarica_e_quello_che_c_e_nel_magazzino(self) -> None:
@@ -485,18 +483,16 @@ class LeConfermeSiScaricanoTests(BancoDelleConferme):
         self.assertEqual(scaricate[0]["articolo"], "8000000000010|TONNO")
         self.assertTrue(scaricate[0]["accettata"])
         self.assertEqual(len(scaricate), 1)
-        # Che cosa e' stato confermato, non solo che qualcosa lo e' stato: senza
-        # questi due l'esportazione non permetterebbe di giudicare niente, che
-        # e' il difetto che le uguaglianze avevano fino al 18 agosto.
+        # What was confirmed, not just that something was: without these two
+        # fields the export wouldn't let anyone judge anything.
         self.assertIn("fornitore", scaricate[0])
         self.assertIn("articolo", scaricate[0])
 
     def test_su_un_programma_senza_conferme_si_scarica_un_elenco_vuoto(self) -> None:
-        """⚠ E soprattutto non nasce nessun `conferme.db`: aprire Impostazioni
-
-        su un'installazione nuova non deve creare la memoria delle conferme.
-        SQLite tiene il file aperto finche' la connessione vive, e su Windows
-        un file aperto blocca la cartella che lo contiene."""
+        """And no `conferme.db` gets created: opening Settings on a fresh
+        install must not create the confirmation store. SQLite keeps the
+        file open for as long as the connection lives, and on Windows an
+        open file locks its parent folder."""
 
         store = self.negozio(confronto([]))
 
@@ -504,10 +500,9 @@ class LeConfermeSiScaricanoTests(BancoDelleConferme):
         self.assertFalse(self.conferme_path.exists(), "un file che non serve non si crea")
 
     def test_un_file_che_non_e_un_database_non_fa_fallire_lo_scarico(self) -> None:
-        """Come per le uguaglianze: il motivo sta gia' fra gli avvisi del
-
-        confronto, e una pagina che non si apre per una memoria in meno sarebbe
-        sproporzionata."""
+        """Same as for equalities: the reason already surfaces among the
+        comparison warnings, and blocking the whole page over one missing
+        memory would be disproportionate."""
 
         self.conferme_path.parent.mkdir(parents=True, exist_ok=True)
         self.conferme_path.write_bytes(b"questo non e' un database SQLite")
@@ -516,10 +511,9 @@ class LeConfermeSiScaricanoTests(BancoDelleConferme):
         self.assertEqual(store.esporta_le_conferme(), ([], []))
 
     def test_un_magazzino_che_si_rompe_mentre_lo_si_legge_dice_perche(self) -> None:
-        """L'altro guasto: il file si apre e poi la lettura non riesce. Il
-
-        motivo non si butta — e' quello che finisce fra gli avvisi del
-        confronto, come per le uguaglianze."""
+        """The other failure mode: the file opens but the read then fails.
+        The reason isn't discarded; it ends up among the comparison
+        warnings, same as for equalities."""
 
         store = self.negozio(confronto([
             prodotto("product:3", "TONNO", "8000000000010",
@@ -539,10 +533,10 @@ class LeConfermeSiScaricanoTests(BancoDelleConferme):
 
 
 class LImprontaDelProdottoEQuellaDelModuloTests(BancoDelleConferme):
-    """Il servizio non ricalcola l'identità per conto suo.
+    """The service doesn't recompute item identity on its own.
 
-    Due definizioni di «stesso articolo» sono due verità sullo stesso dato, e
-    il giorno in cui una cambia il magazzino smette di combaciare in silenzio.
+    Two definitions of "same item" would be two sources of truth over the
+    same data, and the day one changes, the store would silently stop matching.
     """
 
     def test_la_chiave_scritta_e_quella_che_dichiara_conferme_py(self) -> None:

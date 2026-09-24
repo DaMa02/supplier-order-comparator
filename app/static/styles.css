@@ -1,30 +1,18 @@
 /* ---------------------------------------------------------------------------
-   La soglia dichiarata: nessun testo destinato a essere letto sta sotto
-   0,78rem, cioe' 12,5 px. Non c'e' `font-size` ne' su `:root` ne' su `body`,
-   quindi la base e' 16 px e i rem sono px per 16.
+   Minimum readable size: nothing meant to be read goes below 0.78rem
+   (12.5 px). No `font-size` on `:root` or `body`, so the base is the
+   browser default (16 px) and rem maps 1:1 to px/16. Applies everywhere,
+   including inside @media blocks, with no exceptions.
 
-   Vale per tutto il foglio, comprese le regole dentro le @media, e non ha
-   eccezioni. Ne aveva una — il campo dello sconto di testata — e non ce l'ha
-   piu': un valore che si legge non sta sotto la soglia nemmeno quando il campo
-   che lo contiene e' piccolo di proposito. Quel campo resta stretto e senza
-   imbottitura, che e' quello che la decisione scritta proteggeva.
+   The four responsive breakpoints, all `max-width` (desktop-first):
 
-   Chi aggiunge una regola nuova sotto questa soglia sta scrivendo qualcosa che
-   in negozio, su un monitor che nessuno ha calibrato, non si legge.
+     1050 px  supplier comparison drops from six columns to a stacked layout;
+              each number regains its own label
+      760 px  top bar, stepper and page switch to a single column
+      620 px  guided column mapping and declared equivalences
+      470 px  phone: buttons go full width
 
-   LE QUATTRO SOGLIE RESPONSIVE, e non ce ne sono altre. Sono tutte
-   `max-width`, cioe' il foglio parte dal desktop e stringe:
-
-     1050 px  il confronto fra fornitori smette di stare in sei colonne e si
-              impila; ogni numero si riprende la sua etichetta
-      760 px  la barra in alto, i passi e la pagina passano a una colonna
-      620 px  la mappatura guidata delle colonne e le uguaglianze dichiarate
-      470 px  telefono: i pulsanti diventano larghi quanto la riga
-
-   Erano cinque, e due distavano venti pixel: c'era anche `40rem`, che fa
-   640 px, per il solo blocco delle uguaglianze. Due punti di rottura dove chi
-   legge il foglio se ne aspetta uno, e uno in un'unita' diversa dalle altre
-   quattro. Una regola responsive nuova va in uno di questi quattro blocchi.
+   A new responsive rule belongs in one of these four blocks.
    --------------------------------------------------------------------------- */
 
 :root {
@@ -32,17 +20,16 @@
   --muted: #5d6a75;
   --line: #dce3e8;
   --line-strong: #c6d0d8;
-  /* Il confine di un controllo — campo, tendina, pulsante secondario, contatore
-     — non e' un separatore: e' il segno che dice dove si puo' premere, e WCAG
-     gli chiede 3:1. `--line-strong` su bianco vale 1,57:1, cioe' meta' soglia,
-     e su un monitor da negozio non calibrato sparisce. Questo vale 3,49:1 su
-     bianco e 3,25:1 su `--surface-soft`. `--line-strong` resta ai separatori e
-     ai contenitori, dove la soglia non si applica. */
+  /* Border of an interactive control (field, select, secondary button,
+     counter): not a divider but the affordance for where you can click, so
+     it needs WCAG's 3:1 non-text contrast. `--line-strong` is only 1.57:1 on
+     white. This is 3.49:1 on white and 3.25:1 on `--surface-soft`.
+     `--line-strong` stays for dividers and containers, where the ratio
+     doesn't apply. */
   --line-control: #7d8b98;
-  /* L'anello di fuoco: unico segnale per chi si muove con la tastiera, quindi
-     opaco. Lo stesso blu di prima al 35 % componeva #b7d0e0, che su bianco fa
-     1,60:1 dove WCAG ne chiede 3. Pieno fa 4,75:1 su bianco e 4,18:1 sullo
-     sfondo della pagina. */
+  /* Focus ring: the only signal for keyboard navigation, so it must be
+     opaque. Full color gives 4.75:1 on white and 4.18:1 on the page
+     background (WCAG requires 3:1). */
   --focus: #3179a6;
   --surface: #ffffff;
   --surface-soft: #f5f7f8;
@@ -55,41 +42,28 @@
   --amber-soft: #fff3df;
   --red: #b3261e;
   --red-soft: #fdecea;
-  /* Tre ombre e tre soli significati. Ce n'erano quindici valori distinti su
-     ventiquattro dichiarazioni, e cinque di quelli — alfa da 0,045 a 0,1 —
-     erano lo stesso livello scritto cinque volte. Su un monitor da negozio non
-     calibrato un'ombra all'8 % non si vede: quello che stacca un riquadro dal
-     fondo e' il bordo, e l'ombra serve dove qualcosa sta DAVVERO davanti a
-     qualcos'altro. */
+  /* Three shadow levels, three meanings, so a shadow only appears where
+     something genuinely floats above the page; a flat surface uses a
+     border instead — an 8% shadow doesn't register on an uncalibrated
+     store monitor. */
   --ombra-scheda: 0 1px 2px rgba(25, 45, 62, 0.05);
   --ombra-fascia: 0 2px 8px rgba(25, 45, 62, 0.08);
   --ombra-finestra: 0 22px 60px rgba(9, 27, 39, 0.3);
-  /* Nome vecchio, valore nuovo: `--shadow` e' usato in sei punti e sono tutti
-     riquadri appoggiati sul fondo, non cose che stanno davanti. */
+  /* Legacy alias: `--shadow` is used at six call sites, all flat cards. */
   --shadow: var(--ombra-scheda);
-  /* Due raggi, e la pillola. `--radius-lg` a 18 px faceva sembrare un pannello
-     di lavoro una scheda di marketing; adesso vale quanto `--radius-md`, cosi'
-     non c'e' da riscrivere undici regole per accorgersene. */
+  /* Two radii plus the pill shape. `--radius-lg` equals `--radius-md`. */
   --radius-lg: 10px;
   --radius-md: 10px;
   --radius-sm: 6px;
-  /* La spaziatura, su base 4 px. Non c'era nessuna scala: sessanta combinazioni
-     di padding e trentaquattro di gap, con numeri a due decimali arrivati uno
-     alla volta (0,48 / 0,55 / 0,58 / 0,62 / 0,68 / 0,72 rem). Si vedeva:
-     scendendo lungo la pagina 2 il bordo sinistro del testo cadeva su sette
-     posizioni diverse nell'arco di trenta pixel.
+  /* Spacing scale on a 4 px base. Not every rule in the sheet has been
+     migrated to these tokens yet; some literal padding/gap values remain.
+     Migrate a rule to the scale when you touch it, and don't introduce a
+     new value outside it.
 
-     ⚠ La scala c'e', la conversione delle regole esistenti no: i token si
-     usano in diciassette punti, e nel foglio restano sessantotto combinazioni
-     letterali di imbottitura. Chi tocca una regola la porti sui token; chi ne
-     scrive una nuova non usi un valore che non e' in questo elenco.
-
-     E la scala delle dimensioni del testo, che sono sette e non ventisette:
-     0,78 · 0,88 · 1 · 1,15 · 1,3 · 1,5 · 1,75 rem. Fra 0,78 e 0,88 il foglio
-     dichiarava nove passi che nessun occhio distingue — 0,16 px fra il primo e
-     il secondo. E i pesi sono tre — 400, 600, 700 — perche' la pila e' di soli
-     caratteri di sistema: sul PC del negozio, con Segoe UI, i nove pesi
-     dichiarati cadevano su due soli tagli veri. */
+     Text-size scale, seven steps: 0.78 / 0.88 / 1 / 1.15 / 1.3 / 1.5 /
+     1.75 rem. Font weights are limited to three (400/600/700): with
+     system-font-only stacks like Segoe UI on the store PC, more declared
+     weights just collapse onto the same rendered cuts. */
   --s1: 0.25rem;
   --s2: 0.5rem;
   --s3: 0.75rem;
@@ -97,13 +71,10 @@
   --s5: 1.5rem;
   --s6: 2rem;
   --content: 1480px;
-  /* Il carattere del sistema su cui il programma gira, e nient'altro. La pila
-     cominciava con `Inter`, che nel progetto non c'e' in nessuna forma: niente
-     @font-face, nessun file di carattere, nessun collegamento a un servizio
-     esterno. Sul Mac di chi sviluppa Inter c'e' quasi sempre installata, sul PC
-     del negozio no — quindi le due macchine rendevano la stessa pagina con due
-     caratteri di metriche diverse, e ogni controllo visivo fatto in sviluppo
-     descriveva una pagina che il negozio non vede. */
+  /* System font stack only, no web font: no @font-face, no font file, no
+     external font service. A named web font not actually loaded renders as
+     whatever's installed locally, so dev and store machines would silently
+     see different metrics for the "same" font. */
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", ui-sans-serif, sans-serif;
   color: var(--ink);
   background: #edf1f3;
@@ -124,13 +95,9 @@ body {
   min-width: 320px;
   min-height: 100vh;
   margin: 0;
-  /* ⚠ Qui c'era un `radial-gradient` decorativo con la posizione in
-     percentuale: si risolveva sull'altezza del `body`, che cambia con quanti
-     prodotti sono caricati. Misurato: in pagina 1 la macchia si vedeva sotto la
-     barra dei passi; in pagina 2, dove il body e' alto tremila pixel, finiva
-     tutta nascosta. La stessa decorazione c'era o non c'era a seconda del
-     contenuto — e su un pannello non calibrato una sfumatura larga a basso
-     contrasto e' anche il caso in cui si vedono le bande. */
+  /* Flat background, no gradient: a percentage-positioned gradient resolves
+     against `body` height, which varies a lot with how many products are
+     loaded, so it would show inconsistently between pages. */
   background: #edf1f3;
 }
 
@@ -160,10 +127,10 @@ a {
   color: var(--navy-2);
 }
 
-/* `#workspace` riceve il fuoco da «Vai al contenuto» e a ogni cambio di pagina
-   (`goToStep`). L'anello si toglie solo quando il fuoco NON arriva dalla
-   tastiera: se ci arriva — Invio su «Continua», oppure lo skip-link — deve
-   vedersi, altrimenti dopo ogni passo il fuoco c'e' e non si sa dov'e'. */
+/* `#workspace` receives focus from the skip link and on every step change
+   (`goToStep`). The ring only hides when focus didn't come from the
+   keyboard; keyboard-driven focus (skip link, Enter on "Continue") must
+   stay visible or focus becomes untraceable after each step. */
 .workspace:focus:not(:focus-visible) {
   outline: none;
 }
@@ -201,15 +168,7 @@ h4 {
   transform: translateY(0);
 }
 
-/* ⚠ La barra in alto era un'insegna: 93 px di altezza, un occhiello maiuscolo
-   spaziato sopra un titolo che rendeva a 30 px — cioe' il testo piu' grande
-   dello schermo era quello che non cambia mai e che l'unica persona che usa il
-   programma sa a memoria. Il titolo che dice in che pagina sei ne rendeva 27.
-   Con i passi sotto facevano 162 px di intestazione prima del lavoro.
-   Adesso e' una riga sola: a sinistra chi e' il programma, a destra come sta.
-   Il gradiente a 120 gradi se n'e' andato con l'insegna — e con lui il fatto
-   che la stessa riga di testo avesse due contrasti diversi a seconda di dove
-   cadeva. */
+/* Single-line header: app identity on the left, status on the right. */
 .topbar {
   color: #fff;
   background: var(--navy);
@@ -253,15 +212,10 @@ h4 {
   font-size: 0.88rem;
 }
 
-/* La versione che sta girando: c'e' per essere trovata quando la si cerca, non
-   per farsi notare mentre si lavora. Percio' e' piu' smorta di `.save-status`,
-   che invece parla del lavoro in corso e va letta subito. La gerarchia resta;
-   cambia solo l'alfa. ⚠ Il numero che la giustificava — 4,22:1 — si riferiva
-   alla parte chiara del gradiente che questa stessa onda ha tolto, quindi sul
-   foglio di oggi non si riproduce piu': su `--navy` pieno il vecchio 0,55
-   avrebbe fatto 5,08:1, gia' conforme ma indistinguibile da `.save-status`.
-   A 0,68 fa 6,89:1, e la gerarchia con lo stato del salvataggio (8,24:1) si
-   legge ancora. */
+/* Running version: meant to be found when looked for, not to draw attention
+   during work, so it's dimmer than `.save-status`. On full `--navy`, 0.68
+   alpha gives 6.89:1 (`.save-status` is 8.24:1), keeping the hierarchy
+   readable while both stay WCAG-compliant. */
 .versione-pubblicata {
   color: rgba(255, 255, 255, 0.68);
   font-size: 0.78rem;
@@ -272,38 +226,29 @@ h4 {
   top: 0;
   z-index: 20;
   border-bottom: 1px solid var(--line);
-  /* Bianco pieno. C'era un `backdrop-filter: blur(12px)` sotto un bianco al
-     96 %: il contenuto sottostante contribuiva per il 4 %, quindi sfocarlo non
-     produceva niente di visibile, e in cambio obbligava il browser a un livello
-     di composizione ridipinto a ogni fotogramma di scorrimento su una pagina
-     alta ottomila pixel. */
+  /* Solid white: a blur behind a 96%-opaque background is invisible but
+     still forces a repainted compositing layer on every scroll frame. */
   background: var(--surface);
 }
 
-/* ⚠ Erano cerchi numerati uniti da una linea che diventava verde, con la
-   spunta: il disegno dell'ordine online in cinque passi. Qui non c'e' nessun
-   avanzamento da rappresentare — le tre voci sono premibili in qualsiasi
-   ordine e in qualsiasi momento, cioe' sono schede e non tappe — e il disegno
-   prometteva una cosa che il comportamento non manteneva.
-   Adesso sono tre schede col nome per esteso, quella attiva evidenziata, e la
-   parola «fatto» dove un fatto c'e' davvero. */
+/* Three named tabs, not a numbered step tracker: the three sections are
+   clickable in any order at any time, so a progress-bar design would
+   promise sequencing the behavior doesn't have. */
 .stepper {
   width: min(calc(100% - 2.5rem), var(--content));
   margin: 0 auto;
   padding: 0;
   display: grid;
-  /* Tre colonne quando i passi sono tre, quattro quando le Impostazioni sono
-     aperte e la barra prende la loro voce. */
+  /* Three columns normally, four when Settings is open and takes a slot. */
   grid-auto-columns: minmax(0, 1fr);
   grid-auto-flow: column;
   list-style: none;
 }
 
-/* ⚠ `min-width: 0` qui e sul pulsante, per la terza volta nello stesso foglio:
-   il valore iniziale di `min-width` per un elemento di griglia o di flex e'
-   `auto`, e il nome del passo e' `white-space: nowrap`. Senza lo zero il passo
-   non poteva stringersi sotto il proprio nome intero, e a 320 px usciva dallo
-   schermo. Il taglio con i puntini c'e' gia': gli mancava solo il permesso. */
+/* `min-width: 0` overrides the grid/flex item default of `auto`: without it
+   a `white-space: nowrap` label can't shrink below its full width and
+   overflows at narrow viewports; the ellipsis truncation below then has no
+   effect. */
 .stepper__item {
   min-width: 0;
   display: flex;
@@ -338,9 +283,8 @@ h4 {
   white-space: nowrap;
 }
 
-/* «fatto», non una spunta verde: la spunta e' un'affermazione, e va usata solo
-   dove il fatto c'e'. Qui il fatto c'e', ed e' scritto a parole perche' una
-   parola si legge anche su un monitor che il verde non lo rende. */
+/* Text label rather than a checkmark icon: it stays legible on a monitor
+   that renders green poorly. */
 .stepper__fatto {
   flex: 0 0 auto;
   padding: 0.1rem 0.4rem;
@@ -371,11 +315,10 @@ h4 {
   margin-bottom: 1rem;
 }
 
-/* Il comando che sta sotto l'avviso in cima: oggi ce n'e' uno solo, «Riprova a
-   salvare», e compare quando ci sono modifiche che non sono arrivate sul disco.
-   Sta fuori dal riquadro dell'avviso e non dentro perche' l'avviso e' un
-   componente condiviso: un pulsante dentro il suo markup lo avrebbe ereditato
-   ogni altro avviso della pagina. */
+/* Action for the top-level alert (e.g. "Retry save" when local changes
+   haven't reached disk). Sits outside the alert's own markup because the
+   alert component is shared; a button inside it would show up on every
+   alert on the page. */
 .global-message__comando {
   margin: calc(var(--s3) * -1) 0 1rem;
   display: flex;
@@ -390,12 +333,9 @@ h4 {
   gap: var(--s5);
 }
 
-/* ⚠ Era `clamp(1.55rem, 2vw, 2rem)` contro il `clamp(1.45rem, 2.2vw, 2.2rem)`
-   del titolo del programma: non due gradini di una scala, due formule che si
-   incrociano. Sotto i 1.127 px di finestra il titolo di pagina era piu' grande,
-   sopra era il contrario, e a 1.127 px esatti erano identici. Un rapporto
-   gerarchico non puo' dipendere da quanto e' larga la finestra: due valori
-   fissi, e il titolo di pagina piu' grande del nome del programma sempre. */
+/* Fixed size, not `clamp()`: a hierarchy (page title bigger than the app
+   name) can't depend on viewport width, since two independent clamp
+   formulas can cross over and invert the ranking at some width. */
 .page-heading h2 {
   font-size: 1.75rem;
   letter-spacing: -0.02em;
@@ -408,9 +348,9 @@ h4 {
   line-height: 1.55;
 }
 
-/* A destra del titolo: la data del confronto e, quando c'è, il comando che non
-   fa parte del percorso (le Impostazioni). Stanno insieme perché sono
-   entrambi contorno: quello che si fa in questa pagina è scritto al centro. */
+/* Right of the title: comparison date and, when present, the Settings
+   entry point (outside the main flow). Grouped together as secondary
+   info; the page's primary action is centered. */
 .page-heading__meta {
   flex: 0 0 auto;
   display: flex;
@@ -575,10 +515,10 @@ h4 {
   font-size: 0.88rem;
 }
 
-/* Un gruppo di avvisi che dicono la stessa cosa: il titolo una volta, il
-   numero accanto, e i messaggi — che sono tutti diversi — in elenco. Quello
-   bloccante è un `div` e resta aperto; gli altri sono `details` e partono
-   chiusi, perché sono decine e non fermano niente. */
+/* A group of alerts sharing one title and a count, with the individual
+   messages listed below. The blocking variant is a `div` and stays open;
+   non-blocking ones are `details` and start collapsed, since there can be
+   dozens of them and none of them stop the flow. */
 .alert--gruppo {
   display: block;
   padding: 0;
@@ -627,10 +567,9 @@ h4 {
   transform: rotate(90deg);
 }
 
-/* Il comando scritto sull'avviso: «Vai alle conferme», «Vai ai prodotti da
-   confermare». Sta sotto la frase, staccato, e resta un pulsante: dentro un
-   riquadro giallo una parola sottolineata non si legge come una cosa da
-   premere. */
+/* Alert action ("Go to confirmations", "Go to products to confirm"): a
+   real button below the text, not an underlined link — inside a colored
+   alert box a link doesn't read as clickable. */
 .alert__comando {
   margin-top: 0.55rem;
 }
@@ -729,11 +668,9 @@ h4 {
   padding: 1rem;
 }
 
-/* «I documenti sono cambiati»: la fascia resta finché il confronto non è
-   rifatto. Non blocca niente — è ambra, non rossa — ma non è nemmeno un
-   avviso da leggere di sfuggita. La striscia da 6 px sul fianco se n'è andata:
-   qui la stessa cosa era già detta tre volte — icona, fondo ambra e bordo
-   ambra — e la quarta era la meno leggibile delle quattro. */
+/* Notice that inputs changed and the comparison is stale: stays visible
+   until re-run. Non-blocking (amber, not red) but not meant to be skimmed
+   past either. */
 .stale-comparison {
   margin-bottom: 1rem;
   padding: 0.85rem 1rem;
@@ -781,8 +718,8 @@ h4 {
   align-self: center;
 }
 
-/* La frase sotto un pulsante: dice che cosa manca perché sia premibile, o che
-   cosa succede se lo si preme adesso. */
+/* Text under a button: what's missing for it to become active, or what
+   happens if pressed now. */
 .button-hint {
   margin-top: 0.4rem;
   color: var(--muted);
@@ -794,7 +731,7 @@ h4 {
   text-align: right;
 }
 
-/* Il comando spento durante il ricalcolo, con il perché accanto. */
+/* Import action, disabled during a recompute run, with the reason next to it. */
 .import-locked {
   color: var(--amber);
   font-size: 0.78rem;
@@ -813,7 +750,7 @@ h4 {
   pointer-events: none;
 }
 
-/* Il ricalcolo del confronto: barra, nove fasi, numeri che scorrono. */
+/* Comparison recompute: progress bar, nine phases, live counters. */
 .pipeline-panel {
   margin-top: 1.2rem;
 }
@@ -830,14 +767,11 @@ h4 {
   overflow: hidden;
 }
 
-/* La riga che dice a che punto e' il ricalcolo mentre gira: e' il testo che si
-   guarda per due o tre minuti mentre si aspetta. Senza una regola prendeva il
-   colore pieno a 16 px ed era il testo piu' grande e piu' scuro del riquadro,
-   piu' delle nove fasi, che sono l'informazione strutturata. Il messaggio che
-   passa non deve pesare piu' della struttura che resta. */
-/* Da quanto gira. Sta subito sotto la barra e prima del messaggio, perche' la
-   domanda che ci si fa guardando una barra ferma e' in quest'ordine: «a che
-   punto e'» e poi «da quanto e' li'». */
+/* Muted, not full-strength: the status text shouldn't outweigh the nine
+   phase entries below it, which are the structured information. */
+/* Elapsed time: placed right below the bar and before the status message,
+   matching reading order for a stalled progress bar ("where is it" before
+   "how long has it been"). */
 .pipeline-progress__tempo {
   margin: 0.45rem 0 0;
   color: var(--muted);
@@ -920,9 +854,10 @@ h4 {
   background: var(--red-soft);
 }
 
-/* Configurazione guidata degli schemi sconosciuti. L'anteprima scorre in
-   orizzontale: stringere le colonne renderebbe il listino illeggibile proprio
-   nel punto in cui l'utente deve confrontarlo con i menu. */
+/* Guided mapping for unrecognized price-list layouts. The preview scrolls
+   horizontally instead of shrinking columns, which would make the sheet
+   unreadable right where the user needs to compare it against the mapping
+   controls. */
 .schema-mapping {
   margin-top: 1rem;
   display: grid;
@@ -1018,8 +953,7 @@ h4 {
   box-shadow: inset 0 -2px 0 #6ea4c4;
 }
 
-/* La riga che separa i prodotti dal resto: e' il punto in cui il listino viene
-   tagliato, e finche' non si vedeva si poteva solo indovinare. */
+/* Marks the row where the sheet is cut, separating products from the rest. */
 .schema-preview .is-break td,
 .schema-preview .is-break th {
   border-bottom: 2px solid var(--navy);
@@ -1066,8 +1000,9 @@ h4 {
   justify-content: flex-end;
 }
 
-/* «Prova le colonne» è facoltativo: la nota lo dice invece di lasciarlo capire
-   da un pulsante spento. */
+/* The "Prova le colonne" (test the columns) button is optional: this note
+   says so in text rather than leaving it to be inferred from the button
+   being enabled. */
 .schema-mapping__nota {
   margin-top: -0.4rem;
   color: var(--muted);
@@ -1134,10 +1069,8 @@ h4 {
   line-height: 1.4;
 }
 
-/* «Quali colonne legge»: una tabella stretta dentro la scheda del documento.
-   Sta chiusa finché non serve — la si apre quando si sospetta che il programma
-   stia leggendo la colonna sbagliata — e si ricorda di essere aperta perché il
-   riquadro passa da `apribile()`. */
+/* "Which columns it reads": a compact table inside the document card.
+   Starts collapsed and its open/closed state persists via `apribile()`. */
 .doc-columns {
   margin-top: 0.55rem;
   border-top: 1px solid var(--line);
@@ -1199,24 +1132,25 @@ h4 {
   font-variant-numeric: tabular-nums;
 }
 
-/* Una colonna dichiarata dal registro che nel documento non c'è più: è il caso
-   per cui questa tabella esiste, e deve saltare all'occhio. */
+/* A column the adapter registry declares that's missing from the current
+   document: the case this table exists to surface, so it needs to stand
+   out. */
 .doc-columns__table tr.is-missing td {
   color: #85211c;
 }
 
-/* «Le offerte di questo listino non le legge nessuno»: è l'unica riga di
-   questa tabella che chiede di fare qualcosa, e si legge come tale. Sta qui
-   dentro e non in un riquadro nuovo perché è la stessa domanda delle altre
-   colonne — dove sta scritta una cosa — e perché il riquadro parte chiuso: chi
-   non ha offerte da leggere non se lo trova davanti. */
+/* The row warning that this price list's offers aren't being read: the
+   only row here that asks for action, styled to read as such. Kept inside
+   this table rather than a separate alert since it's the same question as
+   the other rows (where is a given thing read from), and the table starts
+   collapsed so it doesn't surface unless relevant. */
 .doc-columns__note--manca {
   color: #70450d;
 }
 
-/* La riga della colonna d'ordine porta il comando per spostarla: il pulsante
-   sta accanto alla frase, non sotto, perché è la stessa informazione — dov'è
-   adesso e come si cambia. */
+/* The row for the order-quantity column carries the button to move it,
+   inline rather than below, since both say the same thing: where it is
+   now and how to change it. */
 .doc-columns__note--ordine {
   display: flex;
   flex-wrap: wrap;
@@ -1279,9 +1213,9 @@ h4 {
   font-size: 0.78rem;
 }
 
-/* La domanda prima di eliminare: dice che cosa sparisce e che cosa resta. È una
-   frase intera, quindi occupa la riga per conto suo invece di stringersi
-   accanto ai due pulsanti. */
+/* Delete confirmation text: says what disappears and what stays. A full
+   sentence, so it takes its own row rather than squeezing next to the two
+   buttons. */
 .file-card__confirm,
 .compilazione__confirm {
   flex: 1 1 100%;
@@ -1291,9 +1225,9 @@ h4 {
   text-align: left;
 }
 
-/* Le righe che non sono entrate nel confronto, fornitore per fornitore. Stanno
-   nella pagina dei documenti perché è lì che si guarda se un listino è entrato
-   tutto: i numeri arrivano dall'audit della run, la pagina non ne calcola. */
+/* Rows excluded from the comparison, per supplier. Lives on the documents
+   page, where a price list's completeness is checked; the counts come
+   from the run's audit data, this page doesn't compute them. */
 .audit-disclosure {
   padding: 0;
   overflow: hidden;
@@ -1381,9 +1315,8 @@ h4 {
   transition: 140ms ease;
 }
 
-/* Il riquadro acceso mentre ci si trascina sopra un documento: cambia colore e
-   bordo, che e' quello che dice «lascialo qui». Il pixel di sollevamento faceva
-   ballare il riquadro sotto il puntatore e non aggiungeva niente. */
+/* Active drag-over state: color and border change is what signals "drop
+   it here". No lift transform, which just jittered under the pointer. */
 .dropzone.is-dragging {
   border-color: var(--navy-2);
   color: var(--navy);
@@ -1400,10 +1333,9 @@ h4 {
   font-size: 0.88rem;
 }
 
-/* Quando i documenti ci sono già, il riquadro tratteggiato non è più il
-   protagonista della pagina: diventa una riga sotto le schede, che continua ad
-   accettare il trascinamento e a offrire il selettore, senza occupare lo
-   spazio di un invito a caricare. */
+/* Once documents exist, the dashed dropzone shrinks to a row below the
+   cards instead of the page's focal point — still accepts drag-and-drop
+   and the file picker, without the footprint of an upload prompt. */
 .dropzone--riga {
   min-height: 0;
   padding: 0.7rem 0.9rem;
@@ -1448,11 +1380,11 @@ h4 {
   list-style: none;
 }
 
-/* I documenti rimasti fuori dal caricamento. In ambra e non in rosso: non e'
-   un guasto, e' una notizia — quel fornitore non entrera' nel confronto se non
-   si porta il suo listino in un formato leggibile. Restano finche' non li si
-   toglie, perche' un messaggio che vive 3,6 secondi non e' un posto in cui
-   un'informazione esiste. */
+/* Files rejected on upload. Amber, not red: not a failure, just a fact —
+   that supplier won't be in the comparison unless its price list is
+   provided in a readable format. Persists until dismissed rather than
+   auto-hiding: a message the user hasn't necessarily read yet shouldn't
+   disappear on its own. */
 .file-scartati {
   margin: 0.9rem 0 0;
   padding: 0;
@@ -1498,9 +1430,9 @@ h4 {
   white-space: nowrap;
 }
 
-/* Quattro campi e un comando: su tre colonne diventavano tre righe alte 224 px,
-   e prima del primo prodotto si scendeva di una schermata e mezza. Stanno in
-   riga: sono i filtri di un elenco, non un modulo da compilare. */
+/* Four fields and one action, laid out in a single row: they're list
+   filters, not a form to fill in, and shouldn't push the first product
+   result off screen. */
 .toolbar {
   margin-bottom: 0.9rem;
   padding: 0.85rem;
@@ -1522,8 +1454,8 @@ h4 {
   gap: var(--s1) var(--s2);
 }
 
-/* Il perimetro del comando, accanto al comando: e' l'unica cosa che
-   l'etichetta da sola non poteva dire senza diventare una frase. */
+/* Explains the scope of the reset action next to it, since the label
+   alone couldn't say that without turning into a sentence. */
 .toolbar__reset-nota {
   color: var(--muted);
   font-size: 0.78rem;
@@ -1567,12 +1499,9 @@ h4 {
   gap: 0.65rem;
 }
 
-/* ⚠ `min-width: 0` non e' decorazione, e' la stessa trappola due volte. La
-   scheda e' un elemento di una griglia, e il valore iniziale di `min-width` per
-   un elemento di griglia e' `auto`: la scheda non poteva scendere sotto il suo
-   contenuto minimo, e a finestra stretta era lei a spingere fuori tutta la
-   pagina. Misurato a 470 px: 617 px di contenuto in 470 di finestra, con la
-   barra di scorrimento orizzontale su tutto. Con lo zero: 470, e niente fuori. */
+/* `min-width: 0` again overrides the grid item default of `auto`: without
+   it the card can't shrink below its content's intrinsic width and forces
+   the page to scroll horizontally at narrow viewports. */
 .product-card {
   min-width: 0;
   border: 1px solid var(--line);
@@ -1581,13 +1510,10 @@ h4 {
   box-shadow: var(--ombra-scheda);
 }
 
-/* ⚠ Erano due strisce laterali da 4 px, ambra e rossa, e fra loro correvano
-   1,33:1: la sola cosa che distingueva «da guardare» da «blocca la
-   compilazione» era un colore che su un monitor da negozio, o per chi ha una
-   carenza sul rosso-verde, e' lo stesso. La distinzione adesso la porta
-   l'etichetta nella riga dei distintivi — «Da controllare» e «Da sistemare» —
-   e questo resta il rinforzo: bordo pieno e fondo appena tinto, che si vedono
-   anche quando il colore non arriva. */
+/* Warning vs. blocker is distinguished primarily by the badge text ("Da
+   controllare" / "Da sistemare"), since amber and red alone aren't
+   reliably distinguishable on an uncalibrated monitor or for red-green
+   color blindness. Border and tint here are secondary reinforcement. */
 .product-card.has-warning {
   border-color: #d2a45a;
   background: #fffdf7;
@@ -1604,9 +1530,9 @@ h4 {
   box-shadow: none;
 }
 
-/* Cambio fornitore con pezzi per collo diversi: evidenzia la scheda, poi sparisce da
-   sola. Il testo esplicito (.supplier-change-notice) resta finché lo stato non lo
-   rimuove, qualche secondo dopo. */
+/* Flashes the card when a supplier switch changes pieces-per-carton, then
+   fades on its own. The explicit text (`.supplier-change-notice`) stays
+   until app state removes it a few seconds later. */
 .product-card.is-supplier-changed {
   animation: supplier-change-flash 4.5s ease-out;
 }
@@ -1759,8 +1685,8 @@ h4 {
   gap: 0.6rem;
 }
 
-/* La decisione già presa su una riga proposta: si vede, e si può cambiare
-   finché dura questo confronto. */
+/* A decision already made on a proposed match row: visible, and can be
+   changed for as long as this comparison lasts. */
 .candidate-decisions {
   margin-bottom: 0.7rem;
   display: grid;
@@ -1884,15 +1810,14 @@ h4 {
   box-shadow: var(--shadow);
 }
 
-/* La conferma di «Inizia nuova comparazione»: una riga, non una finestra.
-   Quello che il comando toglie sono copie — i documenti in ingresso sono di
-   sola lettura — quindi il gesto non merita il peso di una finestra modale,
-   che ferma la pagina e si chiude con la tastiera. Ha la forma della barra di
-   annullamento perché è la stessa cosa: una frase e la sua risposta, larghe
-   quanto la pagina, sopra a quello che riguardano.
-   ⚠ Il bordo è quello forte e non il rosso pieno: qui non si sta per perdere
-   niente che non torni ricaricando i documenti, e il rosso pieno del programma
-   è riservato a quello che ferma la compilazione. */
+/* Confirmation for "Inizia nuova comparazione" (start a new comparison): a
+   row, not a modal. What it discards are working copies — the source
+   documents are read-only — so the action doesn't warrant a modal's
+   weight. Shaped like the undo bar for the same reason: a statement and
+   its response, full width, above what they refer to. Uses the strong
+   border rather than full red, since nothing here is unrecoverable
+   (reloading the documents restores it); full red is reserved for what
+   blocks order compilation. */
 .conferma-riga {
   margin-bottom: 1rem;
   padding: 0.8rem 1rem;
@@ -1930,13 +1855,9 @@ h4 {
   min-width: 0;
 }
 
-/* ⚠ `min-width: 0` non e' decorazione. Il nome del prodotto e' un elemento
-   flessibile dentro `.product-main__title`, e il valore iniziale di `min-width`
-   per un elemento flessibile e' `auto`: con `white-space: nowrap` vuol dire
-   «non scendere sotto la larghezza dell'intero nome». Il taglio con i puntini
-   non entrava mai in funzione, e a finestra stretta era il nome del prodotto a
-   spingere fuori tutta la pagina — misurato a 470 px: 617 px di contenuto in
-   470 di finestra, con la barra di scorrimento orizzontale su tutto. */
+/* `min-width: 0` again overrides the flex item default of `auto`: without
+   it, combined with `white-space: nowrap`, the product name can't shrink
+   below its full width and forces the page to scroll horizontally. */
 .product-main h3,
 .product-main h4 {
   min-width: 0;
@@ -1966,11 +1887,9 @@ h4 {
   text-align: right;
 }
 
-/* ⚠ Cifre incolonnate anche qui. `tabular-nums` c'era sui numeri piccoli — la
-   griglia delle offerte, la fascia dei totali, le righe del riepilogo — e
-   mancava proprio sui quattro numeri grandi. Con le cifre proporzionali del
-   carattere di sistema «1111,11» occupa 46 px e «8888,88» ne occupa 63: il 36 %
-   in piu', cioe' una colonna di prezzi che balla. */
+/* Tabular figures for column alignment: without it, proportional system-font
+   digits give different widths to "1111.11" and "8888.88", so a price
+   column visibly shifts as values change. */
 .price-summary strong {
   font-variant-numeric: tabular-nums;
   display: block;
@@ -2021,11 +1940,10 @@ h4 {
   text-align: right;
 }
 
-/* Il confronto dei fornitori: una riga per fornitore, le intestazioni scritte
-   una volta sola in cima e i numeri incolonnati. Intestazione e righe usano lo
-   stesso `grid-template-columns`, e sono tutte frazioni: due griglie sorelle
-   larghe uguali risolvono le stesse colonne, quindi restano allineate senza
-   che serva `subgrid`. */
+/* Supplier comparison: one row per supplier, headers written once at the
+   top, numbers aligned in columns. Header and rows share the same
+   fractional `grid-template-columns`, so two equal-width sibling grids
+   resolve to the same column widths and stay aligned without `subgrid`. */
 .offer-grid {
   display: grid;
   gap: 0.3rem;
@@ -2041,12 +1959,10 @@ h4 {
   gap: 0.35rem 0.7rem;
 }
 
-/* Le sei intestazioni del confronto sono le uniche etichette visibili di quei
-   numeri: sopra i 1050 px le etichette per cella sono nascoste. Erano a
-   0,67rem, cioe' 10,7 px, maiuscole e spaziate — l'informazione piu' densa
-   della pagina scritta piu' piccola di tutto il resto. La spaziatura fra le
-   lettere se ne va con la dimensione: a maiuscoletto piccolo aggiungeva solo
-   rumore. */
+/* The six comparison headers are the only visible label for those numbers
+   above 1050 px, where per-cell labels are hidden, so they can't drop
+   below the sheet's minimum readable size (0.78rem, see the top of this
+   file) even though they're all-caps. */
 .offer-grid__head {
   padding: 0 0.75rem 0.15rem;
   color: var(--muted);
@@ -2077,16 +1993,13 @@ h4 {
   background: #fbfffd;
 }
 
-/* «Spenta» si ottiene coi colori, non con la trasparenza. `opacity: 0.62`
-   sbiadiva anche il motivo per cui quel fornitore e' fuori da questo prodotto,
-   e quel motivo va letto: composto faceva 2,47:1, contro i 4,5:1 che WCAG
-   chiede a un testo di 13 px. A piena opacita' lo stesso testo fa 5,16:1.
-   ⚠ Il rilievo [19] dell'onda 5 dichiarava 5,26 e correggeva il revisore che
-   aveva scritto 5,16: rifatto il conto, aveva ragione il revisore. Non cambia
-   niente — sono tutti e due sopra la soglia — ma su questo progetto i numeri
-   misurati si scrivono giusti.
-   Che l'offerta non si possa scegliere e' gia' detto due volte: dal distintivo
-   «Non disponibile» e dall'assenza del pulsante di scelta. */
+/* "Unavailable" is conveyed with color and a dashed border, not opacity:
+   `opacity` would also fade the reason text explaining why that supplier
+   is excluded for this product, and that text needs to stay readable
+   (full opacity gives 5.16:1, above WCAG's 4.5:1 for small text).
+   That the offer can't be selected is already said twice — the
+   "Non disponibile" badge and the absence of a select button — so this
+   card style doesn't need to repeat it a third time via reduced opacity. */
 .offer-card.is-unavailable {
   border-style: dashed;
   background: var(--surface-soft);
@@ -2114,9 +2027,9 @@ h4 {
   font-weight: 700;
 }
 
-/* L'etichetta di ogni numero c'è sempre nel markup: qui la legge solo la
-   sintesi vocale, perché l'intestazione in cima dice già la stessa cosa. Sugli
-   schermi stretti torna visibile (vedi la regola a 1050 px). */
+/* Each number's label is always in the markup; hidden here since the
+   header above already says the same thing, and read by screen readers
+   only. Reappears at narrow widths (see the 1050 px rule). */
 .offer-card__label {
   position: absolute;
   width: 1px;
@@ -2140,8 +2053,8 @@ h4 {
   font-weight: 700;
 }
 
-/* Il nome che il fornitore usa sul suo listino: è l'unico posto in cui si
-   legge il colore o la variante, e l'EAN uguale non li garantisce. */
+/* The supplier's own item name from their price list: the only place a
+   color or variant shows, since a matching EAN doesn't guarantee one. */
 .offer-card__riga-fornitore {
   display: block;
   width: 100%;
@@ -2151,8 +2064,8 @@ h4 {
   line-height: 1.35;
 }
 
-/* Come quella riga e' stata abbinata, quando e' andata come doveva: testo, non
-   distintivo. Vedi il commento su ABBINAMENTI_NORMALI in app.js. */
+/* How this row was matched, when the match is routine: shown as plain
+   text, not a badge. See `ABBINAMENTI_NORMALI` in app.js. */
 .offer-card__abbinamento {
   color: var(--muted);
   font-size: 0.78rem;
@@ -2163,8 +2076,8 @@ h4 {
   color: var(--muted);
 }
 
-/* Quello che non sta in una colonna — l'offerta del fornitore, un avviso sulla
-   riga — prende la larghezza intera sotto i numeri. */
+/* Content that doesn't belong in a column (a supplier's promotion, a row
+   warning) spans the full width below the numbers. */
 .offer-card__intera {
   grid-column: 1 / -1;
 }
@@ -2176,10 +2089,9 @@ h4 {
   line-height: 1.45;
 }
 
-/* Quanto dura un no: una riga sola sotto i riquadri dei rifiuti, non una copia
-   della stessa frase dentro ciascuno. Stessa taglia e stesso grigio della riga
-   dei fornitori che non ce l'hanno — sono due note dello stesso tipo, sotto la
-   stessa tabella. */
+/* How long a rejection lasts: one line below the rejection cards, not
+   repeated inside each. Same size and color as the "not carried by this
+   supplier" note above — both are footnotes under the same table. */
 .offer-grid__regola-del-no {
   padding: 0.15rem 0.75rem;
   color: var(--muted);
@@ -2253,8 +2165,8 @@ h4 {
   background: var(--blue-soft);
 }
 
-/* Ordini non ancora ricevuti, in cima alla pagina 2: una domanda per fornitore,
-   testo grande e due risposte esplicite (nessuna finestra di conferma). */
+/* Orders not yet received, at the top of page 2: one question per
+   supplier, large text, two explicit answer buttons (no confirm dialog). */
 
 .pending-orders {
   margin-bottom: 1rem;
@@ -2267,9 +2179,9 @@ h4 {
   box-shadow: var(--shadow);
 }
 
-/* Il riquadro quando l'elenco non si è potuto leggere: non è la stessa notizia
-   di un elenco pieno, e non deve avere lo stesso aspetto. Rosso, perché qui
-   l'utente sta per riordinare merce che forse ha già ordinato. */
+/* Styling for when the pending-orders list failed to load: a different
+   situation from a populated list, so it gets a different look. Red,
+   because the user risks reordering something already on order. */
 .pending-orders--failed {
   border-color: #e3a2a2;
   background: var(--red-soft);
@@ -2294,8 +2206,9 @@ h4 {
   line-height: 1.45;
 }
 
-/* «Chi annulli sparisce dall'elenco e non ti viene più chiesto.» Sta sotto i
-   tre pulsanti perché è la conseguenza del terzo, non una premessa. */
+/* States that dismissing an entry removes it from the list for good.
+   Placed below the three action buttons since it's a consequence of the
+   third one, not a premise. */
 .pending-order__note {
   margin-top: 0.5rem;
   color: var(--muted);
@@ -2336,8 +2249,8 @@ h4 {
 }
 
 .pending-order__actions {
-  /* Cresce fino a occupare la riga quando va a capo: i tre pulsanti restano
-     larghi e facili da centrare anche su schermi stretti. */
+  /* Grows to fill the row when it wraps, so the three buttons stay wide
+     and easy to hit even on narrow screens. */
   flex: 1 1 24rem;
   max-width: 34rem;
   display: grid;
@@ -2345,8 +2258,8 @@ h4 {
   gap: 0.6rem;
 }
 
-/* Avviso sulla scheda prodotto. Stessa geometria di .supplier-change-notice ma
-   senza dissolvenza: resta finché la merce non viene dichiarata ricevuta. */
+/* Notice on the product card. Same layout as `.supplier-change-notice` but
+   without the fade-out: stays until the order is marked received. */
 .pending-order-notice {
   margin: 0 1rem 1rem;
   padding: 0.7rem 0.85rem;
@@ -2361,7 +2274,7 @@ h4 {
   line-height: 1.4;
 }
 
-/* Pannello offerte in cima alla pagina 2 (scelta prodotti e fornitori). */
+/* Promotions panel at the top of page 2 (products and suppliers). */
 
 .promotion-panel {
   margin-bottom: 1rem;
@@ -2458,10 +2371,9 @@ h4 {
   display: none;
 }
 
-/* ⚠ Il triangolino era un elemento a sé dentro un `summary` in
-   `space-between`: con tre voci al posto di due il titolo finiva **in mezzo**
-   alla riga, come una didascalia centrata in una pagina che non centra niente
-   altro. Sta dentro il titolo, come nelle altre sezioni apribili. */
+/* Disclosure triangle lives inside the heading text, not as a sibling
+   element in the `space-between` `summary`, so a third item in that row
+   doesn't push the heading out of its expected left-aligned position. */
 .promotion-catalog > summary h3::before {
   content: "›";
   display: inline-block;
@@ -2566,9 +2478,8 @@ h4 {
   font-weight: 600;
 }
 
-/* Due usi, e non e' una svista: la differenza di prezzo rispetto al piu'
-   conveniente, e l'avviso che accompagna un'offerta. Sono tutt'e due la stessa
-   cosa — una riga di contorno sotto il dato principale. */
+/* Shared by two uses (the price delta vs. the cheapest offer, and an
+   offer's warning note): both are secondary text under the main figure. */
 .offer-card__delta {
   color: var(--muted);
   font-size: 0.78rem;
@@ -2614,9 +2525,8 @@ h4 {
   line-height: 1.4;
 }
 
-/* ⚠ Niente più `.confirmation input`, `.confirmation label`: il sì era una
-   casella con la sua etichetta, e dal 22 agosto 2026 è un pulsante — come il
-   no, che risponde alla stessa domanda. Il riquadro non ha più due colonne. */
+/* The yes/no confirmation is a pair of buttons, not a checkbox with a
+   label, so this container is a single column rather than two. */
 .confirmation > div {
   display: grid;
   gap: 0.2rem;
@@ -2641,19 +2551,18 @@ h4 {
   margin-top: 0.35rem;
 }
 
-/* Il motivo per cui la conferma serve. Era dietro un «Perché serve?»: chiedeva
-   di spuntare prima di dire in base a che cosa. Adesso si legge sempre. */
+/* The reason a confirmation is required: always visible, not behind a
+   "why?" disclosure. */
 .confirmation__why {
   margin-top: 0.3rem;
   font-weight: 600;
   line-height: 1.45;
 }
 
-/* Una domanda a cui si è già risposto non è più una domanda: il riquadro
-   perde l'ambra dell'avviso e prende il verde di una cosa a posto. Resta
-   dov'era — dentro la riga del prodotto a cui si riferisce — perché è lì che
-   la si rilegge, e perché toglierla di lì vorrebbe dire un riquadro a parte
-   che ripete di quale prodotto sta parlando. */
+/* A question already answered isn't a question anymore: the box turns
+   green instead of amber. Stays inline in the product row it refers to
+   rather than moving to a separate panel, which would need to repeat
+   which product it's about. */
 .confirmation.is-answered {
   border-color: #b3ddca;
   color: #14563c;
@@ -2665,10 +2574,9 @@ h4 {
   line-height: 1.45;
 }
 
-/* Le due risposte, e la conseguenza di quella che toglie qualcosa. I pulsanti
-   in riga perché sono due risposte alla stessa domanda: incolonnarli li
-   farebbe leggere come due comandi diversi. La frase va a capo da sé quando
-   non ci sta, e non trascina i pulsanti con sé. */
+/* The two answer buttons sit side by side, since stacking them would read
+   as two separate actions rather than two answers to one question. The
+   question text wraps on its own without dragging the buttons with it. */
 .confirmation__risposte {
   margin-top: 0.5rem;
   display: flex;
@@ -2683,9 +2591,9 @@ h4 {
   flex: 1 1 14rem;
 }
 
-/* La riga di un fornitore uscito per decisione di chi ordina, non per colpa
-   sua: resta tratteggiata come le altre non disponibili, e il pulsante che
-   riapre la domanda sta dentro la frase che la spiega. */
+/* A supplier excluded by the operator's own decision, not by unavailability:
+   still styled dashed like other unavailable offers, with the button to
+   reopen the decision inline in the explanatory text. */
 .offer-card.is-rifiutata .offer-card__unavailable {
   display: flex;
   flex-wrap: wrap;
@@ -2695,11 +2603,10 @@ h4 {
 
 .supplier-totals-strip {
   position: sticky;
-  /* Sotto la barra dei passi, che adesso e' alta 3rem invece di 4,25. Le due
-     quote devono restare in accordo: sono i due soli elementi agganciati in
-     alto. ⚠ I 3 px del bordo inferiore del passo attivo e il pixel del bordo
-     della fascia dei passi vanno contati: senza, la fascia dei totali si
-     sovrapponeva alla barra di un pixel. */
+  /* Sits below the sticky stepper bar; the two offsets must stay in sync,
+     since they're the only two elements pinned to the top. The +4px
+     accounts for the active step's bottom border plus the stepper bar's
+     own border, or this strip overlaps the bar by a pixel. */
   top: calc(3rem + 4px);
   z-index: 15;
   margin-bottom: 0.85rem;
@@ -2710,8 +2617,7 @@ h4 {
   overflow-x: auto;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-md);
-  /* Come sopra: sotto un bianco al 97 % non c'era niente da vedere
-     attraverso. */
+  /* Solid, no blur (see the stepper-shell background above). */
   background: var(--surface);
   box-shadow: var(--ombra-fascia);
 }
@@ -2750,8 +2656,8 @@ h4 {
   white-space: nowrap;
 }
 
-/* Il totale dell'ordine chiude la fascia, staccato dai fornitori: è la loro
-   somma, non uno di loro. */
+/* Order total closes out the strip, set apart from the suppliers: it's
+   their sum, not one of them. */
 .supplier-totals-strip__item--totale {
   margin-left: auto;
   padding-left: 0.8rem;
@@ -2773,9 +2679,9 @@ h4 {
   font-size: 1rem;
 }
 
-/* Lo sconto di testata: sta accanto al totale del fornitore perché è lì che si
-   vede l'effetto. Piccolo di proposito — è un campo che si tocca una volta a
-   settimana, non un comando da mettere in evidenza. */
+/* Header-level discount field, next to the supplier total where its
+   effect shows. Kept small on purpose: touched rarely, not a primary
+   control. */
 .supplier-discount {
   display: inline-flex;
   align-items: baseline;
@@ -2785,10 +2691,10 @@ h4 {
   font-variant-numeric: tabular-nums;
 }
 
-/* L'etichetta che mancava. Sta prima del «−» e non sopra il campo perche' la
-   fascia e' `sticky` e alta poco: una riga in piu' la farebbe crescere su tutte
-   e tre le pagine. In minuscolo e in grigio, perche' e' il nome del campo, non
-   un comando. */
+/* Label for the discount field, placed before the "−" rather than above
+   it: this strip is `sticky` and short, so an extra line would grow it on
+   all three pages. Lowercase and muted since it names the field, not an
+   action. */
 .supplier-discount__etichetta {
   color: var(--muted);
 }
@@ -2801,12 +2707,10 @@ h4 {
   background: var(--surface);
   color: inherit;
   font: inherit;
-  /* ⚠ Era a 0,72rem, ed era l'eccezione dichiarata alla soglia. Non lo e' piu':
-     il numero dentro il campo si legge, e un valore che si legge non sta sotto
-     la soglia. La decisione scritta due regole sopra — «piccolo di proposito,
-     non un comando da mettere in evidenza» — resta vera e resta rispettata: il
-     campo e' largo 2,6rem e senza imbottitura, cioe' e' la MISURA a tenerlo
-     defilato, non la dimensione del testo. */
+  /* Meets the sheet's minimum readable size (see the top of this file):
+     the value typed here is meant to be read, so the field stays visually
+     unobtrusive through its small width and lack of padding, not through
+     an undersized font. */
   font-size: 0.78rem;
   text-align: right;
 }
@@ -2853,16 +2757,15 @@ h4 {
   font-size: 0.78rem;
 }
 
-/* L'intestazione del fornitore è premibile SOLO nel riepilogo raggruppato per
-   fornitore, dove è un `<summary>`: raggruppando per prodotto la stessa classe
-   sta su un `<div>` che non apre niente, e un puntatore a manina lì
-   prometterebbe un comando che non c'è. Per questo il selettore nomina
-   l'elemento. */
+/* The supplier heading is only clickable when grouped by supplier, where
+   it's a `<summary>`; grouped by product the same class is on a `<div>`
+   that doesn't open anything, so the selector targets the element type
+   rather than the class alone. */
 summary.supplier-summary__head {
   cursor: pointer;
-  /* I tre modi di togliere il triangolino di serie: `display: flex` basta a
-     Chrome, `list-style` serve a Firefox, la pseudo-classe a Safari. Al suo
-     posto c'è il chevron, che è l'unico segno «qui si apre» del programma. */
+  /* Removing the default marker needs all three: `display: flex` for
+     Chrome, `list-style` for Firefox, the pseudo-element rule below for
+     Safari. The custom chevron replaces it. */
   list-style: none;
 }
 
@@ -2898,15 +2801,11 @@ summary.supplier-summary__head::-webkit-details-marker {
   list-style: none;
 }
 
-/* ⚠ Le colonne erano `auto`, cioè larghe quanto il loro contenuto: una riga da
-   «9,06 €» e una da «17,85 €» avevano l'ultima colonna di larghezza diversa, e
-   con lei si spostavano i comandi − 1 + × di tutta la riga. Quattrocento righe
-   con i comandi che ballano di dieci pixel non sono un riepilogo. Le colonne
-   dei numeri hanno una larghezza fissa e le cifre sono tabellari.
-   ⚠ Dal 21 settembre 2026 anche quella dei comandi (8,75rem = tre bottoni da
-   2rem, lo spazio e la ×, misurati 139,6 px): ogni riga è una griglia a sé, e
-   nell'intestazione quella cella è vuota — con `auto` era larga zero e
-   «Quantità» finiva sopra i comandi. */
+/* Fixed-width number columns with tabular figures: with `auto` widths, a
+   row's price length shifts the −/+/× controls out of alignment with the
+   rows around it across hundreds of rows. The action column is fixed at
+   8.75rem (three 2rem buttons, spacing and the ×) so it also lines up
+   with the header row, where that cell is otherwise empty. */
 .order-lines li {
   padding: 0.68rem 0.95rem;
   display: grid;
@@ -2922,10 +2821,10 @@ summary.supplier-summary__head::-webkit-details-marker {
   text-align: right;
 }
 
-/* Il prezzo di un pezzo, accanto al totale della riga: grigio perché è un
-   numero da leggere, non da sommare — non entra in nessun totale. È lo stesso
-   della colonna «Prezzo per pezzo» di pagina 2, quello con cui il fornitore è
-   stato scelto. La parola «al pezzo» serve solo dove l'intestazione sparisce. */
+/* Per-piece price next to the line total: muted because it's a reference
+   figure, not part of any sum — it's the same "Prezzo per pezzo" value
+   from page 2 that the supplier choice was based on. The "al pezzo"
+   (per piece) wording is only shown where the column header is hidden. */
 .order-lines__pezzo {
   position: relative;
   color: var(--muted);
@@ -2934,7 +2833,7 @@ summary.supplier-summary__head::-webkit-details-marker {
   white-space: nowrap;
 }
 
-/* Nascosta alla vista e non ai lettori di schermo, come `.offer-card__label`. */
+/* Hidden visually but not from screen readers, like `.offer-card__label`. */
 .order-lines__pezzo-etichetta {
   position: absolute;
   width: 1px;
@@ -2944,9 +2843,8 @@ summary.supplier-summary__head::-webkit-details-marker {
   white-space: nowrap;
 }
 
-/* L'intestazione delle colonne, una per elenco. Stesso aspetto di quella della
-   griglia delle offerte (`.offer-grid__head`), e come lei sparisce quando la
-   riga si impila. */
+/* Column header, one per list. Same look as the offer grid's header
+   (`.offer-grid__head`) and hides the same way when the row stacks. */
 .order-lines .order-lines__intestazione {
   padding-top: 0.45rem;
   padding-bottom: 0.35rem;
@@ -2974,11 +2872,10 @@ summary.supplier-summary__head::-webkit-details-marker {
   white-space: nowrap;
 }
 
-/* ⚠ `font-size` esplicito: senza, questi due `<small>` prendevano lo `smaller`
-   del browser — 0,833 volte i 12,48 px della riga, cioe' 10,4 px — ed erano
-   l'unico testo del foglio sotto la soglia dichiarata in testa. Le tre regole
-   `small` sorelle ce l'hanno tutte. Sono «EAN fornitore: …» e «Offerta: …», e
-   compaiono su ogni riga del riepilogo, in pagina 2 e in pagina 3. */
+/* Explicit `font-size`: without it, `<small>` defaults to the browser's
+   `smaller` keyword, which lands below the sheet's minimum readable size
+   (see the top of this file). Shows the "EAN fornitore: …" / "Offerta: …"
+   detail lines on every summary row, pages 2 and 3. */
 .order-lines__name small {
   font-size: 0.78rem;
   display: block;
@@ -3013,11 +2910,10 @@ summary.supplier-summary__head::-webkit-details-marker {
   text-align: left;
 }
 
-/* ⚠ Il «×» sta staccato dagli altri tre, e non e' una scelta d'aspetto: azzera
-   la quantita' e fa sparire il prodotto da questa pagina nello stesso istante,
-   mentre il «+» accanto e' il bersaglio che si preme piu' spesso. Il bersaglio
-   piu' distruttivo non confina con quello piu' frequente. Il contorno resta
-   attorno ai soli tre comandi della quantita': il «×» ha il suo. */
+/* The "×" is visually separated from the −/+ pair: it zeroes the quantity
+   and removes the product from the page instantly, while "+" next to it
+   is the most-clicked button here. The most destructive control shouldn't
+   sit adjacent to the most frequent one. */
 .summary-quantity {
   display: inline-flex;
   align-items: center;
@@ -3065,9 +2961,9 @@ summary.supplier-summary__head::-webkit-details-marker {
   font-size: 1.15rem;
 }
 
-/* Sposta tutto su un altro fornitore (pagina 3).
-   Il comando sta su ogni scheda fornitore. Quando il subtotale è sotto soglia
-   la riga si accende: è il caso in cui serve davvero. */
+/* Move everything to another supplier (page 3). Present on every supplier
+   card; highlighted when the subtotal is below the minimum-order
+   threshold, which is when this action is actually needed. */
 
 .supplier-summary__move {
   padding: 0.7rem 0.95rem;
@@ -3152,8 +3048,8 @@ summary.supplier-summary__head::-webkit-details-marker {
   border: 0;
 }
 
-/* Riga di scelta: nome della destinazione, quanti prodotti si spostano e la
-   differenza di costo già calcolata dal servizio locale. */
+/* Choice row: destination name, how many products move, and the cost
+   delta already computed by the local service. */
 .move-option {
   padding: 0.8rem 0.9rem;
   display: grid;
@@ -3255,8 +3151,8 @@ summary.supplier-summary__head::-webkit-details-marker {
   color: var(--muted);
 }
 
-/* Spendere meno ricevendo meno merce non è un risparmio: il colore non deve
-   dire il contrario di quello che dicono le parole. */
+/* Spending less while receiving less goods isn't a saving: color shouldn't
+   contradict what the accompanying text says. */
 .move-option__delta.is-neutral strong {
   color: var(--ink);
 }
@@ -3291,8 +3187,8 @@ summary.supplier-summary__head::-webkit-details-marker {
   color: var(--muted);
 }
 
-/* Le condizioni già comprese nel prezzo restano consultabili ma non occupano
-   il posto di quelle che chiedono una decisione. */
+/* Terms already included in the price stay available to check but don't
+   take up the space reserved for terms that need a decision. */
 .promotion-catalog__included {
   margin: 0.4rem 0.85rem 0.85rem;
   border: 1px solid var(--line);
@@ -3461,13 +3357,11 @@ summary.supplier-summary__head::-webkit-details-marker {
   border-color: var(--navy);
 }
 
-/* ⚠ Niente `position: sticky` qui. In pagina questa classe esiste solo come
-   `compile-card compile-card--bottom`, che rimetteva `position: static`, e c'era
-   pure una terza regola a 1050 px che la rimetteva statica una seconda volta:
-   chi leggeva il foglio contava tre quote di aggancio in alto e ne esistevano
-   due. Le due agganciate alla pagina sono la barra dei passi e la fascia dei
-   totali; le intestazioni delle due tabelle si agganciano al loro riquadro che
-   scorre, non alla pagina. */
+/* No `position: sticky` here: this class only ever appears combined with
+   `compile-card--bottom`, which resets it to static. The two elements
+   actually pinned to the page top are the stepper bar and the totals
+   strip; the two table headers stick to their own scrolling container,
+   not to the page. */
 .compile-card {
   padding: 1.15rem;
   border: 1px solid var(--line);
@@ -3491,22 +3385,17 @@ summary.supplier-summary__head::-webkit-details-marker {
   grid-column: 1 / -1;
 }
 
-/* Il segno che la compilazione sta lavorando. È l'unico movimento del
-   programma che non sia il giracarte del caricamento, e non contraddice la
-   regola «niente movimento che non dica niente»: qui il movimento È quello che
-   si ha da dire, perché fra la pressione e i documenti scritti non c'è nessun
-   altro segno.
-   ⚠ Indeterminata. Il processo che scrive i listini non riporta avanzamenti:
-   una barra che si riempie prometterebbe una percentuale che nessuno ha. Vedi
-   `renderCompileProgress` in app.js. */
+/* Indeterminate progress indicator for order compilation: the writing
+   process reports no percentage, so a filling bar would promise a number
+   nobody has. See `renderCompileProgress` in app.js. */
 .compile-progress {
   margin-top: -0.25rem;
 }
 
 .compile-progress__bar {
   position: relative;
-  /* La stessa altezza della barra del ricalcolo: sono la stessa cosa detta due
-     volte in due pagine, e devono somigliarsi. */
+  /* Matches the recompute progress bar's height: both express the same
+     idea and should look consistent across pages. */
   height: 0.55rem;
   border-radius: 999px;
   border: 1px solid var(--line);
@@ -3537,11 +3426,11 @@ summary.supplier-summary__head::-webkit-details-marker {
   line-height: 1.45;
 }
 
-/* Chi ha chiesto meno movimento non riceve una barra ferma: una barra ferma è
-   proprio la cosa che si legge come «si è piantato», ed è il difetto che
-   questa aggiunta doveva togliere. Resta la frase, che dice la stessa cosa a
-   parole. La regola generale più in basso azzera le durate: se la barra
-   restasse, resterebbe immobile. */
+/* A user who asked for reduced motion shouldn't get a frozen bar, which
+   reads as "it's stuck" — the opposite of what an animated indicator is
+   for. Hidden here in favor of the text note; the general
+   reduced-motion rule further down would otherwise zero the animation
+   duration and leave the bar motionless. */
 @media (prefers-reduced-motion: reduce) {
   .compile-progress__bar {
     display: none;
@@ -3574,9 +3463,9 @@ summary.supplier-summary__head::-webkit-details-marker {
   border-bottom: 1px solid var(--line);
 }
 
-/* Quante copie e per chi, subito sotto il totale e sopra il pulsante. Non e'
-   un riepilogo: e' il numero di documenti che tra un attimo esisteranno su
-   disco, che e' l'unica cosa che quella scheda non diceva. */
+/* How many copies and for whom, right below the total and above the
+   button: states the number of files about to be written to disk, which
+   nothing else on this card says. */
 .compile-card__copie {
   grid-column: 1 / -1;
   margin-top: -0.2rem;
@@ -3641,9 +3530,8 @@ summary.supplier-summary__head::-webkit-details-marker {
   transition: 120ms ease;
 }
 
-/* Il passaggio del mouse scurisce, non solleva. `translateY(-1px)` produceva
-   micro-scatti sotto il puntatore su una pagina che si usa col mouse, e non
-   diceva niente che il colore non dica gia'. */
+/* Hover darkens rather than lifts: a `translateY` produced visible jitter
+   under the cursor and said nothing the color change didn't already say. */
 .button:hover:not(:disabled) {
   filter: brightness(0.94);
 }
@@ -3680,8 +3568,8 @@ summary.supplier-summary__head::-webkit-details-marker {
   font-size: 1rem;
 }
 
-/* Un comando di contorno, in testa alla pagina: deve leggersi come un comando
-   e non pesare quanto il passo successivo. */
+/* Secondary action at the top of a page: must read as clickable without
+   competing visually with the primary next step. */
 .button--small {
   min-height: 2.1rem;
   padding: 0.35rem 0.7rem;
@@ -3728,8 +3616,8 @@ summary.supplier-summary__head::-webkit-details-marker {
   margin-top: 0.35rem;
 }
 
-/* Una compilazione che ha scartato una copia, o che non è entrata fra gli
-   ordini da controllare, non è verde: il verde vuol dire «finito bene». */
+/* A compilation that dropped a copy, or wasn't added to the orders to
+   check, isn't green: green means it finished cleanly. */
 .results--partial {
   border-color: #eccb91;
   color: #6f3f05;
@@ -3758,8 +3646,8 @@ summary.supplier-summary__head::-webkit-details-marker {
   font-size: 0.88rem;
 }
 
-/* L'elenco dei prodotti fermi sotto una compilazione non riuscita: uno per
-   riga, con il nome, perché è così che si ritrovano fra cinquecento. */
+/* List of products stalled by a failed compilation: one per row, named,
+   so a specific product can be found among hundreds. */
 .results__issues-intro {
   margin-top: 0.6rem;
   font-size: 0.88rem;
@@ -3796,7 +3684,9 @@ summary.supplier-summary__head::-webkit-details-marker {
   word-break: break-word;
 }
 
-/* «3 prodotti erano assegnati a CIPRESSO: ora sono passati a BETULLA.» */
+/* Example message: "3 prodotti erano assegnati a CIPRESSO: ora sono
+   passati a BETULLA." (3 products were assigned to CIPRESSO: now moved
+   to BETULLA.) */
 .reassignment-panel {
   margin-bottom: 1rem;
 }
@@ -3995,23 +3885,20 @@ summary.supplier-summary__head::-webkit-details-marker {
   background: var(--red-soft);
 }
 
-/* Pagina Impostazioni.
-   I limiti della fase AI stanno in colonne, ma non sono un campo qualsiasi:
-   una classe propria evita che ritoccare l'una sposti l'altra. */
+/* Settings page: the AI-phase limit fields sit in columns but aren't a
+   generic form grid, so they get their own class to keep them from
+   shifting when unrelated fields are adjusted. */
 .impostazioni-griglia {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
   gap: 1rem;
 }
 
-/* Le note che spiegano che cosa fa una voce, e che cosa succede alla chiave.
-   Sono testo da leggere davvero, non didascalie: si tengono leggibili. */
-/* ⚠ Il quinto riquadro della pagina Impostazioni — «Codici dichiarati lo stesso
-   articolo» — e' l'unico che non usa `.panel`, e le sue due classi non avevano
-   nessuna regola: rendeva senza sfondo, senza bordo, senza imbottitura e senza
-   margine, incollato al riquadro bianco sopra, col testo lungo quanto tutta la
-   pagina. Era una delle otto classi «usate senza regola» rimaste da decidere:
-   decisa. */
+/* Explanatory notes for a settings entry: text meant to actually be read,
+   not a caption, so kept at a readable size.
+   The "Codici dichiarati lo stesso articolo" (codes declared the same
+   item) card is the only Settings section not using `.panel`; styled
+   here explicitly so it doesn't render unstyled and full-width. */
 .settings-card {
   margin-top: var(--s4);
   padding: 1.25rem;
@@ -4042,10 +3929,10 @@ summary.supplier-summary__head::-webkit-details-marker {
   margin-top: 0.9rem;
 }
 
-/* --- La consegna: pulsante dello zip e compilazioni precedenti ------------ */
+/* --- Delivery: zip download button and past compilations ----------------- */
 
-/* Il pulsante sta su una riga sua, sopra l'elenco dei singoli documenti: è la
-   cosa che si fa dopo aver compilato, e va trovata senza cercarla. */
+/* The button sits on its own row above the per-document list: it's the
+   next action after compiling, and should be found without searching. */
 .results__consegna {
   margin-top: 0.75rem;
   display: flex;
@@ -4116,8 +4003,8 @@ summary.supplier-summary__head::-webkit-details-marker {
   background: var(--surface-soft);
 }
 
-/* La compilazione di cui non si legge l'audit resta nell'elenco — i suoi file
-   ci sono — e si distingue a colpo d'occhio da quelle complete. */
+/* A compilation whose audit data couldn't be read stays in the list — its
+   files still exist — but is visually distinguished from complete ones. */
 .compilazione.is-incompleta {
   border-color: #e6cf9e;
   background: var(--amber-soft);
@@ -4144,7 +4031,7 @@ summary.supplier-summary__head::-webkit-details-marker {
   line-height: 1.5;
 }
 
-/* I documenti che l'audit dichiara e nella cartella non ci sono più. */
+/* Documents listed in the audit data that are missing from the folder. */
 .compilazione__mancanti {
   margin-top: 0.5rem;
   color: #6b4a05;
@@ -4231,13 +4118,15 @@ summary.supplier-summary__head::-webkit-details-marker {
     grid-column: 1 / -1;
   }
 
-  /* Qui la quantità va su una riga sua e l'intestazione non si allinea più. */
+  /* Quantity moves to its own row here, so the header wouldn't align
+     with the columns and is hidden instead. */
   .order-lines--product .order-lines__intestazione {
     display: none;
   }
 
-  /* I due numeri restano nelle ultime due colonne, a destra come sopra i
-     1050 px: senza, la riga dei comandi li metteva sotto il fornitore. */
+  /* Keeps the two number columns right-aligned in the last two columns,
+     same as above 1050 px; without this the actions row would push them
+     under the supplier name. */
   .order-lines--product .order-lines__pezzo {
     grid-column: 4;
   }
@@ -4254,9 +4143,9 @@ summary.supplier-summary__head::-webkit-details-marker {
     clip-path: none;
   }
 
-  /* Sotto questa larghezza le sei colonne del confronto diventano illeggibili:
-     la tabella si impila e ogni numero si riprende la sua etichetta, che nel
-     markup c'è sempre. */
+  /* Below this width the six comparison columns become unreadable: the
+     table stacks and each number reveals the label that's always present
+     in the markup. */
   .offer-grid__head {
     display: none;
   }
@@ -4273,11 +4162,9 @@ summary.supplier-summary__head::-webkit-details-marker {
     text-align: left;
   }
 
-  /* ⚠ Tutte e sei le proprieta' della regola base, non quattro: senza
-     annullare anche `overflow` e `white-space` l'etichetta ricompariva, non
-     poteva andare a capo e veniva tagliata di netto dalla colonna — misurato a
-     375 px: «Rispetto all'ultimo pagato» perdeva 56 px, cioe' si leggeva
-     «Rispetto all'ultimo pa». */
+  /* Must reset all six properties from the visually-hidden base rule, not
+     just position/size: leaving `overflow`/`white-space` untouched would
+     keep the label unable to wrap and clipped by its column. */
   .offer-card__label {
     position: static;
     width: auto;
@@ -4315,9 +4202,9 @@ summary.supplier-summary__head::-webkit-details-marker {
     text-align: left;
   }
 
-  /* Sotto i 760 px il passo va in colonna — etichetta sopra, «fatto» sotto —
-     e la barra cresce: misurata 55 px, contro i 51 che c'erano qui. Erano
-     quattro pixel di sovrapposizione. */
+  /* Below 760 px the stepper item stacks vertically (label above, "fatto"
+     badge below), making the bar taller; this offset keeps the sticky
+     totals strip below it instead of overlapping it. */
   .supplier-totals-strip {
     top: 3.6rem;
   }
@@ -4330,8 +4217,9 @@ summary.supplier-summary__head::-webkit-details-marker {
     justify-self: stretch;
   }
 
-  /* A schermo stretto il nome per esteso non ci sta in tre colonne: si accorcia
-     con i puntini, e la parola «fatto» va sotto invece che accanto. */
+  /* At narrow widths the full step name doesn't fit in three columns:
+     truncated with an ellipsis, and the "fatto" badge moves below rather
+     than beside it. */
   .stepper__button {
     padding: var(--s2) var(--s1);
     flex-direction: column;
@@ -4358,8 +4246,8 @@ summary.supplier-summary__head::-webkit-details-marker {
     flex-direction: column;
   }
 
-  /* A schermo stretto la differenza di costo va a capo sotto al nome della
-     destinazione, allineata a sinistra come il resto della riga. */
+  /* At narrow widths the cost delta wraps below the destination name,
+     left-aligned like the rest of the row. */
   .move-option {
     grid-template-columns: auto minmax(0, 1fr);
   }
@@ -4378,8 +4266,8 @@ summary.supplier-summary__head::-webkit-details-marker {
     grid-template-columns: 1fr;
   }
 
-  /* A scheda impilata la base flessibile diventa un'altezza: senza questo i due
-     pulsanti diventerebbero alti quanto mezza pagina. */
+  /* Once the card stacks, the flexible flex-basis would otherwise stretch
+     into a height, making the two buttons half a page tall. */
   .pending-order__text,
   .pending-order__actions {
     flex: 0 0 auto;
@@ -4428,9 +4316,8 @@ summary.supplier-summary__head::-webkit-details-marker {
     display: none;
   }
 
-  /* Sotto il totale, su una riga sua e allineato a destra. Due classi, come
-     la regola dei 1050 px che sostituisce: a parità, vince questa perché
-     viene dopo. */
+  /* Placed below the total, on its own right-aligned row. Overrides the
+     1050 px rule below at equal specificity by coming later in the file. */
   .order-lines .order-lines__pezzo {
     order: 1;
     grid-column: 1 / -1;
@@ -4502,12 +4389,12 @@ summary.supplier-summary__head::-webkit-details-marker {
   }
 }
 
-/* --- Il visualizzatore dei listini ---------------------------------------- */
-/* Mostra il listino di un fornitore come il programma l'ha letto: è la sola via
-   d'uscita quando l'abbinamento automatico non poteva farcela, cioè quando il
-   nome del gestionale non dice la variante e il fornitore usa un altro codice a
-   barre. Più larga della finestra del catalogo perché qui si legge una tabella,
-   non un elenco di risultati. */
+/* --- Price-list viewer ----------------------------------------------------- */
+/* Shows a supplier's price list exactly as the program parsed it: the
+   fallback path when automatic matching can't resolve an item, e.g. the
+   management-software name omits the variant and the supplier uses a
+   different barcode. Wider than the catalog dialog since this shows a
+   table, not a results list. */
 .listino-dialog {
   width: min(72rem, 100%);
   max-height: min(46rem, calc(100vh - 2rem));
@@ -4576,9 +4463,9 @@ summary.supplier-summary__head::-webkit-details-marker {
   letter-spacing: 0.02em;
 }
 
-/* La riga già abbinata a questo prodotto, e quella su cui la finestra si è
-   aperta: senza, su ottomila righe si cerca a mano una cosa che il programma
-   sa già. */
+/* Highlights the row already matched to this product, and the row the
+   dialog opened on: without it, finding either by hand in a large price
+   list means re-doing work the program already did. */
 .listino-tabella tr.is-abbinata {
   background: rgba(21, 128, 61, 0.08);
 }
@@ -4611,10 +4498,10 @@ summary.supplier-summary__head::-webkit-details-marker {
   justify-content: space-between;
 }
 
-/* Le dichiarazioni «questi due codici sono lo stesso articolo», in
-   Impostazioni. Due lati e un uguale in mezzo: la forma dice da sola che cosa
-   è stato dichiarato, e i due nomi sono la ragione per cui questo elenco è
-   stato spostato qui — con i soli codici non si poteva giudicare niente. */
+/* Declarations that two codes are the same item, in Settings. Two sides
+   and an equals sign between them: the layout itself says what was
+   declared, and showing both item names (not just the codes) is what
+   makes the declaration checkable at a glance. */
 .uguaglianze {
   margin: 0.6rem 0 0;
   padding-left: 0;

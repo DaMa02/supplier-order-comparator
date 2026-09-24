@@ -1,87 +1,72 @@
 #!/usr/bin/env python3
-"""La copia che si consegna al fornitore dev'essere il suo listino, non un'altra cosa.
+"""Verify that the copy delivered to a supplier is faithful to their price list.
 
-PERCHE' ESISTE QUESTO MODULO
-Il 12 agosto 2026 la copia LARICE consegnabile aveva **34 celle della colonna
-EAN** con scritto il testo «1235» al posto del nulla, e aveva perso **641 titoli
-di sezione** dalla colonna d'ordine.  Nessuno se n'era accorto: il writer aveva
-detto che era andato tutto bene, perche' guardava soltanto le celle che voleva
-scrivere.
+This module exists because a writer reporting success only proves it wrote
+the cells it meant to write — it says nothing about what openpyxl may have
+lost or altered elsewhere while re-serializing the whole workbook. Copy
+fidelity can't depend on the good behavior of the library that writes the
+file, so every fill gets an independent proof: reopen both files and
+compare them cell by cell.
 
-La lezione non e' «correggi quei due difetti».  E' che **la fedelta' della copia
-non puo' dipendere dalla buona condotta della libreria** che la scrive: la
-libreria importa il documento, se lo ricostruisce dentro e lo riscrive da capo,
-e qualunque cosa perda per strada esce lo stesso dalla porta.  Serve una prova,
-sempre, su ogni compilazione: si riaprono i due file e si confrontano **cella
-per cella**.
+READING BOTH FILES
+Both are loaded in full, never with `read_only`. openpyxl's fast mode
+trusts the `<dimension>` element and row order declared in the file; a
+legitimate price list with a conservative `<dimension>` or out-of-order
+rows would make a perfect copy look wrong. A full load ignores the
+declaration and places every cell at its real row number. Cost on real
+price lists: under a second per workbook.
 
-COME SI LEGGONO I DUE FILE
-Per intero, mai in `read_only`.  La modalita' veloce di openpyxl si fida
-dell'elemento `<dimension>` e dell'ordine delle righe nel file: un listino
-lecito con una `<dimension>` prudente, o con le righe scritte fuori ordine,
-farebbe rifiutare una copia perfetta accusando celle innocenti (misurato dalla
-revisione avversariale del 13 agosto 2026).  Il carico completo ignora la
-dichiarazione e mette ogni cella al suo numero di riga vero.  Costo misurato
-sui listini veri: meno di un secondo a libro.
+THE ONLY DIFFERENCES ALLOWED
+Only inside the order column, from the first data row down, and only of
+two kinds:
 
-LE UNICHE DIFFERENZE AMMESSE
-Solo dentro la colonna d'ordine, dalla prima riga di dati in giu', e solo di
-due specie:
+1. the plan's quantity, on the rows the plan touches;
+2. zeroing a quantity that was already there — without this, stale
+   quantities from a previous run would ship as phantom order lines.
 
-1. **la quantita' del piano** nelle righe che il piano tocca;
-2. **l'azzeramento di una quantita' che c'era gia'** — senza, si spedirebbero
-   righe fantasma ordinate la settimana scorsa.
+Everything else: not one cell. A deleted section header, a changed EAN, a
+shifted price, a missing sheet — any of those and the copy for that
+supplier is not delivered, with the reason stated.
 
-Tutto il resto no: nemmeno una cella.  Un titolo di sezione cancellato, un EAN
-che cambia, un prezzo che si sposta, un foglio che sparisce → la copia di
-**quel** fornitore non si consegna, e il programma dice perche'.
+WHAT THE PLAN ASKS FOR MUST BE THERE
+Looking only for unwanted differences answers "is there anything extra?"
+and misses the mirror question, "is everything that's needed there?". An
+order line the writer fails to write isn't a difference — the copy's cell
+stays identical to the original — so a diff-only check would call the copy
+faithful while it ships with an order missing. The plan is the contract:
+every row `quantita` requests must be in the copy, showing the number the
+plan says. Not "must have changed": if the source price list already had
+that number — the same order as the previous run — the copy is correct
+without there being any difference to count. What matters is the value the
+supplier reads.
 
-E QUELLO CHE IL PIANO CHIEDE DEV'ESSERCI (il difetto misurato il 14/8/2026)
-Guardare solo le differenze risponde a «c'e' qualcosa di troppo?» e lascia
-scoperta la domanda gemella: «c'e' tutto quello che serve?».  Una riga d'ordine
-che il writer **non scrive** non e' una differenza — la cella della copia resta
-identica all'originale — quindi nessun controllo la incontrava e il verdetto era
-«fedele».  La copia partiva, con un ordine in meno dentro:
+These are two distinct failures and the message names them separately (a
+cell changed outside the order column vs. a missing order row), because
+they point to different places to investigate.
 
-    copia completa            fedele=True  ammesse=3  rifiutate=0  (piano: 3 righe)
-    copia senza la riga 3     fedele=True  ammesse=2  rifiutate=0  (piano: 3 righe)
+A quantity is a number. Same rule `app/xls_writer.py` applies to its `.xls`
+target, and it's what distinguishes a quantity to zero from a section
+header to leave alone.
 
-Il piano e' il contratto: ogni riga che `quantita` chiede dev'essere **nella
-copia**, con il numero che il piano dice.  Non «dev'essere cambiata»: se il
-listino di partenza portava gia' quel numero — l'ordine della settimana scorsa,
-identico a quello di questa — la copia e' giusta e non c'e' nessuna differenza
-da contare.  Quello che conta e' il valore che il fornitore legge.
+NUMBER FORMAT IS PART OF THE COMPARISON, WHERE THE COPY SHOWS A VALUE
+The supplier doesn't read the file's internal value, they read the
+displayed number, and the number format decides how it's shown: a price of
+`1.75` under format `0` displays as `2`; a quantity under format `;;;`
+displays as blank. So where the copy shows a visible value, its number
+format must match the source price list. Where the copy is blank, no
+format displays anything, and a format mismatch there doesn't block a
+correct order.
 
-Sono due guasti diversi e il programma li dice diversi: «2 celle cambiate fuori
-dalla colonna d'ordine» e «manca 1 delle 3 righe d'ordine richieste» mandano a
-cercare in due posti opposti.
-
-⚠ Una quantita' e' un numero.  E' la stessa regola che `app/xls_writer.py`
-applica al `.xls` di Noce, ed e' quella che distingue una quantita' da
-azzerare (`12`) da un titolo di sezione da lasciare stare
-(«DENT. E SPAZZ. AQUAFRISK OPPORTUNITA'»).
-
-IL FORMATO NUMERICO ENTRA NEL CONFRONTO, DOVE LA COPIA MOSTRA UN VALORE
-Il fornitore non legge la memoria del file: legge il numero **mostrato**, e il
-formato decide come si mostra.  Un prezzo `1,75` con formato `0` si legge «2»;
-una quantita' con formato `;;;` si legge vuota.  La revisione avversariale del
-13 agosto 2026 ha costruito entrambe le manomissioni e la prima versione della
-guardia le prometteva al fornitore senza dire niente.  Percio': dove la copia
-porta un valore visibile, il suo formato numerico dev'essere quello del listino
-di partenza.  Dove la copia e' vuota il formato non mostra nulla, e una
-differenza li' non ferma un ordine giusto.
-
-CHE COSA QUESTO CONFRONTO **NON** GUARDA (dichiarato, misurato il 13/8/2026)
-L'aspetto che non cambia i valori mostrati: colori e caratteri, larghezze di
-colonna, celle unite, immagini, collegamenti ipertestuali, filtri automatici,
-impostazioni di stampa, proprieta' del documento, fogli nascosti.  E i
-**risultati in cache delle formule**: le formule si confrontano come testo
-(`data_only=False`), e la libreria i risultati li ricalcola comunque
-all'esportazione (verificato sul BETULLA vero).  La libreria rimaneggia queste
-parti — la copia LARICE pesa 447 KB contro i 521 KB dell'originale — e
-distinguere una perdita vera da una normalizzazione innocente richiederebbe di
-leggere l'OpenXML a mano.  Qui si difende quello che il fornitore legge:
-i numeri, i testi e la loro veste numerica.
+WHAT THIS COMPARISON DELIBERATELY DOES NOT CHECK
+Anything that doesn't change a displayed value: colors and fonts, column
+widths, merged cells, images, hyperlinks, autofilters, print settings,
+document properties, hidden sheets. Also cached formula results: formulas
+are compared as text (`data_only=False`), and the library recalculates
+results anyway on export. The library reshuffles these parts of the file
+regardless of content, and telling a real loss from a harmless
+normalization there would mean parsing the OpenXML by hand. What's
+defended here is what the supplier actually reads: numbers, text, and
+their numeric formatting.
 """
 
 from __future__ import annotations
@@ -90,35 +75,34 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
-# Quante differenze si nominano nel messaggio prima di limitarsi a contarle: un
-# avviso lungo una pagina non lo legge nessuno.
+# How many differences get named in the message before falling back to a
+# count: a page-long warning goes unread.
 ESEMPI_NEL_MESSAGGIO = 3
 
-# Il formato numerico delle celle che non ne dichiarano uno.
+# Number format of cells that don't declare one.
 FORMATO_PREDEFINITO = "General"
 
 
 class ConfrontoImpossibile(Exception):
-    """I due documenti non si riescono nemmeno ad aprire per confrontarli."""
+    """The two documents can't even be opened for comparison."""
 
 
 @dataclass
 class EsitoFedelta:
-    """Che cosa e' stato confrontato e che cosa non torna.
+    """What was compared and what doesn't match.
 
-    Due misure separate, perche' sono due guasti separati: `quante_rifiutate`
-    conta quello che nella copia c'e' **di troppo** (celle cambiate dove non si
-    poteva), `righe_mancanti` elenca quello che **manca** (righe che il piano
-    chiedeva e che la copia non porta).  Una copia si consegna solo se sono
-    vuote tutte e due.
+    Two separate measures for two separate failures: `quante_rifiutate`
+    counts unwanted changes (cells changed where they shouldn't be),
+    `righe_mancanti` lists what's missing (rows the plan requested that the
+    copy doesn't carry). The copy is delivered only if both are empty.
     """
 
     celle_confrontate: int = 0
     differenze_ammesse: int = 0
     quante_rifiutate: int = 0
     esempi_rifiutati: list[str] = field(default_factory=list)
-    # Quante righe il piano chiedeva sul foglio dell'ordine, e quali di quelle
-    # la copia non porta.  Numeri di riga come li vede l'utente.
+    # Rows the plan requested on the order sheet, and which of them the
+    # copy doesn't carry. Row numbers as the user sees them.
     righe_richieste: int = 0
     righe_mancanti: list[int] = field(default_factory=list)
 
@@ -128,14 +112,13 @@ class EsitoFedelta:
 
 
 def _vuoto(valore: Any) -> bool:
-    """Niente, stringa vuota e soli spazi sono la stessa cosa: una cella vuota.
+    """None, an empty string and whitespace-only all count as an empty cell.
 
-    Non e' una scorciatoia: nel listino di partenza una cella puo' portare una
-    *stringa condivisa vuota*, che in Excel si vede identica a una cella senza
-    niente dentro, e la copia la riscrive come cella senza niente.  Chiamarla
-    differenza vorrebbe dire fermare una compilazione giusta per una cosa che
-    nessuno puo' vedere.  Sul listino LARICE vero sono 35 celle a compilazione:
-    senza questa riga il fornitore piu' grosso non riceverebbe mai un ordine.
+    Not just a convenience: the source price list can carry an empty
+    shared string, which Excel displays identically to a truly empty cell,
+    while the copy rewrites it as a truly empty cell. Treating that as a
+    difference would block a correct fill over something invisible to the
+    user.
     """
 
     if valore is None:
@@ -144,7 +127,7 @@ def _vuoto(valore: Any) -> bool:
 
 
 def _numero(valore: Any) -> float | None:
-    """Il valore come numero, se lo è.  Un booleano non è una quantità."""
+    """The value as a number, if it is one. A boolean is not a quantity."""
 
     if isinstance(valore, bool) or valore is None:
         return None
@@ -195,14 +178,14 @@ def confronta_copia(
     quantita: Mapping[int, int],
     foglio_ordine: str | None = None,
 ) -> EsitoFedelta:
-    """Confronta la copia con il listino di partenza, cella per cella.
+    """Compare the copy with the source price list, cell by cell.
 
-    `quantita` sono le righe che il piano ha chiesto di scrivere (numero di riga
-    come lo vede l'utente -> colli).  E' insieme la **tolleranza** (li' una
-    differenza e' ammessa) e il **contratto** (li' la quantita' dev'esserci):
-    vedi `_righe_del_piano_mancanti`.  `foglio_ordine` e' il nome del foglio
-    dove sta la colonna d'ordine: negli **altri** fogli non e' ammessa nessuna
-    differenza, nemmeno nella colonna con la stessa lettera.
+    `quantita` are the rows the plan asked to write (row number as the user
+    sees it -> carton count). It's both the tolerance (a difference is
+    allowed there) and the contract (the quantity must be there); see
+    `_righe_del_piano_mancanti`. `foglio_ordine` names the sheet holding
+    the order column: on every other sheet, no difference is allowed, not
+    even in the column with the same letter.
     """
 
     from openpyxl import load_workbook
@@ -212,7 +195,7 @@ def confronta_copia(
 
     try:
         libro_originale = load_workbook(originale, read_only=False, data_only=False)
-    except Exception as errore:  # noqa: BLE001 - qualunque motivo, il messaggio e' quello
+    except Exception as errore:  # noqa: BLE001 - whatever the cause, this is the message
         raise ConfrontoImpossibile(
             f"non riesco a riaprire il listino di partenza «{Path(originale).name}» "
             f"per confrontarlo con la copia: {errore}"
@@ -236,8 +219,8 @@ def confronta_copia(
                 )
                 return esito
 
-            # Il foglio dell'ordine e' quello dichiarato dalla regola; `FIRST` e
-            # il nome assente vogliono dire «il primo», come per il writer.
+            # The order sheet is the one the caller declares; `FIRST` or a
+            # missing name mean "the first one", same as for the writer.
             atteso = str(foglio_ordine or "").strip()
             if not atteso or atteso.upper() == "FIRST" or atteso not in nomi_originale:
                 atteso = nomi_originale[0] if nomi_originale else ""
@@ -260,15 +243,14 @@ def confronta_copia(
 
 
 def _celle_significative(foglio: Any) -> dict[tuple[int, int], tuple[Any, str]]:
-    """`{(riga, colonna): (valore, formato)}` per le celle che portano qualcosa.
+    """`{(row, column): (value, format)}` for every cell that carries something.
 
-    E' il carico completo a rimettere in ordine un file con le righe scritte
-    fuori posto (il parser archivia ogni cella alla sua coordinata vera, e
-    `iter_rows` riparte sempre dalla riga 1: misurato il 13 agosto 2026).  La
-    chiave usa comunque `cell.row`, il numero dichiarato dalla cella, cosi' il
-    confronto non dipende dall'ordine di lettura nemmeno se un giorno il modo
-    di leggere cambia.  Una cella senza valore e con il formato predefinito non
-    porta niente e non entra nella mappa.
+    A full load already puts a file with out-of-order rows back in order
+    (the parser stores each cell at its real coordinate, while `iter_rows`
+    always starts from row 1). The key still uses `cell.row`, the row
+    number the cell itself declares, so the comparison doesn't depend on
+    read order even if the loading strategy changes later. A cell with no
+    value and the default format carries nothing and is left out of the map.
     """
 
     mappa: dict[tuple[int, int], tuple[Any, str]] = {}
@@ -312,16 +294,15 @@ def _confronta_foglio(
             else:
                 _rifiuta(esito, nome, colonna, riga, valore_originale, valore_copia)
                 continue
-        # Il formato numerico conta solo dove la copia mostra un valore: su una
-        # cella vuota nessun formato mostra niente, e fermarsi li' vorrebbe dire
-        # rifiutare un ordine giusto per una veste che non si vede.
+        # Number format only matters where the copy shows a value: on an
+        # empty cell no format displays anything, so flagging it there
+        # would reject a correct order over formatting nobody sees.
         if formato_originale != formato_copia and not _vuoto(valore_copia):
             _rifiuta_formato(esito, nome, colonna, riga, formato_originale, formato_copia)
 
-    # Fin qui si e' guardato quello che nella copia c'e' di troppo.  Adesso
-    # quello che ci deve essere: il ciclo delle differenze non puo' accorgersi
-    # di una quantita' **non scritta**, perche' una cella non scritta non e'
-    # diversa da com'era.
+    # So far this has only checked for unwanted extras. Now for what must
+    # be present: the diff loop above can't detect a quantity that was
+    # never written, because an untouched cell isn't a difference.
     if colonna_ordine is not None:
         esito.righe_richieste += len(quantita)
         esito.righe_mancanti.extend(
@@ -330,12 +311,11 @@ def _confronta_foglio(
 
 
 def _quantita_del_piano_nella_cella(valore: Any, attesa: int) -> bool:
-    """La cella mostra i colli che il piano chiede per quella riga.
+    """Whether the cell shows the cartons the plan requests for that row.
 
-    E' l'unica definizione di «il piano e' rispettato qui», e la usano tutti e
-    due i controlli: quello che ammette la differenza mentre scorre le celle e
-    quello che, alla fine, verifica che ogni riga del piano ci sia davvero.
-    Una sola regola, valida per ogni fornitore.
+    The single definition of "the plan is satisfied here", shared by both
+    checks: the one that allows a difference while scanning cells, and the
+    one that verifies at the end that every plan row is actually present.
     """
 
     return _numero(valore) == float(attesa)
@@ -347,26 +327,25 @@ def _righe_del_piano_mancanti(
     colonna_ordine: int,
     quantita: Mapping[int, int],
 ) -> list[int]:
-    """Le righe che il piano chiedeva e che nella copia non ci sono.
+    """Rows the plan requested that aren't in the copy.
 
-    Si guarda il **valore che la copia porta**, non la differenza rispetto al
-    listino: se il listino di partenza aveva gia' quel numero — la stessa riga
-    ordinata la settimana scorsa, con gli stessi colli — la copia e' giusta pur
-    non essendo cambiata, e pretendere una differenza rifiuterebbe un ordine
-    corretto.
+    Checks the value the copy actually carries, not whether it differs
+    from the price list: if the source price list already had that
+    number — the same order as the previous run, unchanged — the copy is
+    correct even without a difference, and requiring one would reject a
+    correct order.
 
-    ⚠ Quantita' zero: `quantita` arriva dal piano, e chi lo costruisce scarta
-    gia' le righe con zero colli (`server.py`, «if decision["quantity"] <= 0»);
-    il writer rifiuta pure lui qualunque quantita' minore di 1.  Se una riga a
-    zero ci arrivasse lo stesso, qui vale la regola generale — la copia deve
-    mostrare quello che il piano chiede, cioe' il numero 0 — e la copia si
-    ferma invece di partire con una cella che non corrisponde al piano.  E' la
-    stessa lettura che `_differenza_ammessa` da' gia' a `attesa == 0`: una
-    regola sola, non due comportamenti che si contraddicono.
+    Zero quantities: `quantita` comes from the plan, and the code that
+    builds it already discards rows with zero cartons, and the writer
+    rejects any quantity below 1 too. If a zero-quantity row did arrive
+    here anyway, the general rule still applies — the copy must show what
+    the plan asks, i.e. the number 0 — so the copy is rejected rather than
+    delivered with a cell that doesn't match the plan. This is the same
+    reading `_differenza_ammessa` already gives `attesa == 0`.
 
-    L'azzeramento non c'entra e non entra nel conto: svuotare una cella che
-    portava un numero e' ammesso proprio **quando il piano non chiede niente**
-    per quella riga, quindi quelle righe in `quantita` non ci sono.
+    Zeroing doesn't enter this count: emptying a cell that held a number is
+    allowed precisely when the plan requests nothing for that row, so those
+    rows are absent from `quantita`.
     """
 
     mancanti: list[int] = []
@@ -378,12 +357,12 @@ def _righe_del_piano_mancanti(
 
 
 def _differenza_ammessa(valore_originale: Any, valore_copia: Any, attesa: int | None) -> bool:
-    """La quantità del piano, o l'azzeramento di una quantità che c'era già."""
+    """The plan's quantity, or the zeroing of a quantity that was already there."""
 
     if attesa is not None:
         return _quantita_del_piano_nella_cella(valore_copia, attesa)
-    # Nessuna quantita' chiesta per questa riga: allora la copia puo' solo aver
-    # svuotato una cella che portava un numero.  Un titolo di sezione no.
+    # No quantity requested for this row: the only allowed change is
+    # emptying a cell that held a number. A section header may not.
     return _vuoto(valore_copia) and _numero(valore_originale) is not None
 
 
@@ -404,8 +383,8 @@ def _rifiuta(
 ) -> None:
     esito.quante_rifiutate += 1
     if len(esito.esempi_rifiutati) >= ESEMPI_NEL_MESSAGGIO:
-        # Oltre i primi esempi si continua a contare, senza scrivere altro: a
-        # chi legge servono i primi casi e il totale, non l'elenco intero.
+        # Past the first examples, keep counting without writing more: a
+        # reader needs the first cases and a total, not the full list.
         return
     esito.esempi_rifiutati.append(
         f"{_dove(nome_foglio, colonna, riga)} nel listino di partenza è "
@@ -432,7 +411,7 @@ def _rifiuta_formato(
 
 
 def _elenco_di_righe(righe: list[int]) -> str:
-    """«riga 7», «righe 7 e 9», «righe 7, 9 e 12, e altre 4»."""
+    """Format a row list: "row 7", "rows 7 and 9", "rows 7, 9 and 12, and 4 more"."""
 
     mostrate = [str(riga) for riga in righe[:ESEMPI_NEL_MESSAGGIO]]
     if len(mostrate) == 1:
@@ -446,11 +425,11 @@ def _elenco_di_righe(righe: list[int]) -> str:
 
 
 def _frase_delle_righe_mancanti(fornitore: str, esito: EsitoFedelta, *, insieme: bool) -> str:
-    """Il guasto opposto: non celle di troppo, ma righe d'ordine che non ci sono.
+    """The opposite failure: not extra cells, but missing order rows.
 
-    `insieme` e' vero quando la copia ha **anche** celle cambiate fuori posto:
-    allora questa frase si aggancia alla prima invece di ricominciare dal nome
-    del fornitore.
+    `insieme` is true when the copy also has unwanted cell changes; in that
+    case this sentence attaches to the first one instead of restarting from
+    the supplier's name.
     """
 
     quante = len(esito.righe_mancanti)
@@ -467,19 +446,17 @@ def _frase_delle_righe_mancanti(fornitore: str, esito: EsitoFedelta, *, insieme:
 
 
 def frase_di_rifiuto(fornitore: str, esito: EsitoFedelta) -> str:
-    """Che cosa legge l'utente quando la copia non e' fedele.
+    """What the user reads when the copy isn't faithful.
 
-    I due guasti si dicono con due frasi diverse, perche' mandano a cercare in
-    due posti opposti: una cella cambiata fuori dalla colonna d'ordine e' la
-    libreria che ha rovinato il listino, una riga d'ordine che non e' arrivata
-    e' un ordine incompleto.  Una copia che li ha tutti e due li dice tutti e
-    due.
+    The two failures get two different sentences, because they point to
+    different places to investigate: a cell changed outside the order
+    column means the library altered the price list, a missing order row
+    means an incomplete order. A copy with both failures states both.
     """
 
     parti: list[str] = []
-    # La frase di sempre, parola per parola: la copia con celle di troppo si
-    # spiega oggi come si spiegava prima.  Regge anche il caso senza guasti
-    # nominati (i fogli che non coincidono contano una differenza sola).
+    # Handles the case with no named failures too (mismatched sheets count
+    # as a single difference).
     if esito.quante_rifiutate or not esito.righe_mancanti:
         quante = esito.quante_rifiutate
         celle = "cella è diversa" if quante == 1 else "celle sono diverse"

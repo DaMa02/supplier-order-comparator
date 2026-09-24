@@ -1,30 +1,22 @@
 #!/usr/bin/env python3
-"""Che cosa c'era sul disco quando il programma è partito.
+"""What was on disk when the program started.
 
-**Perché esiste.** Il 14 agosto 2026 il server è stato avviato alle 09:42 dal
-commit `33827ee`; alle 16:33 e alle 18:24 il codice sul disco è cambiato due
-volte. Alle 20:18 l'utente ha premuto «Rifai il confronto» e la catena si è
-fermata con questa frase:
+Python loads each module once. If the code on disk changes while the server
+keeps running, a process can end up hybrid: some modules are still whatever
+was loaded at startup, others get read from disk later, the first time
+something imports them lazily. A module imported late can see a newer
+version of a function that an early-imported module already expects to have
+a different shape, and the result is a confusing traceback with no fix the
+user can act on.
 
-    AttributeError: module 'registro' has no attribute 'nome_del_fornitore'
+This module fingerprints the program's source files at import time, so it
+can tell later whether anything on disk has changed and point the user to
+the one thing that fixes it: restart the app.
 
-Non era un difetto del codice — sul disco quella funzione c'era ed era giusta.
-Era un processo **ibrido**: Python carica ogni modulo una volta sola, quindi
-`registro`, importato all'avvio, era rimasto quello delle 09:42 (dove
-`nome_del_fornitore` non esisteva ancora), mentre `launcher` — che
-`pipeline_jobs` importa **dentro la funzione**, e che in quel processo nessuno
-aveva mai importato — è stato letto dal disco alle 20:19, nella versione delle
-18:09, che quella funzione la chiama. Metà vecchio e metà nuovo nello stesso
-processo.
-
-Il difetto vero non è l'incidente: è che l'utente si è trovato davanti a una
-riga di Python in inglese, senza **una sola cosa da fare** per uscirne. Da qui
-la frase di questo modulo: la causa in italiano e il rimedio, che è alla sua
-portata e non richiede nessun intervento sul codice.
-
-⚠ Le impronte si prendono **all'import**, che avviene all'avvio del server
-(`server.py` importa `pipeline_jobs` in cima, che importa questo). Un import
-tardivo fotograferebbe il disco di mezz'ora dopo e non vedrebbe niente.
+Fingerprints are taken at import, which happens at server startup
+(`server.py` imports `pipeline_jobs` at the top, which imports this module).
+A late import would fingerprint the disk long after startup and miss
+whatever changed before it ran.
 """
 
 from __future__ import annotations
@@ -38,14 +30,14 @@ from typing import Any
 
 APP_DIR = Path(__file__).resolve().parent
 SKILL_ROOT = APP_DIR.parent
-# Solo il codice Python che il processo tiene in memoria. `static/` no: la
-# pagina e il suo JavaScript il browser se li rilegge a ogni caricamento, e un
-# server vecchio serve comunque il file nuovo. `references/` e `app/data/` sono
-# dati, e cambiano di mestiere: segnalarli sarebbe rumore a ogni run.
+# Only the Python code the process keeps in memory. Not `static/`: the
+# browser re-fetches the page and its JS on every load, so an old server
+# still serves the current file. `references/` and `app/data/` are data and
+# change routinely; flagging them would be noise on every run.
 CARTELLE_DEL_CODICE = (APP_DIR, SKILL_ROOT / "scripts")
-# `tests/` non è sotto queste cartelle, quindi non serve escluderlo; `vendor` e
-# `__pycache__` sì, il primo perché è libreria di terzi che nessuno modifica a
-# caldo, il secondo perché è generato e cambia da sé.
+# `tests/` isn't under these folders, so it needs no exclusion here. `vendor`
+# and `__pycache__` are excluded: the first is third-party code nobody
+# hand-edits, the second is generated and changes on its own.
 CARTELLE_ESCLUSE = frozenset({"__pycache__", "vendor", "node_modules", "data"})
 
 FRASE_DEL_RIMEDIO = (
@@ -58,11 +50,12 @@ FRASE_DEL_RIMEDIO = (
 
 
 def _impronta(percorso: Path) -> str | None:
-    """L'impronta del file, `None` se in questo momento non si legge.
+    """Fingerprint of the file, or `None` if it can't be read right now.
 
-    Un file illeggibile non è una prova di niente — su Windows capita che un
-    editor o un antivirus lo tengano per un istante — e questa funzione decide
-    se una run parte: un falso positivo qui fermerebbe un ricalcolo buono.
+    An unreadable file isn't proof of anything — on Windows an editor or
+    antivirus can hold it briefly — and this function's answer decides
+    whether a run is allowed to start: a false positive here would block a
+    legitimate recompute.
     """
 
     try:
@@ -72,12 +65,12 @@ def _impronta(percorso: Path) -> str | None:
 
 
 def _e_da_guardare(percorso: Path, radice: Path = SKILL_ROOT) -> bool:
-    """Se questo file conta come «codice del programma».
+    """Whether this file counts as "program code".
 
-    Oggi in `vendor`, in `__pycache__` e in `app/data` non c'è un solo `.py`,
-    quindi il filtro non toglie niente: esiste per il giorno in cui ci sarà —
-    una libreria copiata dentro il progetto si aggiorna, e non è il programma
-    che è cambiato sotto l'utente.
+    Today `vendor`, `__pycache__` and `app/data` hold no `.py` files, so the
+    filter is a no-op in practice — it exists for when a vendored library
+    gets updated in place, which shouldn't be reported as the program itself
+    changing under the user.
     """
 
     parti = percorso.relative_to(radice).parts[:-1]
@@ -97,7 +90,7 @@ def _file_del_codice() -> list[Path]:
 
 
 def fotografia() -> dict[str, str | None]:
-    """Nome relativo → impronta, per ogni sorgente Python del programma."""
+    """Relative path → fingerprint, for every Python source of the program."""
 
     return {
         str(percorso.relative_to(SKILL_ROOT)).replace("\\", "/"): _impronta(percorso)
@@ -109,12 +102,11 @@ ALL_AVVIO: dict[str, str | None] = fotografia()
 
 
 def file_cambiati(riferimento: dict[str, str | None] | None = None) -> list[str]:
-    """I file di codice diversi da com'erano all'avvio.
+    """Code files that differ from how they were at startup.
 
-    Un file **comparso** o **sparito** conta: sono cambiamenti veri. Un file
-    che non si è riusciti a leggere — né allora né adesso — **non conta**: non
-    sapere non è la stessa cosa che sapere che è cambiato, ed è la regola che
-    questo progetto ha già imparato altrove a sue spese.
+    A file that appeared or disappeared counts as changed. A file that
+    couldn't be read — then or now — doesn't: not knowing isn't the same as
+    knowing it changed.
     """
 
     prima = ALL_AVVIO if riferimento is None else riferimento
@@ -133,7 +125,7 @@ def file_cambiati(riferimento: dict[str, str | None] | None = None) -> list[str]
 
 
 def avviso_del_codice_cambiato(riferimento: dict[str, str | None] | None = None) -> str | None:
-    """La frase da mostrare, oppure `None` se il programma è quello dell'avvio."""
+    """The message to show, or `None` if the program is still the one from startup."""
 
     cambiati = file_cambiati(riferimento)
     if not cambiati:
@@ -145,21 +137,22 @@ def avviso_del_codice_cambiato(riferimento: dict[str, str | None] | None = None)
 
 
 def firma(riferimento: dict[str, str | None] | None = None) -> str:
-    """Le impronte di tutti i sorgenti ridotte a **una** stringa confrontabile.
+    """Reduce every source fingerprint to one comparable string.
 
-    Serve a chi deve rispondere «è lo stesso programma?» senza spedirsi dietro
-    l'elenco intero: il servizio dichiara la propria in `/api/health` e il
-    lanciatore la confronta con quella dei file sul disco.
+    Lets two sides answer "is this the same build?" without exchanging the
+    full file list: the service reports its own signature at `/api/health`
+    and the launcher compares it against the files on disk.
 
-    Senza argomenti è la firma di **quello che sta girando** (`ALL_AVVIO`, la
-    fotografia presa all'import); con `fotografia()` è quella del disco adesso.
+    With no arguments this is the signature of what's currently running
+    (`ALL_AVVIO`, the snapshot taken at import); passed `fotografia()`, it's
+    the signature of the disk right now.
 
-    Un file che non si è riusciti a leggere resta distinto sia da un file
-    assente sia da uno leggibile: due programmi diversi non devono poter
-    produrre la stessa firma per un errore di lettura.  Per questo la riga porta
-    **prima** se l'impronta c'è (`1`/`0`) e poi il valore, invece di un
-    segnaposto tipo `?`: un segnaposto è un valore come gli altri, e un file il
-    cui contenuto desse proprio quella stringa collasserebbe sull'illeggibile.
+    A file that couldn't be read stays distinct from both a missing file and
+    a readable one: two different builds must not be able to produce the
+    same signature because of a read error. That's why each line carries a
+    presence flag (`1`/`0`) before the value, rather than a placeholder like
+    `?` — a placeholder is a value like any other, and a file whose content
+    happened to equal that placeholder would collapse onto "unreadable".
     """
 
     fonte = ALL_AVVIO if riferimento is None else riferimento
@@ -171,13 +164,13 @@ def firma(riferimento: dict[str, str | None] | None = None) -> str:
 
 
 def firma_del_disco() -> str:
-    """La firma dei sorgenti **come sono adesso**, riletti dal disco."""
+    """The signature of the sources as they are right now, re-read from disk."""
 
     return firma(fotografia())
 
 
 def stato() -> dict[str, Any]:
-    """Il riassunto per chi lo vuole in una risposta JSON."""
+    """The summary, shaped for a JSON response."""
 
     cambiati = file_cambiati()
     return {
@@ -187,32 +180,29 @@ def stato() -> dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------------------
-# Quale versione pubblicata sta girando.
-# ---------------------------------------------------------------------------
-# Letta una volta sola: l'allineamento a GitHub avviene PRIMA che il server
-# parta, quindi la risposta non cambia finche' il programma e' acceso, e non ha
-# senso pagare un processo `git` a ogni richiesta.
+# Which published version is running.
+# Read once: syncing to GitHub happens before the server starts, so the
+# answer can't change while the process is up, and it isn't worth spawning a
+# `git` process on every request.
 _data_pubblicata: str | None = None
 _data_gia_cercata = False
 
-# Sul PC del negozio il PATH non e' affidabile: anche `python` nudo li' e' un
-# segnaposto rotto del Microsoft Store.
-# `AVVIA_COMPARATORE.ps1:49` per questo non cerca "git" nudo: prova prima
-# questo percorso assoluto, e ripiega su `Get-Command` solo se manca.
+# PATH isn't reliable on the store PC: even a bare `python` there can be a
+# broken Microsoft Store stub. For the same reason, `AVVIA_COMPARATORE.ps1:49`
+# doesn't look up a bare "git": it tries this absolute path first and falls
+# back to `Get-Command` only if that's missing.
 _GIT_ASSOLUTO_WINDOWS = Path(r"C:\Program Files\Git\cmd\git.exe")
 
 
 def _eseguibile_git() -> str:
-    """Quale `git` lanciare: stesso criterio di `AVVIA_COMPARATORE.ps1`.
+    """Which `git` to run: same criterion as `AVVIA_COMPARATORE.ps1`.
 
-    Prima il percorso assoluto dell'installazione standard su Windows, poi
-    `shutil.which("git")`, che risolve il PATH una volta sola e restituisce
-    un percorso assoluto (non il nome nudo). Se nessuno dei due esiste si
-    ripiega comunque sulla stringa "git": e' lo stesso identico comando che
-    girava prima di questa funzione, quindi il ripiego non puo' rendere le
-    cose peggiori di oggi — solleva lo stesso `OSError` e `pubblicata()`
-    torna `None` come faceva gia'.
+    Tries the standard Windows install path first, then
+    `shutil.which("git")`, which resolves PATH once and returns an absolute
+    path rather than a bare name. Falls back to the string "git" if neither
+    exists — the same command this function replaces, so the fallback can't
+    make things worse than before: it raises the same `OSError`, and
+    `pubblicata()` returns `None` as it already did.
     """
 
     if _GIT_ASSOLUTO_WINDOWS.is_file():
@@ -221,19 +211,19 @@ def _eseguibile_git() -> str:
 
 
 def pubblicata() -> str | None:
-    """La data del commit che questo disco sta eseguendo, in ISO 8601.
+    """ISO 8601 date of the commit this disk is running.
 
-    **Perche' esiste.** Su questo PC il programma si allinea a GitHub da solo a
-    ogni avvio, e quando l'allineamento non riesce — credenziali scadute, rete
-    che non risponde — per scelta NON blocca l'avvio: lo scrive in una riga di
-    console e parte con quello che ha. Quella riga non la legge nessuno. Senza
-    una data in pagina, un programma fermo da mesi e uno aggiornato stamattina
-    si somigliano: l'unico modo di accorgersene e' che manchi una funzione che
-    era stata chiesta, e a quel punto e' tardi.
+    Why this exists: this PC syncs the program to GitHub on every startup,
+    and when the sync fails — expired credentials, no network — by design it
+    does not block startup: it logs a line to the console and starts with
+    what it has. Nobody reads that line. Without a date shown in the page, a
+    build stopped for months and one updated this morning look identical;
+    the only way to notice otherwise is that some expected feature is
+    missing, by which point it's too late.
 
-    Torna `None` se git non c'e' o questa cartella non e' un repository. La
-    pagina in quel caso dice che non lo sa — che e' gia' un'informazione utile,
-    diversa dal tacere.
+    Returns `None` if git isn't available or this folder isn't a repository.
+    The page then says it doesn't know, which is itself useful information,
+    unlike staying silent.
     """
 
     global _data_pubblicata, _data_gia_cercata
@@ -250,8 +240,8 @@ def pubblicata() -> str | None:
             check=False,
         )
     except (OSError, subprocess.SubprocessError):
-        # Niente git, o non risponde: si va avanti senza. Non e' un errore del
-        # programma e non deve diventarlo per chi lo usa.
+        # No git, or it didn't respond: proceed without it. Not a program
+        # error, and it shouldn't become one for the user.
         return None
 
     if esito.returncode != 0:

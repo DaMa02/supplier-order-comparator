@@ -1,109 +1,60 @@
-# Un'offerta: i campi, chi li scrive, chi li legge
+# An offer: the fields, who writes them, who reads them
 
-## Scopo
+## Purpose
 
-Un'offerta è la riga con cui un fornitore dice a che prezzo porta un articolo.
-Sta dentro `review_data.json`, in `products[].offers[]`, e la scrive
-`display_offer` in `scripts/build_review_data.py`.
+An offer is the row through which a supplier states the price it brings for an item. It lives inside `review_data.json`, under `products[].offers[]`, and is written by `display_offer` in `scripts/build_review_data.py`.
 
-Questa scheda esiste perché i campi di un'offerta si leggono in più di trenta
-punti del servizio nella forma `x.get("camelCase") or x.get("snake_case")`, e
-ogni alias tollerato in più è un nome nuovo che qualcuno domani scriverà al
-posto di quello buono. **I nomi qui sotto sono la lista chiusa: non se ne
-aggiungono altri.**
+This document exists because an offer's fields are read in more than thirty places across the service, in the form `x.get("camelCase") or x.get("snake_case")`, and every alias tolerated beyond what's needed is one more name someone will write in place of the right one tomorrow. The names below are the closed list: none are added beyond it.
 
-## Chi risponde alle domande su un'offerta
+## Who answers questions about an offer
 
-`app/offerta.py`, e nessun altro. Tre domande, tre funzioni:
+`app/offerta.py`, and no one else. Three questions, three functions:
 
-| Domanda | Funzione |
+| Question | Function |
 |---|---|
-| Di chi è quest'offerta | `offer_supplier_id(offerta)` |
-| Si può ordinare | `offer_is_available(offerta)` |
-| Quanto costa al pezzo e al collo | `offer_pricing(offerta)` |
+| Whose offer is this | `offer_supplier_id(offer)` |
+| Can it be ordered | `offer_is_available(offer)` |
+| What does it cost per piece and per carton | `offer_pricing(offer)` |
 
-Più `find_offer(prodotto, fornitore)`, che pesca l'offerta di un fornitore su
-un prodotto — la prima, se il listino la ripete.
+Plus `find_offer(product, supplier)`, which returns a supplier's offer on a product — the first one, if the price list repeats it.
 
-⚠ **Non si riscrive nessuna delle tre a mano, nemmeno quando la riga sarebbe di
-sette caratteri.** Fino al 20 agosto 2026 `offer.get("available") is not False`
-stava scritta a mano in due punti oltre alla sua autorità, e uno dei due era
-`pipeline_jobs._ripulisci_stato`, cioè la funzione che decide quali quantità
-azzerare dopo un ricalcolo. Due copie della stessa difesa divergono, e quando
-divergono qui il sintomo è una quantità che resta su un'offerta che la
-compilazione poi rifiuta: si vede una settimana dopo e altrove.
+None of the three is ever rewritten by hand, not even for a seven-character line such as `offer.get("available") is not False`. A hand-written copy of one of these checks — for instance inside `pipeline_jobs._ripulisci_stato`, the function that decides which quantities to zero out after a recompute — inevitably drifts from this module the day one of the two changes and the other doesn't. The symptom is a quantity that stays on an offer the compilation step then rejects: it surfaces a week later, somewhere else.
 
-## I campi
+## The fields
 
-| Campo buono | Alias tollerati | Che cos'è |
+| Canonical field | Tolerated aliases | What it is |
 |---|---|---|
-| `supplierId` | `supplier_id` | il fornitore che fa l'offerta |
-| `available` | — | `false` = non ordinabile. **Assente vale disponibile**: i listini più vecchi non lo scrivono |
-| `quantityFactor` | `unitsPerOrderUnit`, `units_per_order_unit` | quanti pezzi ci sono nell'unità d'ordine. Per un espositore sono i pezzi che contiene, **non 1** |
-| `unitPriceNet` | `pricePerPiece`, `price_per_piece` | prezzo al pezzo, netto. È il numero su cui si confrontano fornitori diversi |
-| `orderUnitPriceNet` | `price`, `netPrice` | prezzo del collo (o dell'espositore intero), netto |
-| `sourceRow` | — | la riga del listino da cui l'offerta viene, e quella in cui si scriverà la quantità |
-| `matchStatus` | — | come è stato trovato l'abbinamento, in italiano e per l'utente |
-| `requiresConfirmation` | `requires_confirmation` | l'utente deve confermare a mano prima di poter ordinare |
+| `supplierId` | `supplier_id` | the supplier making the offer |
+| `available` | — | `false` = not orderable. Absent means available: older price lists never write it |
+| `quantityFactor` | `unitsPerOrderUnit`, `units_per_order_unit` | how many pieces are in the order unit. For a display, this is the pieces it contains — not 1 |
+| `unitPriceNet` | `pricePerPiece`, `price_per_piece` | net price per piece — the number different suppliers are compared on |
+| `orderUnitPriceNet` | `price`, `netPrice` | net price of the carton (or of the whole display) |
+| `sourceRow` | — | the price-list row the offer comes from, and the one the quantity will be written to |
+| `matchStatus` | — | how the match was found, in Italian and meant for the user |
+| `requiresConfirmation` | `requires_confirmation` | the user must confirm by hand before it can be ordered |
 
-Dei due prezzi ne basta uno: `offer_pricing` ricava l'altro moltiplicando o
-dividendo per `quantityFactor`, che se manca vale 1. Se non c'è nessuno dei
-due, o se il prezzo del collo è negativo, l'offerta non ha prezzi utilizzabili
-e `offer_pricing` risponde `None`.
+One of the two prices is enough: `offer_pricing` derives the other by multiplying or dividing by `quantityFactor`, which defaults to 1 when absent. If neither price is present, or the carton price is negative, the offer has no usable price and `offer_pricing` returns `None`.
 
-Un'offerta ne porta altri — `supplierName`, `supplierCode`, `status`, `method`,
-`confidence`, `rationale`, `unitPricePreDiscount`, `declaredUnits`,
-`components`, `compositionStatus` — che servono a spiegarla in pagina e non a
-deciderla. **L'elenco completo e vero è quello che scrive `display_offer`**: se
-questa scheda e quella funzione non vanno d'accordo, ha ragione la funzione, e
-questa scheda va corretta.
+An offer also carries other fields — `supplierName`, `supplierCode`, `status`, `method`, `confidence`, `rationale`, `unitPricePreDiscount`, `declaredUnits`, `components`, `compositionStatus` — that explain it on the page and don't decide anything. The true, complete list is whatever `display_offer` writes: if this document and that function disagree, the function is right, and this document needs fixing.
 
-## Chi legge ancora `available` per conto suo, e perché
+## Who still reads `available` on its own, and why
 
-Due letture non passano da `offer_is_available`, e **non è una dimenticanza**:
-rispondono a un'altra domanda, «quale offerta preselezionare», non «si può
-ordinare».
+Two reads don't go through `offer_is_available`, and that's not an oversight: they answer a different question — "which offer to preselect" — not "can it be ordered".
 
-- `scripts/build_review_data.py`, `build_products` e la gemella per gli
-  espositori: `[offer for offer in offers if offer.get("available")]`. È
-  **truthy**, non `is not False`, e le due regole divergono su `available: 0` e
-  `available: ""` — il produttore preselezionerebbe «non disponibile» dove
-  `offer_is_available` dice «disponibile». Oggi non morde per un motivo
-  preciso: `available` lo scrivono solo i due produttori, e lo scrivono solo
-  come booleano. Chi un giorno ci mettesse un numero deve sapere che quel
-  giorno le due risposte si separano.
-- `app/static/app.js`: `offer.available !== false` per ricostruire l'offerta
-  in pagina, poi `offer.available` truthy per filtrare. Stessa divergenza,
-  stesso motivo per cui oggi non morde. La pagina non può importare
-  `app/offerta.py`: se la regola cresce, cresce anche lì, a mano, e va scritto
-  qui.
+- `scripts/build_review_data.py`, `build_products` and its twin for displays, `build_display_products`: `[offer for offer in offers if offer.get("available")]`. This is truthy, not `is not False`, and the two rules diverge on `available: 0` and `available: ""` — the producer would preselect "not available" where `offer_is_available` says "available". This doesn't bite today for a specific reason: `available` is written only by these two producers, and only as a boolean. Whoever one day writes a number there needs to know the two answers then part ways.
+- `app/static/app.js`: `offer.available !== false` to rebuild the offer on the page, then `offer.available` truthy to filter it. Same divergence, same reason it doesn't bite today. The page can't import `app/offerta.py`: if the rule grows, it has to grow here too, by hand, and be written down here.
 
-⚠ La prova che sorveglia le copie (`tests/test_offerta.py`,
-`test_nessun_altro_file_riscrive_la_regola_a_mano`) guarda **solo** Python e
-**solo** le due facce `is False` / `is not False`. Non vede né il truthy né la
-pagina: quelle due righe le tiene in piedi questa scheda.
+The test that guards against hand-written copies (`tests/test_offerta.py`, `test_nessun_altro_file_riscrive_la_regola_a_mano`) checks only Python, and only the two forms `is False` / `is not False`. It doesn't see the truthy checks or the page — this document is what keeps those two lines honest.
 
-## Le due trappole note
+## The two known traps
 
-⚠ **Uno `0` lecito viene scambiato per un campo assente.** Le catene con `or`
-di `offer_pricing` scartano lo zero insieme al `None`. Oggi non morde per un
-motivo che sta altrove: **tutt'e due i produttori di offerte buttano via i
-prezzi che non sono `> 0`** prima che arrivino qui — `app/catalog_search.py`,
-`_offer`, e `scripts/build_review_data.py`, `display_offer`, tutt'e due dopo lo
-stesso guasto («un prezzo letto come 0,00 vince il confronto, perché il più
-basso va davanti»). La difesa è a monte e non nel punto che legge: chi togliesse
-uno di quei due filtri deve saperlo.
+A legitimate `0` is mistaken for an absent field. `offer_pricing`'s `or` chains discard zero along with `None`. This doesn't bite today for a reason that lives elsewhere: both producers of offers already discard prices that aren't `> 0` before they get here — `app/catalog_search.py`, `_offer`, and `scripts/build_review_data.py`, `display_offer`, both guarding against the same failure ("a price read as 0.00 wins the comparison, because the lowest one goes first"). The guard is upstream, not at the point that reads the value: whoever removes either of those two filters needs to know that.
 
-⚠ **`available` assente vale disponibile, e non è un caso.** È l'unico campo
-il cui valore mancante non è «non lo so» ma «sì»: i listini letti prima che il
-campo esistesse non lo scrivono, e trattarli come non ordinabili renderebbe
-vuoto un confronto vecchio.
+`available` absent means available, and that's not an accident. It's the only field whose missing value doesn't mean "unknown" but "yes": price lists read before the field existed never wrote it, and treating them as not-orderable would empty out an old comparison.
 
-## Dove si guarda quando qualcosa non torna
+## Where to look when something doesn't add up
 
-- chi produce i campi: `scripts/build_review_data.py`, `display_offer`;
-- chi decide che una riga di listino diventa un'offerta:
-  `app/catalog_search.py`, `_offer`;
-- chi li legge per il confronto e per la compilazione: `app/server.py`;
-- chi li legge per azzerare le quantità dopo un ricalcolo:
-  `app/pipeline_jobs.py`, `_ripulisci_stato`.
+- who produces the fields: `scripts/build_review_data.py`, `display_offer`;
+- who decides that a price-list row becomes an offer: `app/catalog_search.py`, `_offer`;
+- who reads them for the comparison and for compiling the order: `app/server.py`;
+- who reads them to zero out quantities after a recompute: `app/pipeline_jobs.py`, `_ripulisci_stato`.

@@ -1,30 +1,29 @@
 #!/usr/bin/env python3
-"""I prodotti che nessun fornitore può dare: l'elenco per telefonare in giro.
+"""Products no supplier can provide: the list for calling around to source them.
 
-Punto 5.  Fino a ieri un prodotto che l'utente voleva ordinare e che nessun
-fornitore aveva — né a listino né disponibile — usciva dalla compilazione senza
-lasciare traccia: la quantità veniva azzerata, la riga spariva dall'ordine e chi
-compilava non sapeva più che quel prodotto lo doveva comprare comunque, da
-qualche altra parte.  Questo modulo scrive il foglio che resta in mano a quella
-persona: sette colonne, una riga per prodotto, e una colonna `Note` vuota che
-riempie lei mentre telefona.
+A product the user wants to order that no supplier carries — neither on any
+price list nor as an available offer — would otherwise leave the compilation
+without a trace: its quantity zeroed, the row gone from the order, and no
+record that it still needs to be bought somewhere else. This module writes
+the sheet that stays in that person's hands: one row per product, and an
+empty `Note` column they fill in while calling around.
 
-**Il filtro di chi entra nell'elenco non sta qui.**  Chi ha un'offerta
-utilizzabile e chi no lo sa `app/server.py`, che possiede già `find_offer` e
-`offer_is_available`; questo modulo riceve righe già scelte e le scrive.  Non
-importa il server — sarebbe una dipendenza circolare — e non riscrive quel
-predicato, perché due definizioni dello stesso «non disponibile» sono due verità
-sullo stesso dato.
+Filtering which products belong on this list is not this module's job.
+Whether an offer is usable is decided by `app/server.py`, which already owns
+`find_offer` and `offer_is_available`; this module receives already-selected
+rows and writes them out. It doesn't import the server — that would be a
+circular dependency — and doesn't redefine that predicate, since two
+definitions of "not available" are two truths about the same data.
 
-**Il file non si rilegge mai.**  Nessun percorso del programma lo importa, lo
-confronta o lo trascina alla compilazione successiva: è un foglio per una
-persona, non un formato di scambio.
+The file is never read back. No code path in the app imports it, compares
+against it, or carries it into the next compilation: it's a sheet for a
+person, not an exchange format.
 
-`openpyxl` è già una dipendenza obbligatoria (`app/launcher.py:128-130` ferma
-l'avvio se manca) ma finora il codice di produzione l'aveva usato **solo per
-leggere**.  Qui si scrive, e si scrive il minimo: nessuna formula, nessuno
-stile elaborato, intestazioni in grassetto e colonne larghe abbastanza da
-leggere una descrizione senza allargarle a mano.
+`openpyxl` is already a required dependency (`app/launcher.py:128-130` blocks
+startup without it). Elsewhere in the app it's used only for reading; this
+is the write path, kept minimal: no formulas, no elaborate styling, bold
+headers and columns wide enough to read a description without resizing them
+by hand.
 """
 
 from __future__ import annotations
@@ -39,41 +38,40 @@ from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
 
 import consegna
-# Lo stato di un'offerta rifiutata da chi ordina lo dichiara `offerta.py`, che è
-# già l'autorità su «si può ordinare»: qui si LEGGE quella stringa, e riscriverla
-# vorrebbe dire che il giorno in cui cambia questo foglio torna a dire «non ce
-# l'ha nessuno» su una riga che invece è stata scartata da chi telefona.
+# The status for an offer the user rejected is defined in `offerta.py`,
+# which already owns "can this be ordered": this module reads that string
+# rather than redefining it, so the two never drift apart and start
+# disagreeing about the same row.
 from offerta import STATO_RIFIUTATO_UTENTE
 
 
-# Il `tipo` con cui questo file compare nell'inventario della cartella,
-# nell'audit e nello zip.  La stringa vive in `consegna`, che è il modulo che
-# deve riconoscere il file anche quando l'audit non c'è: una seconda costante
-# qui sarebbe una seconda verità, e il giorno in cui una delle due cambiasse il
-# file smetterebbe di essere consegnato senza che niente lo dica.
+# The `tipo` this file is registered under in the folder inventory, the
+# audit and the zip. Owned by `consegna`, the module that must recognize the
+# file even when there's no audit; a second constant here would be a second
+# source of truth that could drift out of sync without anything noticing.
 TIPO = consegna.TIPO_DA_REPERIRE
 
-# Le due sole frasi possibili della colonna `Motivo`.  Sono due e non una
-# perché dicono due cose diverse a chi telefona: «a listino non ce l'ha
-# nessuno» vuol dire cercare un fornitore nuovo, «nessuno ce l'ha disponibile»
-# vuol dire richiamare fra qualche giorno gli stessi.
+# The only two possible sentences for the `Motivo` column. Two, not one,
+# because they tell the caller different things: "not on anyone's price
+# list" means look for a new supplier, "nobody has it available" means call
+# the same ones back in a few days.
 MOTIVO_NON_A_LISTINO = "Nessun fornitore lo ha a listino"
 MOTIVO_NON_DISPONIBILE = "Nessun fornitore lo ha disponibile"
-# La terza, dal 21 agosto 2026. Dice una cosa che le altre due non possono dire:
-# che il fornitore una riga simile ce l'ha, e che a scartarla è stato chi ordina.
-# A chi telefona serve, perché cambia l'azione: quel fornitore non va richiamato
-# fra qualche giorno — l'articolo giusto non ce l'ha — va cercato altrove.
+# A third reason, distinct from the other two: a supplier does carry a
+# similar row, but the user rejected it as the wrong article. This changes
+# the action for the caller — that supplier shouldn't be called back later,
+# since they don't have the right item; it needs to be sourced elsewhere.
 MOTIVO_RIFIUTATO_DA_TE = "Rifiutato da te: la riga del fornitore era un altro articolo"
 
-# Lo stato di un'offerta che il confronto non ha proprio trovato.
+# Status for an offer the comparison never found at all.
 STATO_NON_TROVATO = "NON_TROVATO"
 
-# Le intestazioni, in quest'ordine.  Non c'è nessuna colonna per il codice del
-# gestionale: quel codice non esiste.  Il gestionale lavora con l'EAN e con gli
-# EAN alternativi, e gli alternativi oggi non escono dall'esportazione — decisione
-# di Daniele del 17 agosto 2026, dopo che la colonna era nata vuota.  Se un giorno
-# gli EAN alternativi usciranno, sono più EAN dello stesso prodotto: il posto dove
-# metterli si decide allora, e non è detto sia una colonna sola.
+# Column headers, in this order. There's no column for the management
+# software's internal item code, because that code plays no role here: the
+# export works with EAN and alternate EANs, and alternate EANs aren't
+# currently part of it. If alternate EANs are exported one day, they're
+# additional EANs for the same product, and where they'd go is a decision
+# for that point — not necessarily a single column.
 INTESTAZIONI = (
     "EAN",
     "Descrizione",
@@ -83,67 +81,70 @@ INTESTAZIONI = (
     "Note",
 )
 
-# Larghezze in caratteri, nell'ordine delle intestazioni.  La descrizione è la
-# colonna larga perché è quella che si legge; `Note` è larga perché è quella che
-# si scrive.
+# Column widths in characters, matching the header order. Description is
+# the wide column because it's the one people read; `Note` is wide because
+# it's the one they write in.
 LARGHEZZE = (16, 52, 14, 18, 34, 40)
 
-# L'unità che non si scrive dentro la cella: l'intestazione dice già «Colli».
+# The unit that's never written into the cell: the header already says
+# "Colli" (cartons).
 UNITA_IMPLICITA = "colli"
 
 NOME_FOGLIO = "Da reperire"
 
-# Il formato numerico del prezzo: due decimali.  Non è uno stile, è il modo di
-# non mostrare `3.9000000000000004` a chi legge.
+# Two-decimal price format. Not a style choice — it's what keeps
+# `3.9000000000000004` from showing up to a reader.
 FORMATO_PREZZO = "#,##0.00"
 
 
 def nome_file(momento: datetime) -> str:
-    """`Prodotti da reperire — 17 agosto 2026.xlsx`, con l'em dash U+2014 spaziato.
+    """`Prodotti da reperire — 17 agosto 2026.xlsx`, with a spaced em dash (U+2014).
 
-    La data la rende `consegna.data_leggibile`, la stessa che dà il nome ai
-    listini compilati: i mesi vengono da una tabella e non da `strftime("%B")`,
-    che dipende dalla localizzazione e su questa macchina direbbe `August`.
+    The date comes from `consegna.data_leggibile`, the same function that
+    names compiled price lists: month names come from a lookup table rather
+    than `strftime("%B")`, which depends on locale and would say `August` on
+    this machine.
 
-    L'em dash è voluto ed è lo stesso di `consegna.nome_listino`: regge nello
-    zip (bandiera 0x800) e nell'intestazione di scaricamento, dove ci pensa
+    The em dash matches `consegna.nome_listino` and survives the same way:
+    the zip's UTF-8 flag (0x800), and the download header, handled by
     `consegna.intestazione_allegato`.
     """
     return f"{consegna.PREFISSO_DA_REPERIRE}— {consegna.data_leggibile(momento)}.xlsx"
 
 
 def motivo(offerte: Sequence[Any] | None) -> str:
-    """Perché non si può ordinare, in una frase.
+    """Return, as one sentence, why this product can't be ordered.
 
-    Funzione pura sulla lista `offers` del prodotto: non conosce il server, non
-    apre file e non decide chi entra nell'elenco — quello lo ha già deciso chi
-    chiama.
+    A pure function over the product's `offers` list: it knows nothing about
+    the server, opens no files, and doesn't decide which products belong on
+    this list — the caller has already decided that.
 
-    Basta **un'offerta rifiutata da chi ordina** perché la frase sia la terza:
-    quel prodotto è qui per una decisione umana, non per un buco del listino.
+    A single offer the user rejected is enough to select the third sentence:
+    that product is here because of a human decision, not a gap in a price
+    list.
 
-    Se **ogni** offerta è `NON_TROVATO` nessun fornitore lo ha nemmeno a
-    listino.  Basta un'offerta con un altro stato — il fornitore l'articolo ce
-    l'ha, ma l'offerta non è utilizzabile — perché la frase diventi l'altra.
+    If every offer is `NON_TROVATO`, no supplier carries it on any price
+    list at all. A single offer with a different status — the supplier has
+    the article, but the offer isn't usable — selects the other sentence.
 
-    Un prodotto senza nessuna offerta (nessun fornitore ha risposto niente su di
-    lui) è il caso limite di «nessuno lo ha a listino», e infatti `all()` su una
-    lista vuota è vero.
+    A product with no offers at all (no supplier said anything about it) is
+    the limiting case of "nobody has it on their price list", which is why
+    `all()` over an empty list evaluating to true is the right behavior here.
     """
     stati = []
     for offerta in offerte or ():
         if not isinstance(offerta, dict):
-            # Non è un'offerta leggibile: non si può affermare che non sia a
-            # listino, e la frase prudente è l'altra.
+            # Not a readable offer: it can't be asserted that this isn't on
+            # a price list, so the cautious sentence is the other one.
             stati.append("")
             continue
         stato = offerta.get("status") or offerta.get("matchStatus") or ""
         stati.append(str(stato).strip().upper())
-    # Basta UN rifiuto perché la frase diventi questa, e viene prima delle altre
-    # due: è l'informazione che spiega perché un prodotto è in questo elenco pur
-    # avendo un fornitore con una riga, e senza di lei il foglio direbbe «nessun
-    # fornitore lo ha disponibile» — cioè darebbe la colpa al fornitore di una
-    # decisione presa da chi legge il foglio.
+    # A single rejection is enough to pick this sentence, and it's checked
+    # before the other two: it's the one piece of information that explains
+    # why a product is on this list despite a supplier having a matching
+    # row. Without it, the sheet would say "nobody has it available" —
+    # blaming the supplier for a decision the person reading the sheet made.
     if any(stato == STATO_RIFIUTATO_UTENTE for stato in stati):
         return MOTIVO_RIFIUTATO_DA_TE
     if all(stato == STATO_NON_TROVATO for stato in stati):
@@ -152,12 +153,12 @@ def motivo(offerte: Sequence[Any] | None) -> str:
 
 
 def _quantita_leggibile(quantita: Any, unita: Any) -> Any:
-    """La cella della colonna 4: un numero, oppure `3 espositori`.
+    """Build column 4's cell value: a plain number, or `3 espositori`.
 
-    L'intestazione resta fissa «Colli richiesti» perché l'elenco mescola
-    prodotti ed espositori in una tabella sola: quando l'unità non è «colli» la
-    si scrive **dentro** la cella, altrimenti tre espositori si leggerebbero
-    come tre colli.
+    The header stays fixed as "Colli richiesti" because the list mixes
+    products and displays in a single table: when the unit isn't "colli"
+    (cartons) it's written inside the cell itself, otherwise three displays
+    would read as three cartons.
     """
     etichetta = str(unita or "").strip()
     if not etichetta or etichetta.casefold() == UNITA_IMPLICITA:
@@ -166,26 +167,27 @@ def _quantita_leggibile(quantita: Any, unita: Any) -> Any:
 
 
 def scrivi(cartella: Path, righe: list[dict], momento: datetime) -> str:
-    """Scrive il file nella cartella e ne restituisce il **nome**.
+    """Write the file into the folder and return its name.
 
-    Ogni riga: `{"ean", "descrizione", "quantita", "unita", "ultimo_prezzo",
-    "motivo"}`.  Una chiave in più viene ignorata.  `ultimo_prezzo` può essere `None` e
-    allora la cella resta vuota: uno zero direbbe che quel prodotto costava
-    zero, che è una cosa diversa da «non lo sappiamo».
+    Each row: `{"ean", "descrizione", "quantita", "unita", "ultimo_prezzo",
+    "motivo"}`. Extra keys are ignored. `ultimo_prezzo` may be `None`, and
+    then the cell stays empty: a zero would claim the product cost nothing,
+    which is a different fact than "we don't know".
 
-    `righe` vuoto è un errore del chiamante, non un file vuoto: un foglio con le
-    sole intestazioni finirebbe nell'elenco della compilazione e nello zip, e
-    direbbe a chi lo apre che c'è qualcosa da reperire quando non c'è niente.
+    An empty `righe` is a caller error, not an empty file: a headers-only
+    sheet would still show up in the compilation listing and the zip,
+    telling whoever opens it there's something to source when there isn't.
 
-    L'EAN si scrive come **testo**: un codice a barre di tredici cifre trattato
-    da numero diventa `8.0059e+12` in notazione scientifica, e chi lo copia per
-    cercarlo trova zero risultati.
+    The EAN is written as text: a thirteen-digit barcode treated as a number
+    becomes `8.0059e+12` in scientific notation, and copying that to search
+    for it returns nothing.
 
-    Scrittura in due tempi — file temporaneo accanto e `os.replace` — perché un
-    `.xlsx` troncato a metà salvataggio è uno zip rotto che Excel non apre, e in
-    cartella sarebbe indistinguibile da un documento buono.  Il temporaneo
-    finisce in `.tmp`, che `consegna.e_documento` non considera un documento:
-    anche se restasse lì non verrebbe né elencato né consegnato.
+    Written in two steps — a temp file alongside plus `os.replace` — because
+    an `.xlsx` truncated mid-save is a broken zip Excel won't open, and would
+    sit in the folder indistinguishable from a good file. The temp file gets
+    a `.tmp` suffix, which `consegna.e_documento` doesn't treat as a
+    document: even if it were left behind, it wouldn't be listed or
+    delivered.
     """
     righe = list(righe or [])
     if not righe:
@@ -203,18 +205,19 @@ def scrivi(cartella: Path, righe: list[dict], momento: datetime) -> str:
     for colonna in range(1, len(INTESTAZIONI) + 1):
         foglio.cell(row=1, column=colonna).font = grassetto
         foglio.column_dimensions[get_column_letter(colonna)].width = LARGHEZZE[colonna - 1]
-    # Le intestazioni restano in vista mentre si scorre l'elenco al telefono.
+    # Headers stay visible while scrolling through the list on the phone.
     foglio.freeze_panes = "A2"
 
     for indice, riga in enumerate(righe, start=2):
         ean = riga.get("ean")
-        # EAN e descrizione arrivano dai listini dei fornitori: testo che non
-        # controlliamo.  openpyxl scrive come FORMULA una stringa che comincia
-        # per «=» — un EAN o un nome prodotto messo così da un fornitore
-        # smetterebbe di essere testo e diventerebbe un calcolo (o un
-        # `#NAME?`).  `data_type = "s"` forza la cella a restare testo
-        # letterale qualunque cosa contenga: non toglierla credendola
-        # ridondante con `str(...)`, che protegge dal tipo ma non dal segno.
+        # EAN and description come from supplier price lists: text we don't
+        # control. openpyxl writes a string starting with "=" as a formula —
+        # an EAN or product name that happens to start that way would stop
+        # being text and become a calculation (or a `#NAME?` error).
+        # `data_type = "s"` forces the cell to stay literal text no matter
+        # what it contains; don't remove it as redundant with `str(...)`,
+        # which protects against the wrong type but not against the leading
+        # character.
         cella_ean = foglio.cell(row=indice, column=1, value="" if ean is None else str(ean))
         cella_ean.data_type = "s"
         cella_descrizione = foglio.cell(row=indice, column=2, value=str(riga.get("descrizione") or ""))
@@ -229,13 +232,13 @@ def scrivi(cartella: Path, righe: list[dict], momento: datetime) -> str:
             cella = foglio.cell(row=indice, column=4, value=prezzo)
             if isinstance(prezzo, (int, float)) and not isinstance(prezzo, bool):
                 cella.number_format = FORMATO_PREZZO
-        # La colonna 5 (`Motivo`) non riceve mai testo altrui — `motivo()`
-        # restituisce una delle due costanti sopra — ma la si blinda uguale
-        # per uniformità con le due colonne che invece lo ricevono: cintura
-        # sopra le bretelle, non un buco da chiudere.
+        # Column 5 (`Motivo`) never receives arbitrary text — `motivo()`
+        # returns one of the constants defined above — but it gets the same
+        # protection for consistency with the two columns that do receive
+        # untrusted text: belt and suspenders, not a gap being closed.
         cella_motivo = foglio.cell(row=indice, column=5, value=str(riga.get("motivo") or ""))
         cella_motivo.data_type = "s"
-        # La colonna 6 (`Note`) si lascia com'è: è quella che riempie l'utente.
+        # Column 6 (`Note`) is left as-is: it's the one the user fills in.
 
     percorso = cartella / nome
     temporaneo = percorso.with_name(percorso.name + ".tmp")

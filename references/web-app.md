@@ -1,93 +1,61 @@
-# Comparatore locale HTML
+# Local HTML comparator
 
-## Scelta architetturale
+## Architectural choice
 
-Usare una web app locale single-user:
+A single-user, local web app:
 
 ```text
-browser ↔ HTTP su 127.0.0.1 ↔ server Python standard library ↔ JSON della run
+browser ↔ HTTP on 127.0.0.1 ↔ Python standard-library server ↔ the run's JSON
 ```
 
-Excel e CSV restano formati di import/export, non l'interfaccia di lavoro. Non servono backend del venditore, account cloud, database esterno, npm o framework web. Lo stato della run è un JSON locale scritto atomicamente; introdurre SQLite solo se serviranno storico multi-run, utenti concorrenti o query complesse.
+Excel and CSV stay import/export formats, not the working interface. No vendor backend, cloud account, external database, npm or web framework is needed. A run's state is a local JSON file written atomically; SQLite would only be worth adding if the app needed multi-run history, concurrent users, or complex queries.
 
-Questa soluzione minimizza la complessità operativa: per l'utente sono tre pagine guidate; il confine REST mantiene sostituibile il servizio locale. Streamlit è più rapido per un prototipo ma offre meno controllo sulle tabelle; NiceGUI aggiunge dipendenze e confezionamento. Per il flusso stabile attuale usare HTML/CSS/JavaScript senza strutture aggiuntive.
+This keeps operational complexity low: for the user it's three guided pages; the REST boundary keeps the local service replaceable. Streamlit would prototype faster but gives less control over tables; NiceGUI adds dependencies and packaging overhead. For the current, stable flow, plain HTML/CSS/JavaScript with no extra framework is the right call.
 
-Le tre pagine sono:
+The three pages are:
 
-1. importazione separata dell'elenco gestionale e dei listini fornitori;
-2. prodotti da ordinare, quantità, esclusione, confronto offerte e ricerca di prodotti aggiuntivi;
-3. riepilogo ordinabile per fornitore o prodotto, subtotali, soglie, promozioni e compilazione.
+1. separate import of the management-software list and the suppliers' price lists;
+2. products to order — quantities, exclusion, offer comparison, and search for additional products;
+3. a summary sortable by supplier or product, with subtotals, thresholds, promotions and compilation.
 
-## Contratto
+## Contract
 
-- `GET /api/review`: file, fornitori, prodotti/offerte, espositori e stato salvato;
-- `POST /api/upload`: copia locale base64, profilo read-only e risposta `PROFILED_AI_PENDING`;
-- `GET /api/schemas/pending`: per una run fermata su `SCHEMA_SCONOSCIUTO`,
-  anteprima dei soli documenti coinvolti, fornitori esistenti e proposta delle
-  colonne ricavata dalle intestazioni;
-- `POST /api/schemas/validate`: prova le colonne scelte con il parser reale,
-  senza salvarle né rilanciare; restituisce conteggi e campione normalizzato;
-- `POST /api/schemas/confirm`: ripete la prova, salva la conferma in modo
-  atomico e avvia il ricalcolo; risponde `202` con il nuovo stato pipeline;
-- `PUT /api/state`: autosalvataggio di quantità, esclusioni, fornitore, conferme, pagina, raggruppamento e consenso soglia; restituisce anche lo stato aggiornato delle promozioni;
-- `GET /api/products/search?q=<testo>`: ricerca conservativa nei cataloghi correnti;
-- `POST /api/products/add`: aggiunta locale di un prodotto scelto dai cataloghi;
-- `POST /api/compile`: validazione finale e generazione del piano/copie configurate;
-- `GET /api/history/pending`: ordini compilati e non ancora dichiarati ricevuti;
-- `POST /api/history/answer`: risposta unica per l'intero ordine; `received`
-  sì chiude come ricevuto, `received` no rimanda la domanda di sette giorni,
-  `closed: true` chiude come «non arriverà più» senza dichiararlo ricevuto;
-- `POST /api/matches/answer`: accetta o rifiuta la riga di listino proposta per
-  un prodotto; la decisione è vincolata a run, fornitore e impronta della riga;
-- `POST /api/uploads/elimina`: elimina una singola copia caricata e il suo
-  profilo, soltanto se il nome compare fra gli upload eliminabili del server;
-- `GET /api/ordini`: le compilazioni già fatte, dalla più recente, ricavate
-  scandendo le cartelle datate;
-- `POST /api/ordini/elimina`: elimina una compilazione elencata dal server e,
-  nella stessa operazione, tutti i promemoria che hanno la sua chiave stabile;
-- `GET /ordini/<cartella>/<nome>`: scarica un documento di quella compilazione;
-- `GET /ordini/<cartella>/zip`: i soli listini di quella compilazione in un
-  archivio costruito al momento in memoria;
-- `GET /outputs/<nome>`: rotta residua. Dallo smontaggio del carrello Noce
-  il programma non scrive più artefatti di servizio: serve solo a scaricare
-  quelli rimasti dalle run passate. Le consegne al fornitore non passano di
-  qui: stanno nella cartella datata della compilazione.
+- `GET /api/review`: files, suppliers, products/offers, displays and saved state;
+- `POST /api/upload`: local base64 copy, read-only profiling and a `PROFILED_AI_PENDING` response;
+- `GET /api/schemas/pending`: for a run stopped on `SCHEMA_SCONOSCIUTO`, a preview of just the documents involved, the existing suppliers, and a column proposal derived from the headers;
+- `POST /api/schemas/validate`: tries the chosen columns with the real parser, without saving them or triggering a recompute; returns counts and a normalized sample;
+- `POST /api/schemas/confirm`: repeats the trial, saves the confirmation atomically, and starts the recompute; responds `202` with the new pipeline state;
+- `PUT /api/state`: autosave of quantities, exclusions, supplier choice, confirmations, page, grouping and threshold consent; also returns the updated promotion state;
+- `GET /api/products/search?q=<text>`: conservative search across the current catalogs;
+- `POST /api/products/add`: local addition of a product picked from the catalogs;
+- `POST /api/compile`: final validation and generation of the plan/configured copies;
+- `GET /api/history/pending`: compiled orders not yet marked received;
+- `POST /api/history/answer`: a single answer for the whole order — `received: true` closes it as received, `received: false` postpones the question by seven days, `closed: true` closes it as "won't arrive" without marking it received;
+- `POST /api/matches/answer`: accepts or rejects the price-list row proposed for a product; the decision is bound to the run, the supplier, and the row's fingerprint;
+- `POST /api/uploads/elimina`: deletes a single uploaded copy and its profile, only if the name appears among the server's deletable uploads;
+- `GET /api/ordini`: past compilations, most recent first, derived by scanning the dated folders;
+- `POST /api/ordini/elimina`: deletes a compilation the server lists, and in the same operation every reminder that shares its stable key;
+- `GET /ordini/<folder>/<name>`: downloads a document from that compilation;
+- `GET /ordini/<folder>/zip`: just that compilation's price lists, as an archive built in memory on the fly;
+- `GET /outputs/<name>`: legacy route, kept to serve files earlier runs left on disk; current runs don't write there. A supplier's deliverables live in the compilation's own dated folder instead.
 
-## Storico degli ordini non ancora ricevuti
+## History of orders not yet received
 
-Ogni compilazione riuscita registra una voce per fornitore in
-`app/data/history/orders.json`, **fuori dalla cartella della run** per
-sopravvivere al ricalcolo settimanale. Il percorso si può indicare con
-l'opzione `--history`; in sua assenza si ricava da
-`<cartella dello stato>/../history/orders.json`.
+Every successful compilation records one entry per supplier in `app/data/history/orders.json`, outside the run's own folder so it survives the weekly recompute. The path can be set with `--history`; by default it's derived from `<state folder>/../history/orders.json`.
 
-Regole:
+Rules:
 
-- la chiave delle voci nuove è `<cartella-compilazione>:<fornitore>`: due
-  compilazioni sono due documenti distinti; una riconsegna dello stesso
-  fornitore sostituisce la domanda ancora aperta della stessa run, invece di
-  duplicarla;
-- entra nello storico soltanto il fornitore di cui il writer ha lasciato una
-  copia fedele sul disco. Una compilazione senza copie non è un ordine. Un
-  fornitore omesso da una compilazione successiva non cancella però il listino
-  già prodotto prima, che potrebbe essere già stato inviato;
-- la run attualmente aperta non compare mai fra gli ordini in attesa, altrimenti
-  chiederebbe conto di merce ordinata pochi istanti prima;
-- l'abbinamento usa l'EAN; senza EAN ammette soltanto un identificativo stabile
-  costruito dalla composizione dell'espositore. Gli identificativi
-  `product:<riga>` e `display:unmatched:` non sono identità fra settimane;
-- quando più prodotti condividono l'EAN, l'avviso dichiara l'ambiguità e non
-  attribuisce la quantità ordinata a ciascuno come se fosse tutta sua;
-- una voce oltre i 60 giorni dall'ultima interazione, o con data illeggibile,
-  scade. La scadenza viene annunciata in pagina per 30 giorni, non sparisce in
-  silenzio;
-- se la registrazione fallisce la compilazione resta valida, ma l'avviso deve
-  comparire nel messaggio finale: senza promemoria la funzione non serve a nulla.
+- a new entry's key is `<compilation-folder>:<supplier>`: two compilations are two distinct documents; a re-delivery from the same supplier replaces the still-open question from the same run, instead of duplicating it;
+- only a supplier the writer actually left a faithful copy on disk for enters the history. A compilation with no copies is not an order. A supplier omitted from a later compilation doesn't erase the price list already produced earlier, which may already have been sent;
+- the run currently open never appears among the pending orders — otherwise it would ask about merchandise ordered moments earlier;
+- matching uses the EAN; without one, only a stable identifier built from the display's composition is accepted. The identifiers `product:<row>` and `display:unmatched:` are not stable across weeks;
+- when several products share an EAN, the warning states the ambiguity rather than attributing the full ordered quantity to each of them;
+- an entry older than 60 days since its last interaction, or with an unreadable date, expires. The expiry is shown on the page for 30 days — it doesn't disappear silently;
+- if recording the entry fails, the compilation stays valid, but the warning must appear in the final message: a reminder no one is told about serves no purpose.
 
-Le consegne parziali non esistono. Le tre risposte riguardano l'intero ordine:
-«ricevuta», «non ancora» e «non arriverà più».
+Partial deliveries don't exist. The three answers cover the whole order: "received", "not yet", and "won't arrive".
 
-Snapshot minimo:
+Minimal snapshot:
 
 ```json
 {
@@ -101,87 +69,62 @@ Snapshot minimo:
 }
 ```
 
-Il backend ricalcola prezzi e totali dai dati della run: non fidarsi di prezzi o totali inviati dal browser.
+The backend recomputes prices and totals from the run's own data: it never trusts a price or total sent by the browser.
 
-## Decisioni rapide nell'interfaccia
+## Quick decisions in the interface
 
-Nella pagina di confronto il nome del prodotto del gestionale resta distinto
-dalla descrizione della riga proposta dal fornitore. Una proposta scartata ma
-plausibile presenta subito soltanto la domanda `È lo stesso prodotto?` con
-`Sì` e `No`; punteggio, metodo e motivazione sono nel dettaglio chiuso
-`Perché compare?`. Un `Sì` rende l'offerta utilizzabile per il confronto
-corrente, un `No` la nasconde. La decisione non sopravvive a una riga di
-listino cambiata.
+On the comparison page, the product name from the management software stays distinct from the description on the row a supplier proposed. A dismissed but plausible proposal shows only the question "Same product?" with "Yes" and "No"; score, method and rationale sit in the collapsed "Why does this show up?" detail. A "Yes" makes the offer usable in the current comparison; a "No" hides it. The decision doesn't survive a changed price-list row.
 
-Durante lo scorrimento una fascia sottile mantiene visibili i totali correnti
-per fornitore. Le schede espongono prezzo per collo, prezzo per pezzo, pezzi
-per collo e totale, senza ripetere l'equazione dei colli. Nel riepilogo l'EAN è
-quello dell'offerta selezionata e i comandi `−`, `+`, `×` modificano i colli o
-portano il prodotto a zero.
+While scrolling, a thin bar keeps the running totals per supplier visible. Cards show price per carton, price per piece, pieces per carton and total, without restating the cartons arithmetic. In the summary, the EAN shown is the selected offer's, and the `−`, `+`, `×` controls change the carton count or zero the product out.
 
-Tutte queste modifiche seguono l'autosalvataggio esistente: lo snapshot viene
-scritto atomicamente circa **450 ms** dopo la modifica. Quando la pagina mostra
-`Tutto salvato`, quantità, fornitore, conferme, esclusioni e pagina tornano dopo
-la riapertura. La temporizzazione non va aumentata o ridotta.
+All of these edits go through the existing autosave: the snapshot is written atomically about 450 ms after the edit. When the page shows "Tutto salvato" ("all saved"), quantities, supplier choice, confirmations, exclusions and page all survive reopening. The delay is not tuned up or down.
 
-Compilazioni precedenti e dettagli secondari sono chiusi in partenza. Le
-cancellazioni richiedono conferma sulla singola riga. Rimuovere un listino
-caricato non modifica il confronto vivo: questo cambia soltanto dopo un nuovo
-ricalcolo concluso con successo.
+Past compilations and secondary details start collapsed. Deletions require confirmation on the individual row. Removing an uploaded price list doesn't change the live comparison — that only changes after a new recompute completes successfully.
 
-`quantity` indica sempre il numero di colli: nessun arrotondamento, nessuna eccedenza. Il backend conserva i pezzi consegnati (`colli × pezzi per collo`) come dato informativo. Per un espositore indica il numero di espositori completi. Lo snapshot trasporta anche `quantitySource` (`gestionale` o `utente`), che distingue la quantità precompilata dalla colonna `Colli` da quella scelta dall'utente.
+`quantity` always means the number of cartons: no rounding, no surplus. The backend keeps the delivered pieces (`cartons × pieces per carton`) as informational data. For a display, it means the number of complete displays. The snapshot also carries `quantitySource` (`gestionale` or `utente`), distinguishing a quantity prefilled from the `Colli` column from one the user chose.
 
-## Avvio
+## Startup
 
-Per il dataset corrente usare `AVVIA_COMPARATORE.cmd`. Il launcher cerca prima il runtime Python bundled di Codex e poi `py`/`python`, apre il browser e mantiene dati sotto `app/data/`.
+For the current dataset, use `AVVIA_COMPARATORE.cmd`. The launcher looks first for the app's own portable Python runtime, then for `py`/`python`, opens the browser, and keeps data under `app/data/`.
 
-Quando trova anche Node 18+, crea `app/data/current/writer_config.json` dai `sourcePath` verificati dei file BETULLA/Larice e abilita le copie XLSX. Se manca un requisito, il launcher lo dichiara e lascia disponibile il piano JSON; non crea configurazioni parziali.
+When it also finds Node 18+, it builds `app/data/current/writer_config.json` from the verified `sourcePath`s of the BETULLA/Larice files and enables `.xlsx` copies. If a requirement is missing, the launcher states which one and still leaves the JSON plan available — it never creates a partial configuration.
 
-Le copie `.xlsx` le scrive `scripts/lib/xlsx_in_posizione.mjs` senza nessuna libreria: apre lo ZIP del listino con `node:zlib`, cambia le sole celle della colonna d'ordine dentro l'XML del foglio, e richiude copiando ogni altra parte byte per byte. Fino al 5 settembre 2026 lo faceva `@oai/artifact-tool`, una libreria .NET in WebAssembly che importava il documento e lo riscriveva da capo: è il motivo per cui esiste il confronto cella per cella qui sotto, che resta.
+`.xlsx` copies are written by `scripts/lib/xlsx_in_posizione.mjs` with no library at all: it opens the price list's ZIP container with `node:zlib`, changes only the order column's cells inside the sheet's XML, and closes it again by copying every other part byte for byte. Nothing is reconstructed from scratch — a library that imports a whole workbook and rewrites it can silently drop or corrupt content it doesn't fully understand, which is why the cell-by-cell comparison below exists.
 
-Ogni copia prodotta viene riaperta e confrontata **cella per cella** con il suo listino di partenza (`app/copia_fedele.py`) prima di essere consegnata: le uniche differenze ammesse sono nella colonna d'ordine (le quantità del piano e l'azzeramento di quelle preesistenti). Il confronto carica i libri **per intero** (mai `read_only`: una `<dimension>` prudente o le righe fuori ordine sono lecite e non devono far rifiutare una copia perfetta) e guarda anche il **formato numerico** dove la copia mostra un valore — un prezzo con formato `0` o una quantità nascosta da `;;;` cambiano quello che il fornitore legge senza cambiare la memoria del file. Una copia che non regge il confronto viene cancellata e il motivo finisce fra gli avvisi della compilazione. Dichiarato e non guardato: stili e colori, larghezze, immagini, filtri automatici, proprietà del documento, risultati in cache delle formule (le formule si confrontano come testo).
+Every copy produced is reopened and compared cell by cell against its source price list (`app/copia_fedele.py`) before delivery: the only differences allowed are in the order column — the plan's quantities, and clearing whatever quantity was there before. The comparison loads both workbooks in full, never `read_only` — a conservative `<dimension>` element or out-of-order rows are legitimate and must not make a correct copy look wrong — and also checks the number format wherever the copy shows a value: a price formatted as `0`, or a quantity hidden behind `;;;`, changes what the supplier reads without changing what's stored. A copy that fails the comparison is discarded, and the reason is added to the compilation's warnings. Deliberately not checked: styles and colors, column widths, images, autofilters, document properties, and cached formula results (formulas themselves are compared as text).
 
-Per una run diversa avviare direttamente `app/server.py` con `--review`, `--state`, `--uploads` e `--output-dir`. L'host deve restare loopback. Non esporre la porta sulla LAN.
+To run a different dataset, start `app/server.py` directly with `--review`, `--state`, `--uploads` and `--output-dir`. The host must stay loopback — never expose the port on the LAN.
 
-La query `?demo=1` è soltanto una demo in memoria. In modalità normale un backend assente deve produrre un errore esplicito; non usare fallback dimostrativi nascosti.
+The `?demo=1` query loads an in-memory demo only. In normal mode, a missing backend must produce an explicit error — no hidden demo fallback.
 
-## Upload e ciclo AI
+## Upload and recompute cycle
 
-Il caricamento non autorizza un parsing automatico cieco. Dopo l'upload:
+Uploading a file doesn't trigger blind automatic parsing. After the upload:
 
-1. il server crea una copia univoca e calcola il profilo;
-2. Codex esegue il preflight AI;
-3. manifest e adattatore vengono validati;
-4. parser deterministico o LLM mirato elaborano il file;
-5. Codex controlla l'audit e rigenera `review_data.json`;
-6. la pagina viene aggiornata.
+1. the server saves a unique copy and computes its profile — file format, candidate sheets, and a `deterministic_hint` that matches it against the adapter registry (`SCHEMA_NOTO`, `SCHEMA_VARIATO`, `NUOVO_FORNITORE`, or unrecognized);
+2. the response lists what was read, any warnings about non-standard reads, and which supplier each file was recognized as;
+3. the user reviews the uploaded files and presses "Confronta i listini" ("compare the price lists");
+4. that recompute runs the pipeline's own phases — deterministic parsing where the schema is known, targeted AI matching only for items an EAN can't resolve — and rebuilds `review_data.json`.
 
-Finché questo ciclo non termina mostrare `AI pending`; non mescolare il nuovo listino con dati della run precedente.
+A run stopped on an unrecognized schema opens the guided column-mapping flow (`references/schema-routing.md`) instead of proceeding blind; the new schema is learned and reused from then on.
 
-## Vincoli di compilazione
+## Compilation constraints
 
-La compilazione è bloccata quando l'ordine è vuoto, una quantità non è intera, l'offerta è indisponibile, manca una conferma o un totale sotto soglia non è stato esplicitamente accettato. Modificare quantità o fornitore azzera il consenso sotto soglia.
+Compilation is blocked when the order is empty, a quantity isn't a whole number, the offer is unavailable, a confirmation is missing, or a total below the minimum-order threshold hasn't been explicitly accepted. Changing a quantity or supplier resets the below-threshold consent.
 
-Gli espositori mostrano prezzo per espositore, prezzo per pezzo, quantità dichiarata, confidenza e composizione espandibile. Le righe componente non sono selezionabili come prodotti autonomi.
+Displays show price per display, price per piece, declared quantity, confidence and an expandable composition. Component rows can't be selected as standalone products.
 
-Gli sconti numerici certi sono già riflessi nel prezzo importato o sono calcolati in un campo separato. Omaggi, campioncini, confezioni promozionali e condizioni ambigue sono visibili nelle offerte e nel riepilogo, ma non modificano automaticamente i totali né il fornitore scelto.
+Confirmed numeric discounts are already reflected in the imported price, or computed into a separate field. Free goods, samples, promotional packs and ambiguous conditions are shown in the offers and in the summary, but never automatically change a total or the chosen supplier.
 
-## Sicurezza e output
+## Security and output
 
-- ascoltare solo su `127.0.0.1`, `localhost` o `::1`;
-- accettare soltanto `.xlsx`, `.xls` e `.csv` entro i limiti configurati (il
-  `.xls` è il formato con cui arriva il listino Noce);
-- sanificare nomi e percorsi, non sovrascrivere upload o originali;
-- applicare CSP e header anti-framing;
-- scrivere lo stato atomicamente;
-- creare sempre `final_order_plan.json` prima delle copie XLSX, **dentro la
-  cartella datata di quella compilazione** (`<dati>/ordini/2026-08-12_1435/`):
-  una compilazione non sovrascrive mai i listini pronti della precedente, e
-  l'elenco delle compilazioni si ricava scandendo quelle cartelle, non da un
-  indice a parte che potrebbe disallinearsi;
-- chiudere ogni percorso di scaricamento con una lista bianca: il nome chiesto
-  deve comparire identico in una scansione della cartella, e il percorso
-  risolto deve restare dentro la radice degli ordini;
-- mostrare e conservare soltanto copie/piani relativi a fornitori con almeno una riga ordinata;
-- rimuovere i sidecar diagnostici del motore fogli dalla cartella consegnata;
-- non inviare ordini.
+- listen only on `127.0.0.1`, `localhost` or `::1`;
+- accept only `.xlsx`, `.xls` and `.csv` within the configured size limits (`.xls` is the format the Noce price list arrives in);
+- sanitize names and paths; never overwrite an upload or an original file;
+- apply a CSP and anti-framing headers;
+- write state atomically;
+- always create `final_order_plan.json` before the `.xlsx` copies, inside that compilation's dated folder (`<data>/ordini/2026-08-12_1435/`): a compilation never overwrites the previous one's ready price lists, and the list of compilations is derived by scanning those folders, not from a separate index that could drift out of sync;
+- gate every download path with an allow-list: the requested name must appear, unchanged, in a scan of the folder, and the resolved path must stay inside the orders root;
+- show and keep only copies/plans for suppliers with at least one ordered row;
+- strip the spreadsheet engine's diagnostic sidecar files from the delivered folder;
+- never send orders.

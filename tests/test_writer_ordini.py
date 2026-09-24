@@ -1,28 +1,28 @@
-"""Le copie `.xlsx` che si consegnano ai fornitori: che siano il loro listino.
+"""The `.xlsx` copies delivered to suppliers: they must still be the supplier's price list.
 
-Il 12 agosto 2026 la copia LARICE consegnabile aveva **34 celle della colonna
-EAN** con scritto il testo «1235» al posto del nulla e aveva perso **641 titoli
-di sezione** dalla colonna d'ordine — e il programma diceva che era andato tutto
-bene.  Il writer Node non aveva **nessun** collaudo: questo file e' il suo.
+The Node writer had no test coverage at all before this file: a real supplier
+copy could gain 34 stray "1235" strings in the EAN column, or lose 641
+section titles from the order column, and the program would still report
+success.
 
-Quattro cose valgono da sole l'intero file:
+Four things this file protects, in one line each:
 
-1. **Una stringa condivisa vuota non deve diventare il suo indice.**  La
-   libreria che scrive gli `.xlsx` legge male quelle celle e ci mette dentro il
-   numero della voce di `sharedStrings.xml`.  Il listino di prova se lo
-   costruisce questo collaudo a mano, XML compreso: openpyxl una stringa
-   condivisa vuota non la genera, e senza quella cella il difetto non si vede.
-2. **Una riga che prodotto non e' non si cancella.**  Azzerare le quantita'
-   preesistenti resta giusto — senza, si spedirebbero righe fantasma — ma su
-   LARICE la colonna d'ordine porta i titoli delle sezioni, e cancellare tutta
-   la colonna li portava via.  Una quantita' e' un numero.
-3. **Non ci si fida della libreria.**  Dopo la scrittura si riapre la copia e la
-   si confronta cella per cella con il listino di partenza: le uniche
-   differenze ammesse sono nella colonna d'ordine.  Qualunque altra fa fallire
-   la compilazione di quel fornitore, e la copia non esce.
-4. **Quello che si ferma lo dice in italiano.**  Il listino cambiato dopo la
-   verifica arrivava all'utente come traccia di Node con i percorsi assoluti,
-   mentre il writer la frase pronta ce l'aveva gia'.
+1. An empty shared string must never become its own index. The library
+   that writes `.xlsx` files misreads those cells and stores the
+   `sharedStrings.xml` entry index instead. The test price list is built by
+   hand, XML included: openpyxl never generates an empty shared-string
+   entry, so without it the defect can't show up in the file.
+2. A row that isn't a product must not be erased. Zeroing out existing
+   quantities is still correct — without it, ghost rows would be shipped —
+   but on LARICE the order column also carries section titles, and clearing
+   the whole column took those with it. A quantity is a number.
+3. The library is never trusted blindly. After writing, the copy is
+   reopened and compared cell by cell against the source price list: the
+   only differences allowed are in the order column. Any other difference
+   fails compilation for that supplier, and the copy is never delivered.
+4. Whatever stops the run says so in Italian, not as a raw Node stack
+   trace with absolute paths: a price list changed after the check must
+   reach the user through the writer's own sentence.
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ WRITER = SKILL_ROOT / "scripts" / "write_supplier_orders.mjs"
 
 
 # ---------------------------------------------------------------------------
-# Un `.xlsx` costruito a mano, perche' openpyxl non sa fare quello che serve
+# A `.xlsx` built by hand, because openpyxl can't produce what these tests need
 # ---------------------------------------------------------------------------
 
 _TIPI = (
@@ -101,28 +101,28 @@ _STILI = (
 
 
 def listino_con_stringhe_vuote(percorso: Path, foglio: str = "Listino") -> Path:
-    """Il listino di prova, scritto XML per XML.
+    """Test price list, written XML by hand.
 
-    Perche' a mano: openpyxl **non genera** una voce di `sharedStrings.xml` con
-    il testo vuoto, e senza quella voce referenziata da una cella il difetto che
-    questo collaudo difende non esiste nel file.
+    Built by hand because openpyxl never generates an empty
+    `sharedStrings.xml` entry, and without a cell referencing one the
+    defect this test protects against can't exist in the file.
 
-    Quello che c'e' dentro, e che serve tutto:
+    Every row below is needed:
 
-    | riga | A (EAN)                      | B             | C (ordine)       |
-    |------|------------------------------|---------------|------------------|
-    | 1    | EAN                          | DESCRIZIONE   | ORDINE           |
-    | 2    | *stringa condivisa vuota*    | PRODOTTO DUE  | 3 (preesistente) |
-    | 3    | 8000000000003                | PRODOTTO TRE  | — (il piano: 5)  |
-    | 4    | —                            | —             | SEZIONE SOLARI   |
-    | 5    | *stringa condivisa vuota*    | PRODOTTO CIN. | 7 (preesistente) |
+    | row | A (EAN)                    | B             | C (order)        |
+    |-----|-----------------------------|---------------|-------------------|
+    | 1   | EAN                         | DESCRIZIONE   | ORDINE            |
+    | 2   | *empty shared string*       | PRODOTTO DUE  | 3 (pre-existing)  |
+    | 3   | 8000000000003                | PRODOTTO TRE  | — (plan: 5)       |
+    | 4   | —                            | —             | SEZIONE SOLARI    |
+    | 5   | *empty shared string*       | PRODOTTO CIN. | 7 (pre-existing)  |
     """
 
     condivise = [
         "EAN",              # 0
         "DESCRIZIONE",      # 1
         "ORDINE",           # 2
-        "",                 # 3  <- la voce vuota: e' tutto il punto
+        "",                 # 3  <- the empty entry: this is the whole point
         "PRODOTTO DUE",     # 4
         "8000000000003",    # 5
         "PRODOTTO TRE",     # 6
@@ -169,11 +169,11 @@ def listino_con_stringhe_vuote(percorso: Path, foglio: str = "Listino") -> Path:
 
 
 def xlsx_a_mano(percorso: Path, corpo_foglio: str, foglio: str = "Listino") -> Path:
-    """Un `.xlsx` con il corpo del foglio scritto a mano, tutto il resto minimo.
+    """A `.xlsx` with a hand-written sheet body, everything else minimal.
 
-    Serve per le forme che openpyxl non genera mai da se': una `<dimension>`
-    diversa dai dati veri, le righe scritte fuori ordine.  Le celle si scrivono
-    come `inlineStr` o numeri, cosi' non serve una `sharedStrings` vera.
+    For shapes openpyxl never generates on its own: a `<dimension>` that
+    doesn't match the real data, rows written out of order. Cells are
+    written as `inlineStr` or numbers, so no real `sharedStrings` is needed.
     """
 
     sst = (
@@ -224,16 +224,16 @@ def node_disponibile() -> Path | None:
 
 
 # ---------------------------------------------------------------------------
-# 1. Il writer Node, sul campo
+# 1. The Node writer, exercised end to end
 # ---------------------------------------------------------------------------
 
 
 class IlWriterNodeSulCampo(unittest.TestCase):
-    """Una sola scrittura vera, e tutte le domande le si fanno a quella.
+    """A single real write, with every assertion made against it.
 
-    La libreria ci mette una decina di secondi solo a caricarsi: rifare la
-    scrittura per ogni asserzione allungherebbe la suite di minuti senza
-    provare niente di piu'.
+    The library alone takes about ten seconds just to load: repeating the
+    write for every assertion would add minutes to the suite without
+    testing anything more.
     """
 
     @classmethod
@@ -277,9 +277,8 @@ class IlWriterNodeSulCampo(unittest.TestCase):
             }},
         }), encoding="utf-8")
         ambiente = os.environ.copy()
-        # Dal 5 settembre 2026 il writer non ha nessuna libreria da cercare: la
-        # variabile resta puntata su una cartella che non esiste per provare che
-        # nessuno la legge piu'.
+        # The writer has no library to look up: the variable stays pointed at
+        # a folder that doesn't exist, to prove nothing reads it anymore.
         ambiente["OAI_NODE_MODULES"] = str(cls.cartella / "cache-che-non-c-e")
         return subprocess.run(
             [
@@ -292,8 +291,8 @@ class IlWriterNodeSulCampo(unittest.TestCase):
             env=ambiente,
             capture_output=True,
             text=True,
-            # Node scrive in UTF-8; senza dirlo, su Windows Python legge con la
-            # codifica della console e la frase italiana arriva sfigurata.
+            # Node writes UTF-8; without this, Python on Windows reads with
+            # the console codepage and the Italian sentence comes out garbled.
             encoding="utf-8",
             errors="replace",
             timeout=180,
@@ -308,19 +307,19 @@ class IlWriterNodeSulCampo(unittest.TestCase):
             libro.close()
 
     def test_la_compilazione_riesce_senza_nessuna_libreria(self) -> None:
-        """`OAI_NODE_MODULES` punta al nulla e la compilazione riesce lo stesso:
-        dal 5 settembre 2026 il writer usa solo quello che Node ha in casa."""
+        """`OAI_NODE_MODULES` points at nothing and compilation still succeeds:
+        the writer only ever uses what Node ships with."""
 
         self.assertEqual(self.esito.returncode, 0, self.esito.stderr or self.esito.stdout)
         self.assertTrue(self.copia.is_file())
         self.assertEqual(self.esito.stderr.strip(), "")
 
     def test_una_stringa_condivisa_vuota_non_diventa_il_suo_indice(self) -> None:
-        """Il difetto B1: nella copia LARICE vera erano 34 celle EAN con «1235».
+        """`A2` and `A5` must stay empty in the copy, not turn into "3".
 
-        `A2` e `A5` nel listino di partenza sono la voce numero **3** di
-        `sharedStrings.xml`, che e' testo vuoto.  Se la copia porta «3», la
-        libreria ha consegnato l'indice al posto del valore.
+        `A2` and `A5` in the source price list reference entry number 3
+        of `sharedStrings.xml`, which is empty text. If the copy shows "3",
+        the library delivered the index instead of the value.
         """
 
         for cella in ("A2", "A5"):
@@ -330,14 +329,14 @@ class IlWriterNodeSulCampo(unittest.TestCase):
                 self.assertIn(valore, (None, ""), f"{cella} dovrebbe essere vuota, è {valore!r}")
 
     def test_una_riga_che_non_e_un_prodotto_sopravvive(self) -> None:
-        """Il difetto M1: la copia LARICE vera perdeva 641 titoli di sezione."""
+        """A section title in the order column must not be erased as if it were a quantity."""
 
         self.assertEqual(self.valore("C4"), "SEZIONE SOLARI")
-        # E l'intestazione, che sta sopra la prima riga di dati, nemmeno si tocca.
+        # The header, above the first data row, is untouched too.
         self.assertEqual(self.valore("C1"), "ORDINE")
 
     def test_una_quantita_preesistente_su_una_riga_prodotto_viene_azzerata(self) -> None:
-        """Senza questo si spedirebbero le righe ordinate la settimana scorsa."""
+        """Without this, rows ordered in a previous run would ship again."""
 
         for cella in ("C2", "C5"):
             with self.subTest(cella=cella):
@@ -350,27 +349,29 @@ class IlWriterNodeSulCampo(unittest.TestCase):
         self.assertEqual(hashlib.sha256(self.sorgente.read_bytes()).hexdigest(), self.impronta_prima)
 
     def test_la_guardia_cella_per_cella_promuove_questa_copia(self) -> None:
-        """La prova delle prove: dopo il writer, la copia regge il confronto."""
+        """The test that matters most: after the writer runs, the copy passes the fidelity check."""
 
         esito = confronta_copia(
             self.sorgente, self.copia,
             colonna_ordine="C", prima_riga=2, quantita={3: 5}, foglio_ordine="Listino",
         )
         self.assertTrue(esito.fedele, esito.esempi_rifiutati)
-        # Tre differenze ammesse: i due azzeramenti e la quantita' del piano.
+        # Three allowed differences: the two zeroed rows and the plan quantity.
         self.assertEqual(esito.differenze_ammesse, 3)
         self.assertGreater(esito.celle_confrontate, 0)
 
 
 class IlWriterNonConosceColonnePerContoSuo(unittest.TestCase):
-    """I-2 della revisione avversariale del 13 agosto 2026.
+    """The writer must never guess an order column on its own.
 
-    Il writer portava un ripiego cablato — «betulla in C, larice in D» — e un
-    percorso senza `--config`: una configurazione a cui manca la regola di un
-    fornitore selezionato faceva compilare con la colonna scritta nel codice,
-    bypassando il registro.  «L'unica definizione di come si scrive l'ordine»
-    deve valere anche per il programma che scrive davvero: senza regola ci si
-    ferma e lo si dice, senza configurazione non si parte proprio.
+    The writer must never fall back to a hardcoded column — such as
+    "betulla in C, larice in D" — and must never run without `--config`: a
+    configuration missing the rule for a selected supplier must not compile
+    using a column baked into the code, bypassing the registry. The
+    registry is meant to be the only definition of how an order is
+    written, and that must hold for the program that actually writes it
+    too: no rule means it stops and says so, no config means it never
+    starts.
     """
 
     @classmethod
@@ -416,7 +417,7 @@ class IlWriterNonConosceColonnePerContoSuo(unittest.TestCase):
         self.assertIn("--config", esito.stderr + esito.stdout)
 
     def test_una_regola_mancante_ferma_invece_di_ripiegare_sul_cablato(self) -> None:
-        """Il ripiego avrebbe scritto in colonna D per conto suo, senza registro."""
+        """A fallback would write to column D on its own, bypassing the registry."""
 
         config = self.cartella / "writer_config.json"
         config.write_text(json.dumps({
@@ -438,7 +439,7 @@ class IlWriterNonConosceColonnePerContoSuo(unittest.TestCase):
 
 
 class IlWriterQuandoIlListinoECambiato(unittest.TestCase):
-    """Il difetto I7: la frase italiana, non la traccia di Node."""
+    """A changed price list must stop the run with the Italian sentence, not a raw Node stack trace."""
 
     def setUp(self) -> None:
         self.node = node_disponibile()
@@ -464,8 +465,8 @@ class IlWriterQuandoIlListinoECambiato(unittest.TestCase):
                 "sheet": "Listino",
                 "order_column": "C",
                 "data_start_row": 2,
-                # L'impronta di un altro file: e' il caso vero, il listino
-                # ricaricato dopo la verifica.
+                # A different file's fingerprint: this is the real case,
+                # a price list reloaded after the check ran.
                 "source_sha256": "0" * 64,
             }},
         }), encoding="utf-8")
@@ -491,27 +492,26 @@ class IlWriterQuandoIlListinoECambiato(unittest.TestCase):
         marcate = [riga for riga in righe if riga.startswith("ERRORE_COMPILAZIONE:")]
         self.assertEqual(len(marcate), 1, esito.stderr)
         self.assertIn("Il listino LARICE è cambiato dopo la verifica", marcate[0])
-        # ⚠ Niente traccia di Node e niente percorsi assoluti: e' quello che
-        # l'utente si trovava scritto in pagina.
+        # No Node stack trace and no absolute paths: this is what reaches
+        # the user on the page.
         self.assertNotIn("    at ", esito.stderr)
         self.assertNotIn(str(self.cartella), esito.stderr)
         self.assertFalse(any((self.cartella / "uscita").glob("*.xlsx")))
 
 
 class LIntestazioneDellaColonnaDOrdine(unittest.TestCase):
-    """Come si verifica l'intestazione lo dice la regola, non il nome del fornitore.
+    """How the header is checked comes from the registry rule, never from the supplier's name.
 
-    Il 14 agosto 2026 il writer aveva scritto dentro un `if (supplier ===
-    "cipresso")` che la colonna doveva essere «G» e l'intestazione «ORDINE».
-    Quella settimana il listino CIPRESSO la colonna G ce l'aveva **vuota** —
-    l'utente l'aveva confermato nella mappatura guidata e il registro lo
-    dichiarava — e la compilazione si e' fermata per tutti e tre i fornitori:
-    zero copie prodotte, per una regola scritta nel codice contro una regola
-    dichiarata nel registro.
+    The writer must never hardcode a check like "if supplier is cipresso,
+    the column must be G and the header must be ORDINE". A supplier whose
+    column G header is legitimately blank — confirmed by the user in the
+    guided mapping and declared in the registry — must still compile: a
+    rule baked into the code disagreeing with the registry's own rule
+    would fail compilation for every supplier, producing zero copies.
 
-    Quello che resta e' una domanda sola, uguale per chiunque: la regola dice
-    che testo deve esserci, oppure dice che l'utente ha confermato che quella
-    cella e' vuota. Se non dice ne' l'una ne' l'altra non si scrive.
+    What remains is a single question, the same for every supplier: does the
+    rule say what text must be there, or does it say the user confirmed that
+    cell is blank? If it says neither, nothing gets written.
     """
 
     def setUp(self) -> None:
@@ -552,7 +552,7 @@ class LIntestazioneDellaColonnaDOrdine(unittest.TestCase):
         return esito, prodotte, marcate
 
     def test_un_intestazione_vuota_confermata_si_compila(self) -> None:
-        """Il caso vero del 14 agosto: colonna G, cella G1 vuota, si scrive."""
+        """A confirmed blank header still compiles: column G, cell G1 empty, writes fine."""
 
         esito, prodotte, marcate = self.compila(
             [["COD", "DESCRIZIONE", "UM", "QT", "LISTINO", "EAN", None],
@@ -566,10 +566,11 @@ class LIntestazioneDellaColonnaDOrdine(unittest.TestCase):
         self.assertEqual(len(prodotte), 1, esito.stderr)
 
     def test_il_nome_del_fornitore_non_decide_piu_niente(self) -> None:
-        """Stessa regola, fornitori diversi: stesso esito.
+        """Same rule, different suppliers: same outcome.
 
-        E' la prova che il cablato non c'e' piu': con `cipresso` scritto nel
-        codice questa regola veniva rifiutata e le altre no.
+        Proves no name is special-cased: a hardcoded check tied to
+        `cipresso` would accept this rule for that name and reject it for
+        the others.
         """
 
         for fornitore in ("cipresso", "larice", "un_fornitore_imparato"):
@@ -584,7 +585,7 @@ class LIntestazioneDellaColonnaDOrdine(unittest.TestCase):
                 self.assertEqual(len(prodotte), 1, esito.stderr)
 
     def test_la_cella_che_non_e_piu_vuota_ferma_la_scrittura(self) -> None:
-        """Fra la mappatura confermata e oggi il fornitore può aver messo un titolo."""
+        """The supplier may have added a title since the mapping was confirmed."""
 
         esito, prodotte, marcate = self.compila(
             [["COD", "DESCR", "QUANTITA'"], ["019654", "PRODOTTO", None]],
@@ -599,13 +600,13 @@ class LIntestazioneDellaColonnaDOrdine(unittest.TestCase):
         self.assertIn("QUANTITA'", marcate[0])
 
     def test_un_listino_senza_riga_di_intestazione_si_compila(self) -> None:
-        """E' la forma vera della regola LARICE: intestazione non ne ha.
+        """A supplier with no header row at all must still compile, like LARICE.
 
-        ⚠ La prima versione di questa correzione pretendeva da tutti una
-        dichiarazione sull'intestazione, e alla prova nel browser ha bloccato
-        LARICE — cioe' aveva sostituito un cablato con una regola inventata.
-        Qui si verifica **quello che la configurazione dichiara**, e chi non
-        dichiara nessuna intestazione non ne ha una da verificare.
+        Requiring every supplier to declare a header expectation would block
+        a supplier that genuinely has no header row, trading one hardcoded
+        rule for another invented one. What gets checked is only what the
+        configuration declares; a supplier that declares no header has
+        nothing to verify.
         """
 
         esito, prodotte, _marcate = self.compila(
@@ -630,17 +631,17 @@ class LIntestazioneDellaColonnaDOrdine(unittest.TestCase):
 
 
 class IlWriterQuandoIlGuastoNonEPrevisto(unittest.TestCase):
-    """La marca `ERRORE_COMPILAZIONE:` va SOLO sulle frasi scritte dal writer.
+    """The `ERRORE_COMPILAZIONE:` marker must only tag sentences the writer itself wrote.
 
-    ⚠ La revisione avversariale del 13 agosto 2026 ha mostrato che il `catch`
-    finale marcava qualunque messaggio: in pagina arrivavano `ENOENT ... C:\\...`
-    con i percorsi del computer e le chiavi di risorsa .NET della libreria
-    (`Arg_ArgumentOutOfRangeException`), vestiti da spiegazione italiana.  Il
-    dettaglio tecnico deve uscire NON marcato — cosi' resta sulla console — e
-    la riga marcata deve essere una frase che Daniele puo' leggere.
+    A `catch` block that tags every message it catches would leak raw
+    `ENOENT ... C:\\...` errors with machine paths, and the library's .NET
+    resource keys (`Arg_ArgumentOutOfRangeException`), onto the page
+    dressed up as an Italian explanation. Technical detail must stay
+    unmarked, so it only reaches the console, and the marked line must be a
+    sentence a non-technical reader can understand.
 
-    Questi collaudi non caricano la libreria (il guasto arriva prima), quindi
-    costano meno di un secondo l'uno.
+    These tests never load the library (the failure happens before that
+    point), so each one costs well under a second.
     """
 
     def setUp(self) -> None:
@@ -683,26 +684,25 @@ class IlWriterQuandoIlGuastoNonEPrevisto(unittest.TestCase):
         marcate = self.marcate(esito.stderr)
         self.assertEqual(len(marcate), 1, esito.stderr)
         self.assertIn("Il piano ordini non si riesce a leggere", marcate[0])
-        # Il percorso e l'ENOENT stanno nel `cause`, fuori dalla marca: la
-        # console li vede, la pagina no.
+        # The path and the ENOENT code live in `cause`, outside the marked
+        # sentence: the console sees them, the page doesn't.
         self.assertNotIn("ENOENT", marcate[0])
         self.assertNotIn(str(self.cartella), marcate[0])
         self.assertIn("ENOENT", esito.stderr)
 
-    # Solo Windows, e adesso lo dichiara. Il guasto lo provoca un nome di
-    # cartella che Windows rifiuta: altrove `uscita<illegale>` e' un nome
-    # valido, la scrittura riesce, e la prova falliva perche' NON c'era
-    # l'errore che pretendeva. Restava rossa su ogni Mac senza che nessuno
-    # avesse rotto niente.
-    # ⚠ Manca il gemello che valga ovunque: un guasto imprevisto provocato in
-    # un modo indipendente dal sistema operativo.
+    # Windows-only, declared as such. The failure needs a folder name that
+    # Windows rejects: elsewhere `uscita<illegale>` is a valid name, the
+    # write succeeds, and the test would fail for lacking the error it
+    # expects, failing on every Mac without anything actually being broken.
+    # Missing: an OS-independent counterpart that triggers an unexpected
+    # failure the same way on any platform.
     @unittest.skipUnless(os.name == "nt", "solo Windows rifiuta questo nome di cartella")
     def test_un_guasto_imprevisto_da_la_frase_generica_e_il_dettaglio_resta_fuori_dalla_marca(self) -> None:
         piano = self.cartella / "final_order_plan.json"
         piano.write_text(json.dumps({"orders": []}), encoding="utf-8")
-        # Una cartella d'uscita che Windows non puo' creare: il writer non ha
-        # una frase per questo guasto, e non deve inventarla marcando l'errore
-        # di sistema.
+        # An output folder Windows can't create: the writer has no sentence
+        # for this failure, and must not invent one by marking the raw
+        # system error as its own.
         esito = self.esegui(piano, self.cartella / 'uscita<illegale>')
 
         self.assertNotEqual(esito.returncode, 0)
@@ -711,19 +711,19 @@ class IlWriterQuandoIlGuastoNonEPrevisto(unittest.TestCase):
         self.assertIn("guasto imprevisto", marcate[0])
         self.assertIn("Il piano ordini è completo", marcate[0])
         self.assertNotIn(str(self.cartella), marcate[0])
-        # Il dettaglio vero c'e', ma non marcato.
+        # The real detail is there, just unmarked.
         self.assertIn("Error", esito.stderr.replace(marcate[0], ""))
 
 
 class LaDecodificaDellUscitaDelWriter(banco_web.ConsegnaBase):
-    """La frase del writer attraversa `subprocess` senza sfigurarsi.
+    """The writer's sentence must survive `subprocess` unmangled.
 
-    ⚠ Node scrive UTF-8.  Senza dirlo a `subprocess.run`, su Windows Python
-    decodifica con cp1252 e «Il listino LARICE è cambiato» arrivava in pagina
-    come «Il listino LARICE Ã¨ cambiato».  Il collaudo che c'era sostituiva
-    `subprocess.run` con una funzione che ignorava gli argomenti, quindi la
-    codifica non la osservava nessuno: la revisione avversariale del 13 agosto
-    2026 l'ha riportata a cp1252 con la suite verde.  Qui lo spawn e' vero.
+    Node writes UTF-8. Without telling `subprocess.run` that, Python on
+    Windows decodes with cp1252 and "Il listino LARICE è cambiato" would
+    reach the page as "Il listino LARICE Ã¨ cambiato". A test that mocked
+    `subprocess.run` with a function ignoring its arguments could pass with
+    that regression in place, since nothing observed the encoding. This one
+    spawns the real process.
     """
 
     def setUp(self) -> None:
@@ -760,26 +760,26 @@ class LaDecodificaDellUscitaDelWriter(banco_web.ConsegnaBase):
 
 
 # ---------------------------------------------------------------------------
-# 1-bis. La riga di destinazione porta ancora il prodotto del piano?
+# 1-bis. Does the target row still carry the product the plan expects?
 # ---------------------------------------------------------------------------
 
 
 def listino_con_ean(percorso: Path, foglio: str = "Listino") -> Path:
-    """Il listino su cui si collauda la verifica della riga di destinazione.
+    """Test price list for checking that the target row matches the plan.
 
-    | riga | A (EAN)             | B (DESCRIZIONE)         | C (ORDINE) |
-    |------|---------------------|-------------------------|------------|
-    | 1    | EAN                 | DESCRIZIONE             | ORDINE     |
-    | 2    | 8000000000002       | PRODOTTO DUE            | 4          |
-    | 3    | 8000000000003       | PRODOTTO TRE            | —          |
-    | 4    | 8000000000004       | ESPOSITORE MISTO        | —          |
-    | 5    | —                   | SCATOLA REGALO NATALE   | —          |
-    | 6    | 8000000000006 (num) | PRODOTTO SEI            | —          |
-    | 7    | —                   | CAFFÈ  MISCELA-ORO 250g | —          |
+    | row | A (EAN)             | B (DESCRIZIONE)         | C (ORDINE) |
+    |-----|---------------------|-------------------------|------------|
+    | 1   | EAN                 | DESCRIZIONE             | ORDINE     |
+    | 2   | 8000000000002       | PRODOTTO DUE            | 4          |
+    | 3   | 8000000000003       | PRODOTTO TRE            | —          |
+    | 4   | 8000000000004       | ESPOSITORE MISTO        | —          |
+    | 5   | —                   | SCATOLA REGALO NATALE   | —          |
+    | 6   | 8000000000006 (num) | PRODOTTO SEI            | —          |
+    | 7   | —                   | CAFFÈ  MISCELA-ORO 250g | —          |
 
-    ⚠ La riga 6 porta l'EAN come **numero** e non come testo: e' la forma in cui
-    i fogli di calcolo lo restituiscono meta' delle volte, ed e' la ragione per
-    cui il confronto normalizza invece di guardare i byte.
+    Row 6 carries the EAN as a number, not text: spreadsheets return it
+    that way about half the time, which is why the comparison normalizes
+    instead of comparing raw values.
     """
 
     return listino_semplice(percorso, foglio, [
@@ -795,12 +795,13 @@ def listino_con_ean(percorso: Path, foglio: str = "Listino") -> Path:
 
 
 def riepilogo_del_writer(stdout: str) -> dict[str, Any]:
-    """Il riepilogo di fine lavoro, preso dalla riga marcata.
+    """The end-of-run summary, taken from the marked line.
 
-    ⚠ Su `stdout` non c'e' solo il writer: la libreria dei fogli di calcolo ci
-    scrive «Inspect result written to file: C:\\...» a ogni salvataggio, e chi
-    leggesse tutto `stdout` come JSON si fermerebbe su quella riga.  Il writer
-    marca il riepilogo come marca gli errori, e qui si prende quella riga.
+    `stdout` isn't only the writer's own output: the spreadsheet library
+    writes "Inspect result written to file: C:\\..." on every save, so
+    parsing all of `stdout` as JSON would choke on that line. The writer
+    marks its summary the same way it marks its errors; this picks out
+    that one line.
     """
 
     marca = "RIEPILOGO_COMPILAZIONE:"
@@ -813,14 +814,14 @@ def riepilogo_del_writer(stdout: str) -> dict[str, Any]:
 def esegui_writer(
     node: Path, cartella: Path, piano: dict[str, Any], config: dict[str, Any], uscita: Path,
 ) -> subprocess.CompletedProcess[str]:
-    """Il writer vero, con il piano e la configurazione scritti su disco."""
+    """Run the real writer, with the plan and config written to disk."""
 
     piano_path = cartella / "final_order_plan.json"
     piano_path.write_text(json.dumps(piano), encoding="utf-8")
     config_path = cartella / "writer_config.json"
     config_path.write_text(json.dumps(config), encoding="utf-8")
     ambiente = os.environ.copy()
-    # Come sopra: la cache del runtime di sviluppo punta al nulla apposta.
+    # As above: deliberately points the dev-runtime cache at nothing.
     ambiente["OAI_NODE_MODULES"] = str(cartella / "cache-che-non-c-e")
     return subprocess.run(
         [
@@ -841,20 +842,19 @@ def esegui_writer(
 
 
 class LaVerificaDellaRigaDiDestinazione(unittest.TestCase):
-    """Il difetto del 12 agosto 2026, dalla parte del writer Node.
+    """Guards against an order landing on the wrong row of the price list.
 
-    Un ordine e' finito sulla riga 2600 — olio Carapelli invece del prodotto
-    atteso.  Per BETULLA, LARICE ed CIPRESSO la quantita' andava in `colonna+riga`
-    alla cieca: in tutto il writer non c'era **una sola** occorrenza di EAN, e
-    lo sha256 del listino difende dal file cambiato, non da un
-    `supplier_source_row` sbagliato.  Il controllo esisteva solo per Noce,
-    dentro `app/xls_writer.py`.
+    Without this check, a `supplier_source_row` mismatch could put an order
+    on the wrong product row entirely: the quantity was written to
+    `column+row` blindly, with no EAN check anywhere in the writer, and the
+    price list's sha256 only defends against a changed file, not a wrong
+    row number. A row-level check existed only for Noce, inside
+    `app/xls_writer.py`.
 
-    Una sola scrittura vera, e tutte le domande le si fanno a quella: la
-    libreria ci mette una decina di secondi solo a caricarsi.  Il fornitore e'
-    apposta uno che nella tabella cablata del writer non c'e', cosi' la stessa
-    compilazione collauda anche il nome leggibile che arriva dalla
-    configurazione.
+    A single real write, with every assertion made against it: the library
+    alone takes about ten seconds just to load. The supplier used here is
+    deliberately one absent from the writer's hardcoded table, so the same
+    run also exercises the display name coming from the configuration.
     """
 
     NOME_LEGGIBILE = "D'Alessio & Figli S.r.l."
@@ -870,26 +870,27 @@ class LaVerificaDellaRigaDiDestinazione(unittest.TestCase):
         cls.sorgente = listino_con_ean(cls.cartella / "listino_nuovo.xlsx")
         impronta = hashlib.sha256(cls.sorgente.read_bytes()).hexdigest()
         piano = {"orders": [
-            # L'EAN coincide: la riga e' quella giusta e si scrive.
+            # EAN matches: this is the right row, so it writes.
             {"supplier": "nuovo_fornitore", "supplier_source_row": 3,
              "supplier_ean": "8000000000003", "supplier_description": "PRODOTTO TRE", "quantity": 5},
-            # L'espositore: il piano l'EAN non ce l'ha, il listino si'.  Avviso,
-            # non errore — e' il caso che su LARICE bloccherebbe ordini veri.
+            # The display: the plan has no EAN, the price list does. Warning,
+            # not an error — this is the case that would block a legitimate
+            # order on LARICE.
             {"supplier": "nuovo_fornitore", "supplier_source_row": 4,
              "supplier_ean": "", "supplier_description": "ESPOSITORE MISTO", "quantity": 2},
-            # Nessun EAN da nessuna parte: si guarda la descrizione, e non
-            # coincide.  Avviso, non errore.
+            # No EAN on either side: falls back to the description, and it
+            # doesn't match. Warning, not an error.
             {"supplier": "nuovo_fornitore", "supplier_source_row": 5,
              "supplier_ean": "", "supplier_description": "SCATOLA REGALO", "quantity": 1},
-            # Lo stesso codice scritto in due modi.
+            # Same code written two different ways.
             {"supplier": "nuovo_fornitore", "supplier_source_row": 6,
              "supplier_ean": "8000000000006.0", "supplier_description": "PRODOTTO SEI", "quantity": 3},
-            # Solo la descrizione, e coincide a meno di accenti e punteggiatura.
+            # Description only, matching up to accents and punctuation.
             {"supplier": "nuovo_fornitore", "supplier_source_row": 7,
              "supplier_ean": "", "supplier_description": "caffe miscela oro 250G", "quantity": 7},
-            # Il piano l'EAN non ce l'ha, il listino si', e la descrizione dice
-            # un'altra merce: qui l'avviso ci vuole, e deve dire tutte e due le
-            # cose.
+            # The plan has no EAN, the price list does, and the description
+            # names different goods: a warning is required here, naming both
+            # mismatches.
             {"supplier": "nuovo_fornitore", "supplier_source_row": 8,
              "supplier_ean": "", "supplier_description": "TUTT'ALTRA MERCE", "quantity": 1},
         ]}
@@ -903,7 +904,7 @@ class LaVerificaDellaRigaDiDestinazione(unittest.TestCase):
                 "expected_header": "ORDINE",
                 "source_sha256": impronta,
                 "display_name": cls.NOME_LEGGIBILE,
-                # La lettera e il numero 1-based sono tutti e due leciti.
+                # Either a column letter or a 1-based column number is valid.
                 "verify": {"ean_column": "A", "description_column": 2},
             }},
         }
@@ -934,25 +935,25 @@ class LaVerificaDellaRigaDiDestinazione(unittest.TestCase):
         self.assertEqual(self.valore("C3"), 5)
 
     def test_lo_stesso_codice_scritto_in_due_modi_e_lo_stesso_prodotto(self) -> None:
-        """`8000000000006.0` nel piano, `8000000000006` nel listino: si scrive.
+        """`8000000000006.0` in the plan, `8000000000006` in the price list: still writes.
 
-        ⚠ Senza la normalizzazione questa riga sarebbe un **errore** e il
-        fornitore non riceverebbe niente, per una coda decimale.
+        Without normalization this row would be an error and the
+        supplier would receive nothing, over a stray decimal tail.
         """
 
         self.assertEqual(self.valore("C6"), 3)
 
     def test_la_riga_senza_ean_nel_piano_la_conferma_la_descrizione(self) -> None:
-        """L'espositore: Noce qui fallisce, il writer no — e non deve.
+        """The display: Noce fails on this case, the writer must not.
 
-        La riga padre di un espositore LARICE l'EAN ce l'ha e il piano no:
-        fermarsi bloccherebbe un ordine legittimo. Si scrive.
+        A LARICE display's parent row has an EAN in the price list but not
+        in the plan: stopping here would block a legitimate order, so it
+        writes.
 
-        ⚠ E non si avvisa nemmeno, **se la descrizione conferma la riga**. Prima
-        questo ramo usciva con un avviso senza guardare la descrizione, che il
-        registro dichiara: per gli espositori voleva dire un avviso a settimana
-        su una riga che il listino conferma (revisione avversariale del 14
-        agosto 2026).
+        No warning either, as long as the description confirms the row.
+        A branch that warns without checking the description the registry
+        declares would warn, for displays, on a row the price list itself
+        confirms.
         """
 
         self.assertEqual(self.valore("C4"), 2)
@@ -960,7 +961,7 @@ class LaVerificaDellaRigaDiDestinazione(unittest.TestCase):
         self.assertFalse([avviso for avviso in avvisi if "riga 4" in avviso], avvisi)
 
     def test_la_descrizione_diversa_si_scrive_lo_stesso_con_un_avviso(self) -> None:
-        """La descrizione del piano può essere stata ripulita a monte."""
+        """The plan's description may have been cleaned up upstream."""
 
         self.assertEqual(self.valore("C5"), 1)
         avvisi = self.riepilogo()["warnings"]
@@ -972,17 +973,17 @@ class LaVerificaDellaRigaDiDestinazione(unittest.TestCase):
         )
 
     def test_una_descrizione_uguale_a_meno_di_accenti_non_avvisa_nessuno(self) -> None:
-        """«caffe miscela oro 250G» e «CAFFÈ  MISCELA-ORO 250g» sono la stessa riga.
+        """"caffe miscela oro 250G" and "CAFFÈ  MISCELA-ORO 250g" are the same row.
 
-        Se il confronto fosse alla lettera, ogni riga senza EAN uscirebbe con
-        un avviso e l'elenco degli avvisi non lo leggerebbe piu' nessuno.
+        A literal comparison would warn on every EAN-less row, and the
+        warning list would stop being worth reading.
         """
 
         self.assertEqual(self.valore("C7"), 7)
         self.assertEqual(len(self.riepilogo()["warnings"]), 2, self.riepilogo()["warnings"])
 
     def test_l_ean_solo_nel_listino_con_la_descrizione_che_smentisce_avvisa_di_tutto(self) -> None:
-        """Le due cose insieme, perché sono due indizi diversi della stessa riga."""
+        """Both mismatches reported together: they're two different signals about the same row."""
 
         self.assertEqual(self.valore("C8"), 1)
         avvisi = self.riepilogo()["warnings"]
@@ -995,31 +996,32 @@ class LaVerificaDellaRigaDiDestinazione(unittest.TestCase):
         )
 
     def test_il_riepilogo_conta_le_righe_verificate_e_quelle_no(self) -> None:
-        """I numeri che l'utente deve poter leggere a fine compilazione."""
+        """The numbers the user should be able to read at the end of a run."""
 
         riepilogo = self.riepilogo()
         self.assertEqual(riepilogo["verified_rows"], 4)
         self.assertEqual(riepilogo["unverifiable_rows"], 2)
         self.assertEqual(riepilogo["written_rows"], 6)
-        # Verificate e non verificabili, sommate, fanno le righe del piano.
+        # Verified and unverifiable rows add up to the plan's rows.
         self.assertEqual(
             riepilogo["verified_rows"] + riepilogo["unverifiable_rows"],
             riepilogo["written_rows"],
         )
 
     def test_il_nome_leggibile_arriva_dalla_configurazione(self) -> None:
-        """Il difetto 2: senza `display_name` qui si leggerebbe `NUOVO_FORNITORE`."""
+        """Without `display_name`, this summary would show `NUOVO_FORNITORE` instead."""
 
         riepilogo = self.riepilogo()
         self.assertEqual(riepilogo["supplier"], "nuovo_fornitore")
         self.assertEqual(riepilogo["supplier_name"], self.NOME_LEGGIBILE)
 
     def test_il_nome_del_file_porta_il_nome_leggibile_ripulito(self) -> None:
-        """⚠ Il nome del fornitore finisce nel nome del file consegnato.
+        """The supplier's display name ends up in the delivered file name.
 
-        `D'Alessio & Figli S.r.l.` cosi' com'e' farebbe un file che Windows non
-        scrive: i caratteri che un nome di file non regge diventano un trattino
-        basso, e la frase per l'utente resta quella dichiarata.
+        `D'Alessio & Figli S.r.l.` as-is would produce a file name Windows
+        can't write: characters a file name can't hold become an
+        underscore, while the sentence shown to the user keeps the
+        declared display name.
         """
 
         self.assertEqual(self.copia.name, "ORDINE_D_ALESSIO_FIGLI_S_R_L_listino_nuovo.xlsx")
@@ -1028,19 +1030,20 @@ class LaVerificaDellaRigaDiDestinazione(unittest.TestCase):
 
 
 class LaPuliziaDelleCopieVecchie(unittest.TestCase):
-    """Nella cartella d'uscita non deve restare l'ordine della volta scorsa.
+    """A previous run's order file must not linger in the output folder.
 
-    ⚠ La pulizia cancellava il nome che il writer costruisce **oggi**, e il
-    nome lo fa il `display_name`: bastava che il fornitore fosse stato
-    ribattezzato dall'ultima compilazione perche' la copia di allora si
-    chiamasse in un altro modo, restasse li' e uscisse insieme a quella nuova
-    — due ordini per lo stesso fornitore, con dentro numeri diversi, e niente
-    che lo dica.  Oggi la cartella e' sempre nuova e il difetto non fa danno:
-    e' vero finche' resta vero.
+    Cleanup that only deletes the exact name the writer would build for
+    the current run — a name that comes from `display_name` — would miss a
+    supplier renamed since the previous compilation: the old copy keeps
+    its old name, survives the cleanup, and ships alongside the new one —
+    two orders for the same supplier, with different numbers, and nothing
+    flagging it. The output folder is always freshly created, so this
+    failure mode can't occur with the current layout; this test keeps it
+    that way.
 
-    Quello che invece non si tocca e' la consegna gia' rinominata
-    (`Ordine BETULLINO — 14 agosto 2026.xlsx`): quella e' la compilazione
-    precedente, non uno scarto.
+    What must stay untouched is a delivery already renamed by hand (e.g.
+    `Ordine BETULLINO — 14 agosto 2026.xlsx`): that's a previous
+    compilation, not stale output to discard.
     """
 
     def setUp(self) -> None:
@@ -1095,13 +1098,13 @@ class LaPuliziaDelleCopieVecchie(unittest.TestCase):
         )
 
     def test_la_copia_appena_prodotta_non_se_la_porta_via_un_altro_fornitore(self) -> None:
-        """Due fornitori sullo stesso listino, uno ordinato e uno no.
+        """Two suppliers on the same price list, one ordered and one not.
 
-        La pulizia del fornitore **non** ordinato lega sul listino di partenza,
-        che qui e' lo stesso: senza le copie protette cancellerebbe l'ordine
-        appena scritto, il writer uscirebbe con 0 dichiarando un file che non
-        c'e', e a fermarsi sarebbe il servizio con una frase che manda a cercare
-        il guasto nel posto sbagliato.
+        Cleanup for the supplier that is not ordered targets the source
+        price list, which here is the same file: without protecting fresh
+        copies, it could delete the order just written, the writer would
+        report success for a file that no longer exists, and any failure
+        downstream would point at the wrong place.
         """
 
         piano = {"orders": [{
@@ -1114,7 +1117,7 @@ class LaPuliziaDelleCopieVecchie(unittest.TestCase):
         config = {
             "supplier_files": {
                 "nuovo_fornitore": str(self.sorgente),
-                # Configurato, non ordinato, e con lo **stesso** listino.
+                # Configured, not ordered, and with the same price list.
                 "fornitore_fermo": str(self.sorgente),
             },
             "supplier_write_rules": {"nuovo_fornitore": {
@@ -1140,14 +1143,17 @@ class LaPuliziaDelleCopieVecchie(unittest.TestCase):
             libro.close()
 
     def test_chi_si_scrive_in_posizione_lo_dice_la_regola_non_il_nome(self) -> None:
-        """⚠ Fino al 18 agosto 2026 questo writer saltava chi si chiamava
-        «noce», in tre punti. Il nome però non c'entra: quello che decide è
-        la procedura di scrittura che la configurazione dichiara — la stessa che
-        `app/server.py` legge con `procedura_di_scrittura`.
+        """Which write procedure applies comes from the registry rule, never from the supplier's name.
 
-        La prova rovescia i due nomi apposta: **«noce» senza procedura si
-        compila**, un fornitore che si chiama in un altro modo e la dichiara
-        **si salta**. Col nome cablato questa prova è impossibile da passare.
+        The writer must never special-case the name "noce".
+        What actually decides the write procedure is the configuration's
+        declared procedure — the same field `app/server.py` reads as
+        `procedura_di_scrittura`.
+
+        This test swaps the two names on purpose: "noce" with no declared
+        procedure compiles normally, while a differently-named supplier
+        that does declare one is skipped. A hardcoded name check could
+        never pass this test.
         """
 
         gemello = self.cartella / "listino_del_terzo.xlsx"
@@ -1191,19 +1197,19 @@ class LaPuliziaDelleCopieVecchie(unittest.TestCase):
             next(riga for riga in esito.stdout.splitlines() if riga.startswith("RIEPILOGO_COMPILAZIONE:"))
             .removeprefix("RIEPILOGO_COMPILAZIONE:")
         )
-        # Le righe di chi si scrive altrove si contano lo stesso, per dirlo.
+        # Rows written by a different procedure are still counted, to report them.
         self.assertEqual(riepilogo["noce_lines"], 1)
         self.assertEqual(
             [voce["supplier"] for voce in riepilogo["supplier_copies"]], ["noce"],
         )
 
     def test_la_pulizia_non_cancella_per_omonimia(self) -> None:
-        """`listino_nuovo` è la coda di `mio_listino_nuovo`.
+        """`listino_nuovo` is a filename suffix of `mio_listino_nuovo`.
 
-        ⚠ Rilievo della revisione avversariale del 14 agosto 2026: la pulizia
-        riconosceva le copie vecchie dalla coda del nome, e la coda di un
-        listino può essere la coda del listino di un altro fornitore. Il primo
-        si portava via l'ordine del secondo. Vince la coda più lunga.
+        The cleanup recognized stale copies by matching a filename suffix,
+        and one supplier's price-list name can be a suffix of another
+        supplier's. Cleaning up the first could take the second's order
+        with it. The longest matching suffix wins.
         """
 
         gemello = self.cartella / "mio_listino_nuovo.xlsx"
@@ -1220,9 +1226,10 @@ class LaPuliziaDelleCopieVecchie(unittest.TestCase):
         config = {
             "supplier_files": {
                 "nuovo_fornitore": str(self.sorgente),
-                # Noce non passa da questo writer — il suo documento lo
-                # compila il servizio in posizione — quindi la sua copia qui non
-                # la tocca nessun altro: e' il caso in cui l'omonimia si vede.
+                # Noce doesn't go through this writer — its document is
+                # compiled by the in-place service — so nothing else should
+                # touch its copy here: this is the case where the name
+                # collision would show up.
                 "noce": str(gemello),
             },
             "supplier_write_rules": {
@@ -1235,11 +1242,12 @@ class LaPuliziaDelleCopieVecchie(unittest.TestCase):
                     "source_sha256": self.impronta,
                     "display_name": "BETULLINO",
                 },
-                # ⚠ La regola di Noce c'e', e dichiara la sua procedura:
-                # e' quello che il servizio locale scrive davvero in
-                # `writer_config.json`. Senza, il banco descriveva una
-                # configurazione che non esiste — ed era il banco a tenere in
-                # piedi il `supplier === "noce"` cablato in questo writer.
+                # Noce's rule is present and declares its own procedure,
+                # matching what the local service actually writes into
+                # `writer_config.json`. Without it, this test would describe
+                # a configuration that doesn't exist — and would be the
+                # thing propping up a hardcoded `supplier === "noce"` check
+                # in this writer.
                 "noce": {
                     "sheet": "Foglio1",
                     "order_column": "I",
@@ -1258,11 +1266,12 @@ class LaPuliziaDelleCopieVecchie(unittest.TestCase):
         self.assertTrue((self.uscita / "ORDINE_BETULLINO_listino_nuovo.xlsx").is_file())
 
     def test_due_fornitori_sullo_stesso_documento_fermano_la_compilazione(self) -> None:
-        """Due nomi diversi che producono lo stesso file d'ordine.
+        """Two different supplier names that resolve to the same order file.
 
-        `nomePerIlFile` schiaccia in `_` tutto cio' che non e' una lettera o una
-        cifra: «Sapori & Co.» e «Sapori Co» danno lo stesso nome. Consegnarne
-        uno solo vorrebbe dire mandare a un fornitore la merce di un altro.
+        `nomePerIlFile` collapses anything that isn't a letter or digit
+        into `_`: "Sapori & Co." and "Sapori Co" produce the same name.
+        Delivering only one would mean sending one supplier's goods to
+        another.
         """
 
         secondo = listino_con_ean(self.cartella / "altro_listino.xlsx")
@@ -1276,9 +1285,9 @@ class LaPuliziaDelleCopieVecchie(unittest.TestCase):
             "sheet": "Listino", "order_column": "C", "data_start_row": 2,
             "header_row": 1, "expected_header": "ORDINE",
         }
-        # Due listini con lo stesso nome di file in due cartelle diverse, e due
-        # nomi di fornitore che si riducono allo stesso: il documento d'ordine
-        # sarebbe lo stesso per tutti e due.
+        # Two price lists with the same file name in two different folders,
+        # and two supplier names that collapse to the same one: the order
+        # document would be identical for both.
         gemello = self.cartella / "gemello"
         gemello.mkdir()
         copia_listino = gemello / self.sorgente.name
@@ -1304,11 +1313,11 @@ class LaPuliziaDelleCopieVecchie(unittest.TestCase):
 
 
 class QuandoLaRigaNonPortaPiuIlProdottoDelPiano(unittest.TestCase):
-    """L'EAN che non coincide: per quel fornitore non esce niente.
+    """A mismatched EAN must produce no copy at all for that supplier.
 
-    E il fratello di controllo: senza il blocco `verify` la stessa riga sbagliata
-    si scrive come si e' sempre scritto.  Una configurazione vecchia non deve
-    smettere di funzionare perche' il writer ha imparato un controllo nuovo.
+    Plus its control case: with no `verify` block, the same mismatched row
+    is written the way it always was. An old configuration must not stop
+    working just because the writer gained a new check.
     """
 
     def setUp(self) -> None:
@@ -1321,7 +1330,7 @@ class QuandoLaRigaNonPortaPiuIlProdottoDelPiano(unittest.TestCase):
         self.uscita = self.cartella / "uscita"
         self.sorgente = listino_con_ean(self.cartella / "listino_nuovo.xlsx")
         self.impronta = hashlib.sha256(self.sorgente.read_bytes()).hexdigest()
-        # La riga 3 del listino porta 8000000000003: il piano ne chiede un'altra.
+        # Row 3 of the price list carries 8000000000003; the plan expects a different one.
         self.piano = {"orders": [{
             "supplier": "nuovo_fornitore",
             "supplier_source_row": 3,
@@ -1362,16 +1371,16 @@ class QuandoLaRigaNonPortaPiuIlProdottoDelPiano(unittest.TestCase):
             "e il piano si aspetta 8000000000099: non è più la riga su cui è stato costruito "
             "l'ordine. L'ordine BETULLINO non viene creato.",
         )
-        # ⚠ Niente copia consegnabile: e' tutto il punto del controllo.
+        # No deliverable copy: that's the whole point of the check.
         self.assertFalse(
             list(self.uscita.glob("*.xlsx")) if self.uscita.is_dir() else [],
             "una riga sbagliata non deve lasciare sul disco un ordine da spedire",
         )
-        # E niente traccia di Node in faccia all'utente.
+        # And no Node stack trace reaches the user.
         self.assertNotIn("    at ", esito.stderr)
 
     def piano_di_riga_3(self, descrizione: str = "PRODOTTO TRE") -> dict[str, Any]:
-        """Un ordine sulla riga 3, con l'EAN che quella riga porta davvero."""
+        """An order on row 3, with the EAN that row actually carries."""
 
         return {"orders": [{
             "supplier": "nuovo_fornitore",
@@ -1389,13 +1398,14 @@ class QuandoLaRigaNonPortaPiuIlProdottoDelPiano(unittest.TestCase):
         return marcate[0]
 
     def test_con_la_descrizione_che_conferma_la_riga_si_accusa_la_configurazione(self) -> None:
-        """Il listino e' a posto: a essere sbagliata e' la colonna dichiarata.
+        """The price list is fine: it's the declared column that's wrong.
 
-        Con `ean_column` puntata sulla descrizione **ogni** riga risulta
-        cambiata, e il writer diceva «non è più la riga su cui è stato costruito
-        l'ordine»: chi legge va a cercare un guasto nel listino, che non ce
-        l'ha.  Qui la descrizione coincide, quindi la riga e' quella giusta e lo
-        si puo' dire per certo.
+        With `ean_column` pointed at the description column, every row
+        would look mismatched. A message reading "non è più la riga su cui è
+        stato costruito l'ordine" (not the row the order was built on) would
+        send the reader to look for a fault in the price list, which has
+        none. Here the description matches, so the row is confirmed correct
+        and the message can say so.
         """
 
         esito = esegui_writer(
@@ -1414,14 +1424,15 @@ class QuandoLaRigaNonPortaPiuIlProdottoDelPiano(unittest.TestCase):
         )
 
     def test_senza_descrizione_si_dicono_tutte_e_due_le_possibilita(self) -> None:
-        """⚠ Il rilievo della revisione avversariale del 14 agosto 2026.
+        """Without a description to compare, the message must name both possibilities.
 
-        Trovare l'EAN del piano in un'altra colonna **non basta** a dire che la
-        colonna dichiarata sia sbagliata: un fornitore che ripete il codice
-        nella colonna dell'articolo lo mette anche su una riga che quel prodotto
-        non ce l'ha più. Chi credesse alla frase sbagliata sposterebbe
-        `ean_column` sul codice articolo, spegnendo per sempre questa difesa.
-        Senza una descrizione da confrontare si dicono tutte e due le cose.
+        Finding the plan's EAN in a different column is not enough to
+        conclude the declared column is wrong: a supplier that repeats the
+        item code in another column can also put it on a row that no
+        longer has that product. A message that claimed the column was
+        wrong could lead someone to repoint `ean_column` at that code,
+        permanently disabling this check. With no description available to
+        confirm either way, both possibilities must be stated.
         """
 
         esito = esegui_writer(
@@ -1437,12 +1448,12 @@ class QuandoLaRigaNonPortaPiuIlProdottoDelPiano(unittest.TestCase):
         self.assertNotIn("da correggere è la configurazione", frase)
 
     def test_se_la_descrizione_dice_un_altra_merce_la_riga_resta_l_imputata(self) -> None:
-        """La riga porta l'EAN del piano in un'altra colonna, ma è un'altra merce.
+        """The row carries the plan's EAN in another column, but it's different goods.
 
-        È il caso del 12 agosto 2026 — la riga 2600 che era olio Carapelli — con
-        in più un fornitore che ripete il codice: la colonna dichiarata è giusta
-        e a non tornare è la riga. La frase non deve mandare a toccare la
-        configurazione.
+        A supplier that repeats the item code across columns can put it on
+        a row for the wrong product: the declared column is fine, and it's
+        the row that's wrong. The message must not point at the
+        configuration.
         """
 
         esito = esegui_writer(
@@ -1457,11 +1468,11 @@ class QuandoLaRigaNonPortaPiuIlProdottoDelPiano(unittest.TestCase):
         self.assertNotIn("configurazione", frase)
 
     def test_senza_verify_si_scrive_come_si_e_sempre_scritto(self) -> None:
-        """Il fratello di controllo: stessa riga sbagliata, nessuna verifica.
+        """Control case: same mismatched row, no verify block configured.
 
-        Serve a due cose: dice che la configurazione vecchia non si rompe, e
-        dice che il collaudo qui sopra misura il **controllo** e non un guasto
-        qualunque del listino di prova.
+        Confirms two things: an old configuration keeps working, and the
+        test above is really measuring the check, not an incidental
+        defect of the test price list.
         """
 
         esito = esegui_writer(self.node, self.cartella, self.piano, self.regola(), self.uscita)
@@ -1475,17 +1486,17 @@ class QuandoLaRigaNonPortaPiuIlProdottoDelPiano(unittest.TestCase):
         finally:
             libro.close()
         riepilogo = riepilogo_del_writer(esito.stdout)["supplier_copies"][0]
-        # Niente da confrontare: la riga si conta fra quelle non verificabili.
+        # Nothing to compare against: the row counts as unverifiable.
         self.assertEqual(riepilogo["verified_rows"], 0)
         self.assertEqual(riepilogo["unverifiable_rows"], 1)
         self.assertEqual(riepilogo["warnings"], [])
 
 
 class IlNomeLeggibileNelleFrasi(unittest.TestCase):
-    """Il difetto 2 dove lo legge l'utente: nelle frasi, non solo nei file.
+    """The display name must reach the user in error sentences too, not just in file names.
 
-    Questi due collaudi si fermano sulla configurazione, prima che la libreria
-    dei fogli di calcolo si carichi: costano meno di un secondo l'uno.
+    Both tests here stop at the configuration step, before the spreadsheet
+    library loads, so each one costs well under a second.
     """
 
     def setUp(self) -> None:
@@ -1518,17 +1529,17 @@ class IlNomeLeggibileNelleFrasi(unittest.TestCase):
         return marcate[0]
 
     def test_il_display_name_sostituisce_l_identificativo_tecnico(self) -> None:
-        """⚠ Senza, l'utente si legge `NUOVO_FORNITORE`, underscore compreso."""
+        """Without it, the user would read `NUOVO_FORNITORE`, underscore included."""
 
-        # La regola non dichiara il foglio: ci si ferma subito, e la frase deve
-        # gia' chiamare il fornitore con il suo nome.
+        # The rule doesn't declare the sheet: this fails immediately, and
+        # the message must already use the supplier's display name.
         marcata = self._marcata({"order_column": "C", "display_name": "D'Alessio & Figli S.r.l."})
 
         self.assertIn("Manca il foglio verificato per D'Alessio & Figli S.r.l.", marcata)
         self.assertNotIn("NUOVO_FORNITORE", marcata)
 
     def test_senza_display_name_resta_il_ripiego_di_oggi(self) -> None:
-        """La configurazione che il nome non lo dichiara non cambia comportamento."""
+        """A configuration with no declared name keeps today's fallback behavior."""
 
         marcata = self._marcata({"order_column": "C"})
 
@@ -1536,7 +1547,7 @@ class IlNomeLeggibileNelleFrasi(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 2. La guardia cella per cella, da sola
+# 2. The cell-by-cell fidelity guard, in isolation
 # ---------------------------------------------------------------------------
 
 
@@ -1577,13 +1588,13 @@ class LaGuardiaCellaPerCella(unittest.TestCase):
         esito = self.confronta(self.copia_con({}))
         self.assertTrue(esito.fedele)
         self.assertEqual(esito.differenze_ammesse, 0)
-        # Il listino di prova porta 9 celle con qualcosa dentro: il confronto
-        # le deve aver viste tutte (le celle vuote senza formato non contano
-        # niente e non si contano).
+        # The test price list has 9 non-empty cells: the comparison must
+        # have seen all of them (unformatted empty cells carry no
+        # information and aren't counted).
         self.assertGreaterEqual(esito.celle_confrontate, 9)
 
     def test_una_differenza_fuori_dalla_colonna_d_ordine_viene_rifiutata(self) -> None:
-        """Il caso B1: un EAN che nella copia non è più quello del listino."""
+        """An EAN in the copy that doesn't match the source price list."""
 
         esito = self.confronta(self.copia_con({"A2": "1235"}), quantita={2: 9})
         self.assertFalse(esito.fedele)
@@ -1601,7 +1612,7 @@ class LaGuardiaCellaPerCella(unittest.TestCase):
         self.assertEqual(esito.differenze_ammesse, 1)
 
     def test_una_quantita_diversa_da_quella_del_piano_viene_rifiutata(self) -> None:
-        """La cella è quella giusta, il numero no: è comunque un ordine sbagliato."""
+        """The cell is right, the number isn't: still a wrong order."""
 
         esito = self.confronta(self.copia_con({"C3": 7}), quantita={3: 6})
         self.assertFalse(esito.fedele)
@@ -1613,7 +1624,7 @@ class LaGuardiaCellaPerCella(unittest.TestCase):
         self.assertEqual(esito.differenze_ammesse, 1)
 
     def test_un_titolo_di_sezione_cancellato_viene_rifiutato(self) -> None:
-        """Il caso M1: la colonna d'ordine non è fatta solo di quantità."""
+        """The order column can hold more than quantities — a section title too."""
 
         esito = self.confronta(self.copia_con({"C4": None}))
         self.assertFalse(esito.fedele)
@@ -1621,11 +1632,12 @@ class LaGuardiaCellaPerCella(unittest.TestCase):
         self.assertIn("SEZIONE SOLARI", frase_di_rifiuto("LARICE", esito))
 
     def test_una_cella_svuotata_fuori_dalla_colonna_d_ordine_viene_rifiutata(self) -> None:
-        """⚠ L'azzeramento e' lecito **solo** dentro la colonna d'ordine.
+        """Zeroing is only allowed inside the order column.
 
-        Un EAN e' fatto di cifre: se «era un numero, adesso e' vuota» valesse per
-        tutte le colonne, un EAN sparito passerebbe per un azzeramento
-        legittimo.  E' la differenza fra una guardia e un colabrodo.
+        An EAN is made of digits: if "was a number, now empty" were
+        tolerated in every column, a deleted EAN would pass as a
+        legitimate zeroing. That distinction is what makes this a guard
+        instead of a sieve.
         """
 
         esito = self.confronta(self.copia_con({"A2": None}))
@@ -1633,17 +1645,17 @@ class LaGuardiaCellaPerCella(unittest.TestCase):
         self.assertIn("A2", frase_di_rifiuto("LARICE", esito))
 
     def test_l_intestazione_della_colonna_d_ordine_non_si_puo_toccare(self) -> None:
-        """Sopra la prima riga di dati nessuna differenza è ammessa."""
+        """No difference is allowed above the first data row."""
 
         esito = self.confronta(self.copia_con({"C1": None}))
         self.assertFalse(esito.fedele)
 
     def test_sopra_la_prima_riga_di_dati_nemmeno_un_azzeramento_e_lecito(self) -> None:
-        """La riga 2 qui e' intestazione, non dati: quello che c'e' scritto resta.
+        """Row 2 here is a header, not data: whatever it holds must stay.
 
-        `C2` porta il numero 4.  Dentro l'area dei dati svuotarlo sarebbe
-        l'azzeramento di una quantita' preesistente; sopra la prima riga di dati
-        e' una cella del listino che sparisce.
+        `C2` holds the number 4. Inside the data area, clearing it would be
+        the legitimate zeroing of a pre-existing quantity; above the first
+        data row it is just a price-list cell disappearing.
         """
 
         esito = confronta_copia(
@@ -1653,23 +1665,22 @@ class LaGuardiaCellaPerCella(unittest.TestCase):
         self.assertFalse(esito.fedele)
 
     def test_la_cella_vuota_e_la_stringa_vuota_sono_la_stessa_cosa(self) -> None:
-        """In Excel si vedono uguali: chiamarle diverse fermerebbe un ordine giusto.
+        """An empty cell and an empty string look identical in Excel; treating them as different would block a valid order.
 
-        ⚠ La stringa condivisa vuota va costruita a mano: openpyxl non la genera
-        (scrive una cella senza niente e la rilegge come `None`), e la prima
-        versione di questo collaudo — `A4 = ""` su un file di openpyxl —
-        confrontava `None` con `None` senza mai toccare la tolleranza che dice
-        di difendere.  L'ha scoperto la revisione avversariale del 13 agosto
-        2026, spegnendola con la suite verde.  Sul listino LARICE vero questa
-        tolleranza vale 35 celle a compilazione: senza, il fornitore piu'
-        grosso non riceverebbe piu' nessun ordine.
+        The empty shared string has to be built by hand: openpyxl never
+        generates one (it writes a cell with nothing in it, which reads
+        back as `None`), so `A4 = ""` on an openpyxl-built file would only
+        ever compare `None` against `None`, never exercising the tolerance
+        this test is meant to protect. On the real LARICE price list this
+        tolerance covers 35 cells per run; without it, that supplier's
+        largest order would stop being delivered at all.
         """
 
         originale = listino_con_stringhe_vuote(self.cartella / "con_vuote.xlsx")
         copia = self.cartella / "riscritta.xlsx"
-        libro = load_workbook(originale)  # le celle A2/A5 arrivano come «»...
+        libro = load_workbook(originale)  # cells A2/A5 come back as ""...
         try:
-            libro.save(copia)  # ...e il file riscritto le porta come celle senza niente
+            libro.save(copia)  # ...and the rewritten file has them as empty cells
         finally:
             libro.close()
 
@@ -1694,12 +1705,11 @@ class LaGuardiaCellaPerCella(unittest.TestCase):
         return copia
 
     def test_un_formato_che_cambia_il_numero_mostrato_viene_rifiutato(self) -> None:
-        """Il fornitore legge il numero **mostrato**, non la memoria del file.
+        """The supplier reads the number as displayed, not the value stored in the file.
 
-        `C2` resta 4 in memoria ma con formato `0` un prezzo come 1,75 si
-        leggerebbe «2».  La revisione avversariale del 13 agosto 2026 ha
-        costruito la manomissione e la prima guardia la prometteva al
-        fornitore senza dire niente.
+        `C2` stays 4 in memory, but with number format `0` a price like
+        1.75 would display as "2". An earlier version of this guard let
+        that kind of change through unnoticed.
         """
 
         esito = self.confronta(self.copia_con_formato({}, {"C2": "0.00"}))
@@ -1709,8 +1719,8 @@ class LaGuardiaCellaPerCella(unittest.TestCase):
         self.assertIn("C2", frase)
 
     def test_il_formato_che_nasconde_la_quantita_scritta_viene_rifiutato(self) -> None:
-        """`;;;` sulla quantita' del piano: il programma crede di aver chiesto
-        6 colli e il fornitore vede una cella vuota."""
+        """`;;;` on the plan's quantity: the program believes it ordered
+        6 cartons while the supplier sees an empty cell."""
 
         esito = self.confronta(
             self.copia_con_formato({"C3": 6}, {"C3": ";;;"}), quantita={3: 6}
@@ -1718,8 +1728,8 @@ class LaGuardiaCellaPerCella(unittest.TestCase):
         self.assertFalse(esito.fedele)
 
     def test_un_formato_diverso_su_una_cella_vuota_non_ferma_niente(self) -> None:
-        """Su una cella vuota nessun formato mostra nulla: fermarsi li'
-        rifiuterebbe un ordine giusto per una veste che non si vede."""
+        """No number format shows anything on an empty cell: rejecting it
+        there would reject a valid order over formatting no one can see."""
 
         esito = self.confronta(self.copia_con_formato({}, {"A4": ";;;"}))
         self.assertTrue(esito.fedele, esito.esempi_rifiutati)
@@ -1738,7 +1748,7 @@ class LaGuardiaCellaPerCella(unittest.TestCase):
         self.assertIn("4 celle sono diverse", frase_di_rifiuto("LARICE", esito))
 
     def test_senza_la_colonna_d_ordine_il_confronto_si_ferma(self) -> None:
-        """Senza sapere dov'è l'ordine non si distingue il lecito dal guasto."""
+        """Without knowing where the order column is, a legitimate change can't be told apart from a defect."""
 
         with self.assertRaises(ConfrontoImpossibile):
             confronta_copia(
@@ -1755,18 +1765,18 @@ class LaGuardiaCellaPerCella(unittest.TestCase):
 
 
 class IlPianoEIlContratto(unittest.TestCase):
-    """Non «non c'e' niente di troppo», ma «c'e' tutto quello che serve».
+    """The guard must check not just "nothing extra" but "everything required is there".
 
-    ⚠ Il difetto misurato il 14 agosto 2026.  La guardia entrava in azione solo
-    dove la copia era **diversa** dal listino: una quantita' che il writer non
-    scrive lascia la cella identica a com'era, nessun ramo la incontrava, e la
-    copia usciva «fedele» con una riga d'ordine in meno.  Misurato allora:
+    A guard that only acts where the copy differs from the price list
+    misses a quantity the writer failed to write: that cell stays exactly
+    as it was, no branch ever catches it, and the copy comes back
+    "faithful" with one order row silently missing:
 
-        copia completa            fedele=True  ammesse=3  rifiutate=0
-        copia senza la riga 6     fedele=True  ammesse=2  rifiutate=0
+        full copy               fedele=True  ammesse=3  rifiutate=0
+        copy missing row 6      fedele=True  ammesse=2  rifiutate=0
 
-    Il dato per accorgersene c'era gia': `quantita` **e'** l'elenco delle righe
-    che dovevano essere scritte.
+    The data needed to catch this was already available: `quantita` is
+    the list of rows that were supposed to be written.
     """
 
     def setUp(self) -> None:
@@ -1777,7 +1787,7 @@ class IlPianoEIlContratto(unittest.TestCase):
             self.cartella / "originale.xlsx", "Listino",
             [
                 ["EAN", "DESCRIZIONE", "ORDINE"],
-                # C2 porta la quantita' ordinata la settimana scorsa.
+                # C2 carries the quantity from a previous run's order.
                 ["8000000000001", "PRODOTTO UNO", 4],
                 ["8000000000002", "PRODOTTO DUE", None],
                 ["8000000000003", "PRODOTTO TRE", None],
@@ -1804,39 +1814,39 @@ class IlPianoEIlContratto(unittest.TestCase):
             colonna_ordine="C", prima_riga=2, quantita=quantita, foglio_ordine="Listino",
         )
 
-    # -- il difetto ---------------------------------------------------------
+    # -- the defect this guards against --------------------------------------
 
     def test_una_riga_del_piano_che_non_arriva_nella_copia_non_e_fedele(self) -> None:
-        """Il piano chiede tre righe, la copia ne porta due: non si consegna.
+        """The plan asks for three rows, the copy has two: it must not be delivered.
 
-        Nella copia non c'e' **niente** di troppo — nessuna cella cambiata
-        fuori posto — ed e' esattamente per questo che il difetto e' vissuto
-        tanto: la guardia contava solo quello.
+        The copy has nothing extra — no cell changed out of place —
+        which is exactly why this defect went unnoticed for so long: the
+        guard only ever checked for that.
         """
 
         esito = self.confronta(
-            {"C2": None, "C3": 5, "C4": 6},  # la riga 6 il writer se l'e' persa
+            {"C2": None, "C3": 5, "C4": 6},  # row 6 got dropped by the writer
             quantita={3: 5, 4: 6, 6: 7},
         )
 
         self.assertFalse(esito.fedele)
         self.assertEqual(esito.righe_mancanti, [6])
         self.assertEqual(esito.righe_richieste, 3)
-        # Nessuna cella di troppo: il guasto e' tutto nell'altra misura.
+        # No extra cell: the whole defect shows up in the other measure.
         self.assertEqual(esito.quante_rifiutate, 0)
         frase = frase_di_rifiuto("LARICE", esito)
         self.assertIn("riga 6", frase)
         self.assertIn("delle 3 righe d'ordine richieste", frase)
         self.assertIn("La copia non viene consegnata", frase)
-        # E non si accusa il listino di avere celle cambiate: manderebbe a
-        # cercare il guasto dalla parte opposta.
+        # And the price list isn't blamed for changed cells: that would
+        # point the search for the defect in the wrong direction.
         self.assertNotIn("celle sono diverse", frase)
         self.assertNotIn("cella è diversa", frase)
 
-    # -- che non si rompa quello che funzionava -----------------------------
+    # -- must not break what already worked -----------------------------------
 
     def test_la_copia_completa_resta_fedele(self) -> None:
-        """Il fratello di controllo: le stesse tre righe, tutte scritte."""
+        """Control case: the same three rows, all written."""
 
         esito = self.confronta(
             {"C2": None, "C3": 5, "C4": 6, "C6": 7},
@@ -1846,16 +1856,16 @@ class IlPianoEIlContratto(unittest.TestCase):
         self.assertTrue(esito.fedele, esito.esempi_rifiutati)
         self.assertEqual(esito.righe_mancanti, [])
         self.assertEqual(esito.righe_richieste, 3)
-        # Le tre quantita' del piano piu' l'azzeramento della settimana scorsa.
+        # The three plan quantities plus the previous run's zeroed row.
         self.assertEqual(esito.differenze_ammesse, 4)
 
     def test_l_azzeramento_della_settimana_prima_non_e_una_riga_richiesta(self) -> None:
-        """`C2` si svuota perche' il piano **non** chiede niente per quella riga.
+        """`C2` is cleared because the plan asks for nothing on that row.
 
-        E' la ragione per cui le righe attese si contano su `quantita` e non
-        sulle differenze ammesse: un azzeramento e' una differenza ammessa che
-        nel piano non c'e', e pretendere «tante differenze quante righe» lo
-        conterebbe due volte o lo scambierebbe per una riga scritta.
+        This is why expected rows are counted from `quantita` and not from
+        the allowed differences: a zeroing is an allowed difference the
+        plan never asked for, and counting "as many differences as rows"
+        would either double-count it or mistake it for a written row.
         """
 
         esito = self.confronta({"C2": None, "C3": 5}, quantita={3: 5})
@@ -1866,14 +1876,14 @@ class IlPianoEIlContratto(unittest.TestCase):
         self.assertEqual(esito.differenze_ammesse, 2)
 
     def test_una_quantita_gia_giusta_nel_listino_non_e_una_riga_mancante(self) -> None:
-        """⚠ Il piano chiede 4 alla riga 2, e nel listino c'e' gia' scritto 4.
+        """The plan asks for 4 on row 2, and the price list already shows 4.
 
-        La copia e' identica all'originale e **giusta**: il fornitore legge i
-        4 colli che il piano ha chiesto.  Se la regola fosse «ogni riga del
-        piano deve aver prodotto una differenza», questa copia perfetta
-        verrebbe buttata via — e chi riordina ogni settimana le stesse
-        quantita' non riceverebbe mai un ordine.  Si guarda il valore che la
-        copia porta, non quanto e' cambiata.
+        The copy is identical to the original and correct: the supplier
+        reads the 4 cartons the plan asked for. A rule of "every plan row
+        must have produced a difference" would reject this perfectly valid
+        copy, and a supplier reordering the same quantity every week would
+        never receive an order. What matters is the value the copy carries,
+        not how much it changed.
         """
 
         esito = self.confronta({}, quantita={2: 4})
@@ -1885,7 +1895,7 @@ class IlPianoEIlContratto(unittest.TestCase):
     # -- che cosa legge l'utente --------------------------------------------
 
     def test_i_due_guasti_si_dicono_diversi(self) -> None:
-        """Una cella di troppo e una riga che manca: due frasi, non una."""
+        """An extra cell and a missing row: two separate messages, not one."""
 
         esito = self.confronta(
             {"A3": "1235", "C3": 5},  # EAN rovinato, e la riga 4 non scritta
@@ -1902,7 +1912,7 @@ class IlPianoEIlContratto(unittest.TestCase):
         self.assertIn("riga 4", frase)
 
     def test_si_nominano_le_prime_righe_mancanti_e_si_contano_tutte(self) -> None:
-        """Un elenco lungo una pagina non lo legge nessuno: primi casi e totale."""
+        """A page-long list would go unread: show the first cases and a total."""
 
         esito = self.confronta({}, quantita={2: 9, 3: 5, 4: 6, 6: 7})
 
@@ -1912,11 +1922,11 @@ class IlPianoEIlContratto(unittest.TestCase):
         self.assertIn("righe 2, 3 e 4, e un'altra", frase)
 
     def test_la_frase_delle_celle_di_troppo_e_quella_di_sempre(self) -> None:
-        """Requisito esplicito: sulle copie con celle cambiate non cambia nulla.
+        """The message for changed cells must stay exactly as before.
 
-        La frase si confronta **per intero**, non a pezzi: e' l'unico modo di
-        accorgersi che una parola in piu' si e' infilata dentro un messaggio
-        che l'utente conosce gia'.
+        The sentence is compared in full, not piece by piece: it's the
+        only way to catch an extra word slipping into a message the user
+        already recognizes.
         """
 
         esito = self.confronta({"B3": "ALTRO PRODOTTO"}, quantita={})
@@ -1931,14 +1941,15 @@ class IlPianoEIlContratto(unittest.TestCase):
 
 
 class LaGuardiaSuDueFogli(unittest.TestCase):
-    """Le promesse sui fogli secondari, provate su un libro che ne ha due.
+    """The guard's promises about secondary sheets, exercised on a workbook that has two.
 
-    ⚠ La revisione avversariale del 13 agosto 2026 ha spento «la guardia guarda
-    tutti i fogli» e «la tolleranza vale solo sul foglio dell'ordine» con la
-    suite verde: ogni fixture della guardia aveva un foglio solo, quindi il
-    ramo dei fogli secondari non lo attraversava nessuno.  Questi collaudi
-    esistono per quello, e per il fornitore che riceverebbe condizioni di
-    pagamento sbagliate da un'«ottimizzazione» che salta i fogli senza ordine.
+    Every earlier fixture for the guard used a single-sheet workbook, so
+    the code path handling secondary sheets was never actually exercised:
+    a broken "the guard checks every sheet" or "the order-column tolerance
+    only applies to the order sheet" could pass the suite untested. These
+    tests exist for that, and for the supplier who would otherwise receive
+    wrong payment terms from an "optimization" that skips sheets with no
+    order column.
     """
 
     def setUp(self) -> None:
@@ -1959,9 +1970,8 @@ class LaGuardiaSuDueFogli(unittest.TestCase):
         for riga in (
             ["PAGAMENTO", "60 GG", None],
             ["CONSEGNA", "FRANCO MAGAZZINO", None],
-            # ⚠ C3 porta un numero: svuotarlo somiglia in tutto all'azzeramento
-            # di una quantita' preesistente, ma questo non e' il foglio
-            # dell'ordine.
+            # C3 holds a number: clearing it looks exactly like zeroing a
+            # pre-existing quantity, but this isn't the order sheet.
             [None, None, 9],
         ):
             condizioni.append(riga)
@@ -1991,7 +2001,7 @@ class LaGuardiaSuDueFogli(unittest.TestCase):
         self.assertTrue(esito.fedele, esito.esempi_rifiutati)
 
     def test_una_differenza_su_un_foglio_secondario_viene_rifiutata(self) -> None:
-        """«60 GG» che diventa «30 GG» sono condizioni di pagamento sbagliate."""
+        """"60 GG" becoming "30 GG" is a wrong payment term."""
 
         esito = self.confronta(self.copia_con("Condizioni", {"B1": "30 GG"}))
         self.assertFalse(esito.fedele)
@@ -2001,11 +2011,11 @@ class LaGuardiaSuDueFogli(unittest.TestCase):
         self.assertIn("60 GG", frase)
 
     def test_la_tolleranza_della_colonna_d_ordine_non_vale_sui_fogli_secondari(self) -> None:
-        """La colonna C esiste su tutti i fogli; l'ordine sta solo su «Listino».
+        """Column C exists on every sheet; the order column is only on "Listino".
 
-        E' la regola che il docstring di `confronta_copia` dichiara: negli
-        altri fogli nessuna differenza e' ammessa, nemmeno nella colonna con la
-        stessa lettera, nemmeno se somiglia a un azzeramento lecito.
+        The rule `confronta_copia`'s docstring declares: on other sheets no
+        difference is allowed, not even in the column with the same
+        letter, not even one that looks like a legitimate zeroing.
         """
 
         esito = self.confronta(self.copia_con("Condizioni", {"C3": None}))
@@ -2013,7 +2023,7 @@ class LaGuardiaSuDueFogli(unittest.TestCase):
         self.assertIn("Condizioni", frase_di_rifiuto("LARICE", esito))
 
     def test_l_azzeramento_resta_lecito_sul_foglio_dell_ordine(self) -> None:
-        """Il fratello di controllo: la stessa differenza, sul foglio giusto."""
+        """Control case: the same difference, on the right sheet."""
 
         esito = self.confronta(self.copia_con("Listino", {"C2": None}))
         self.assertTrue(esito.fedele, esito.esempi_rifiutati)
@@ -2021,15 +2031,15 @@ class LaGuardiaSuDueFogli(unittest.TestCase):
 
 
 class LaGuardiaSulleFormeLecite(unittest.TestCase):
-    """Un `.xlsx` lecito ma poco comune non deve far rifiutare una copia perfetta.
+    """A valid but uncommon `.xlsx` shape must not make a perfect copy get rejected.
 
-    Due forme trovate dalla revisione avversariale del 13 agosto 2026, entrambe
-    permesse dall'OOXML: una `<dimension>` piu' stretta dei dati veri (la
-    modalita' `read_only` di openpyxl ci credeva e leggeva un listino monco) e
-    le righe scritte fuori ordine nel file (l'appaiamento per posizione
-    confrontava la riga 5 dell'originale con la riga 2 della copia).  In
-    entrambi i casi la guardia rifiutava una copia **perfetta** accusando celle
-    innocenti, e il fornitore non riceveva mai il suo ordine.
+    Two shapes covered here, both permitted by OOXML: a `<dimension>`
+    narrower than the actual data (openpyxl's `read_only` mode trusts it
+    and reads a truncated price list), and rows written out of order in
+    the file (position-based pairing would compare the original's row 5
+    against the copy's row 2). In both cases the guard would reject a
+    perfect copy by blaming innocent cells, and the supplier would
+    never receive their order.
     """
 
     RIGHE = {
@@ -2051,9 +2061,9 @@ class LaGuardiaSulleFormeLecite(unittest.TestCase):
         return f"{dichiarazione}<sheetData>{corpo}</sheetData>"
 
     def test_una_dimension_prudente_non_fa_rifiutare_una_copia_perfetta(self) -> None:
-        """La copia della libreria non porta `<dimension>`: se la guardia si
-        fida della dichiarazione dell'originale, legge un listino monco e
-        accusa la copia di aver inventato le celle che stanno oltre."""
+        """The library's own copy carries no `<dimension>`: if the guard
+        trusted the original's declared range, it would read a truncated
+        price list and accuse the copy of inventing cells beyond it."""
 
         originale = xlsx_a_mano(self.cartella / "originale.xlsx", self.foglio([1, 2, 3, 4, 5], dimension="A1:B3"))
         copia = xlsx_a_mano(self.cartella / "copia.xlsx", self.foglio([1, 2, 3, 4, 5]))
@@ -2064,8 +2074,8 @@ class LaGuardiaSulleFormeLecite(unittest.TestCase):
         self.assertTrue(esito.fedele, esito.esempi_rifiutati)
 
     def test_le_righe_scritte_fuori_ordine_si_confrontano_per_numero_di_riga(self) -> None:
-        """Ogni `<row>` dichiara il suo numero: l'ordine nel file non conta.
-        La libreria le riscrive in salita, e la copia resta perfetta."""
+        """Every `<row>` declares its own number: file order doesn't matter.
+        The library rewrites rows in ascending order, and the copy stays perfect."""
 
         originale = xlsx_a_mano(self.cartella / "originale.xlsx", self.foglio([1, 5, 3, 2, 4]))
         copia = xlsx_a_mano(self.cartella / "copia.xlsx", self.foglio([1, 2, 3, 4, 5]))
@@ -2076,11 +2086,11 @@ class LaGuardiaSulleFormeLecite(unittest.TestCase):
         self.assertTrue(esito.fedele, esito.esempi_rifiutati)
 
     def test_le_quantita_si_appaiano_al_numero_di_riga_vero_anche_se_il_foglio_comincia_dopo(self) -> None:
-        """Un foglio le cui prime righe non esistono proprio (la prima cella e'
-        alla riga 3): `iter_rows` parte dalla prima riga vera, e chi contasse
-        le **posizioni** sposterebbe le quantita' del piano su righe sbagliate
-        — la riga 4 del piano diventerebbe la posizione 2, la tolleranza
-        cadrebbe altrove, e una copia giusta verrebbe rifiutata."""
+        """A sheet whose first rows don't exist at all (the first cell is on
+        row 3): `iter_rows` starts from the first real row, and counting by
+        position instead would shift the plan's quantities onto the
+        wrong rows — row 4 of the plan would become position 2, the
+        tolerance would land elsewhere, and a correct copy would be rejected."""
 
         r3 = '<row r="3"><c r="A3" t="inlineStr"><is><t>8000000000003</t></is></c><c r="B3" t="inlineStr"><is><t>PRODOTTO TRE</t></is></c></row>'
         r4 = '<row r="4"><c r="A4" t="inlineStr"><is><t>8000000000004</t></is></c><c r="B4" t="inlineStr"><is><t>PRODOTTO QUATTRO</t></is></c></row>'
@@ -2097,8 +2107,8 @@ class LaGuardiaSulleFormeLecite(unittest.TestCase):
         self.assertEqual(esito.differenze_ammesse, 1)
 
     def test_le_righe_fuori_ordine_non_nascondono_una_manomissione(self) -> None:
-        """Il fratello di controllo: il confronto per numero di riga vero non
-        e' una tolleranza, e una cella cambiata si vede lo stesso."""
+        """Control case: comparing by true row number isn't a tolerance —
+        a genuinely changed cell still gets caught."""
 
         originale = xlsx_a_mano(self.cartella / "originale.xlsx", self.foglio([1, 5, 3, 2, 4]))
         manomessa = self.RIGHE | {
@@ -2115,17 +2125,17 @@ class LaGuardiaSulleFormeLecite(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 3. La guardia dentro la compilazione, dove la vede l'utente
+# 3. The guard inside compilation, where the user actually sees it
 # ---------------------------------------------------------------------------
 
 
 class ScrittoreCheNonScrive(banco_web.ScrittoreFinto):
-    """Consegna il listino **tale e quale**: la colonna d'ordine resta vuota.
+    """Delivers the price list as-is: the order column stays empty.
 
-    E' il guasto del 14 agosto 2026 in persona, ed e' quello che lo scrittore
-    finto faceva senza volerlo fino a quel giorno: `shutil.copy2` e basta.  La
-    copia viene rimessa a posto **dopo** il lavoro della classe base, cosi'
-    questo collaudo dice la stessa cosa qualunque cosa la base scriva domani.
+    This reproduces the plainest possible failure to write anything: a
+    bare `shutil.copy2`. The copy is put back into this state after the
+    base class does its own work, so this test says the same thing
+    regardless of what the base class writes in the future.
     """
 
     def __call__(self, plan_path: Path, destinazione: Path) -> Any:
@@ -2136,7 +2146,7 @@ class ScrittoreCheNonScrive(banco_web.ScrittoreFinto):
 
 
 class ScrittoreCheGuasta(banco_web.ScrittoreFinto):
-    """Come lo scrittore finto, ma sporca una cella della copia di un fornitore."""
+    """Like the fake writer, but corrupts one cell of a supplier's copy."""
 
     def __init__(self, fornitori: dict[str, Path], *, guasto: str, cella: str, valore: Any) -> None:
         super().__init__(fornitori)
@@ -2165,7 +2175,7 @@ class LaGuardiaDentroLaCompilazione(banco_web.ConsegnaBase):
             return self.store.compile(self.snapshot(2, fornitore))
 
     def test_una_copia_infedele_non_viene_consegnata(self) -> None:
-        """⚠ La differenza sta in `A`, non nella colonna d'ordine (`D`)."""
+        """The difference is in column `A`, not in the order column (`D`)."""
 
         scrittore = ScrittoreCheGuasta(
             {"larice": self.listini["larice"]},
@@ -2180,11 +2190,11 @@ class LaGuardiaDentroLaCompilazione(banco_web.ConsegnaBase):
         self.assertIn("non è fedele al listino di partenza", avviso)
         self.assertIn("A2", avviso)
         self.assertIn(avviso, esito["message"])
-        # Nessuna copia a meta' consegnabile: il documento non c'e' piu'.
+        # No half-delivered copy: the document simply doesn't exist.
         cartella = self.orders_dir / esito["cartella"]
         self.assertFalse(list(cartella.glob("*.xlsx")), list(cartella.iterdir()))
         self.assertTrue((cartella / "final_order_plan.json").is_file())
-        # E l'avviso finisce anche nell'audit, non solo nella risposta.
+        # And the warning also lands in the audit log, not just in the response.
         audit = json.loads((cartella / "compilazione.json").read_text(encoding="utf-8"))
         self.assertIn(avviso, audit["avvisi"])
 
@@ -2211,12 +2221,12 @@ class LaGuardiaDentroLaCompilazione(banco_web.ConsegnaBase):
         self.assertNotIn("Attenzione", esito["message"])
 
     def test_una_copia_senza_la_quantita_del_piano_non_viene_consegnata(self) -> None:
-        """Il difetto del 14 agosto 2026, dove lo vede l'utente.
+        """A copy missing the plan's quantities entirely, where the user actually sees it.
 
-        Una copia del listino senza dentro le quantita' del piano: fino a oggi
-        la compilazione diceva «pronto», rinominava la copia, la metteva nello
-        zip e nello storico — un ordine da consegnare al fornitore con dentro
-        zero righe ordinate.
+        A price-list copy with none of the plan's quantities written in:
+        compilation would otherwise report success, rename the copy, and
+        put it in the zip and the order history — an order delivered to
+        the supplier with zero rows actually ordered.
         """
 
         esito = self.compila(ScrittoreCheNonScrive({"larice": self.listini["larice"]}))
@@ -2228,7 +2238,7 @@ class LaGuardiaDentroLaCompilazione(banco_web.ConsegnaBase):
         self.assertIn("riga d'ordine richiesta", avviso)
         self.assertIn("riga 10", avviso)
         self.assertIn(avviso, esito["message"])
-        # La copia a meta' non resta sul disco, come per le altre infedelta'.
+        # The half-written copy doesn't stay on disk, same as other fidelity failures.
         cartella = self.orders_dir / esito["cartella"]
         self.assertFalse(list(cartella.glob("*.xlsx")), list(cartella.iterdir()))
 
@@ -2249,18 +2259,18 @@ class LaGuardiaDentroLaCompilazione(banco_web.ConsegnaBase):
 
 
 # ---------------------------------------------------------------------------
-# 3-bis. Il riepilogo di fine lavoro, letto dal servizio
+# 3-bis. End-of-run summary, as read by the service
 # ---------------------------------------------------------------------------
 
 
 class IlPrezzoDiUnOfferta(unittest.TestCase):
-    """`offer_pricing`: i due versi del calcolo, non uno solo.
+    """`offer_pricing`: both directions of the calculation, not just one.
 
-    ⚠ Il ramo che ricava il prezzo del pezzo dal prezzo d'ordine non era
-    misurato da nessuno — il suo simmetrico ha dodici test (revisione
-    dell'integrità dei test, 14 agosto 2026). È il ramo che serve a un'offerta
-    che dichiara solo il totale del collo, e un fattore sbagliato lì dentro
-    falsa il confronto fra fornitori, che si fa **sempre sul prezzo al pezzo**.
+    The branch that derives the per-piece price from the order price had
+    no coverage, unlike its symmetric counterpart. It's the branch that
+    matters for an offer declaring only the carton total, and a wrong
+    factor there skews the supplier comparison, which is always done
+    on the per-piece price.
     """
 
     def prezzo(self, **campi: Any) -> dict[str, Any] | None:
@@ -2279,7 +2289,7 @@ class IlPrezzoDiUnOfferta(unittest.TestCase):
         )
 
     def test_senza_fattore_dichiarato_il_pezzo_e_il_collo(self) -> None:
-        """Ripiego prudente: un collo di uno costa quanto il collo."""
+        """Safe fallback: a carton of one costs as much as the carton."""
 
         self.assertEqual(
             self.prezzo(orderUnitPriceNet=9.0),
@@ -2292,15 +2302,15 @@ class IlPrezzoDiUnOfferta(unittest.TestCase):
 
 
 class LImprontaDellArticoloConfermato(banco_web.ConsegnaBase):
-    """Che cosa è stato confermato, non solo che qualcosa lo è stato.
+    """What was confirmed, not just that something was.
 
-    ⚠ Il consumatore di questa impronta — `_ripulisci_stato`, che dopo il
-    ricalcolo toglie la spunta se l'articolo è cambiato — ha tre test e tutti
-    costruiscono lo stato **a mano**, con l'impronta già dentro. Chi la scrive
-    non era misurato da nessuno: si poteva togliere la riga e restavano 507 test
-    verdi (revisione dell'integrità dei test, 14 agosto 2026). E senza,
-    ogni conferma scadrebbe a ogni ricalcolo: l'utente rimetterebbe tutte le
-    spunte ogni settimana.
+    The consumer of this fingerprint — `_ripulisci_stato`, which clears a
+    confirmation after a recompute if the item changed — has its own tests,
+    but all of them build the state by hand, with the fingerprint
+    already in place. Nothing tested the code that actually writes it: that
+    line could be deleted and the rest of the suite would stay green.
+    Without it, every confirmation would expire on every recompute, and the
+    user would have to re-check every item each week.
     """
 
     def test_il_salvataggio_scrive_l_impronta_di_quello_che_e_stato_confermato(self) -> None:
@@ -2330,14 +2340,14 @@ class LImprontaDellArticoloConfermato(banco_web.ConsegnaBase):
 
 
 class GliAvvisiDellaConsegna(banco_web.ConsegnaBase):
-    """Un nome che non si è potuto dare non deve restare una notizia di passaggio.
+    """A rename that failed must not be a fleeting notice that disappears.
 
-    ⚠ `os.rename` su Windows fallisce se qualcuno tiene aperto il file — Excel,
-    OneDrive, l'antivirus. Il documento resta giusto e consegnabile con il nome
-    brutto, e il programma lo diceva **solo** dentro `message`: il riquadro
-    restava verde col pulsante primario, e al ricaricamento della pagina la
-    notizia spariva del tutto, perché la voce dell'elenco non portava gli avvisi
-    dell'audit (revisione di regressione del 14 agosto 2026).
+    `os.rename` on Windows fails if something else has the file open —
+    Excel, OneDrive, antivirus. The document is still correct and
+    deliverable, just under its unrenamed name. Reporting this only inside
+    `message` would leave the panel green with its primary button, and
+    reloading the page would lose the notice entirely, because the
+    order-list entry wouldn't carry the audit's warnings.
     """
 
     def compila_con_la_rinomina_rotta(self) -> dict[str, Any]:
@@ -2353,7 +2363,7 @@ class GliAvvisiDellaConsegna(banco_web.ConsegnaBase):
         self.assertEqual(esito["status"], "FILES_READY")
         self.assertEqual(len(esito["deliveryIssues"]), 1, esito["deliveryIssues"])
         self.assertIn("è rimasto con questo nome", esito["deliveryIssues"][0])
-        # Il documento c'è ed è consegnabile: l'avviso non è un rifiuto.
+        # The document exists and is deliverable: the warning isn't a rejection.
         self.assertEqual(esito["zipUrl"], f"/ordini/{esito['cartella']}/zip")
 
     def test_l_avviso_sopravvive_al_ricaricamento_della_pagina(self) -> None:
@@ -2372,14 +2382,14 @@ class GliAvvisiDellaConsegna(banco_web.ConsegnaBase):
 
 
 class LaSchedaCheRestaIndietroDopoUnaCompilazione(banco_web.ConsegnaBase):
-    """Chi ha riscritto lo stato conta, e la frase deve dirlo.
+    """Who last wrote the state matters, and the message must say so.
 
-    ⚠ `compile` salva lo stato **prima** di preparare i listini. Se dopo
-    quel punto qualcosa va storto, la scheda resta indietro di una versione e il
-    salvataggio successivo veniva rifiutato con «un'altra scheda del comparatore
-    ha salvato dopo di te»: l'utente andava a cercare un collega che non esiste,
-    e il pulsante «riprova» non poteva funzionare perché rifà il salvataggio per
-    primo (revisione di regressione del 14 agosto 2026).
+    `compile` saves state before preparing the price lists. If
+    something fails after that point, the open sheet is left one version
+    behind. Rejecting the next save with "another comparator sheet has
+    saved since you opened this one" would send the user looking for a
+    colleague who doesn't exist, and the "retry" button couldn't work
+    either, since it saves first, before retrying.
     """
 
     def stato_sul_disco(self) -> dict[str, Any]:
@@ -2397,7 +2407,7 @@ class LaSchedaCheRestaIndietroDopoUnaCompilazione(banco_web.ConsegnaBase):
 
     def test_la_scheda_superata_dalla_propria_compilazione_lo_legge(self) -> None:
         self.compila_con_listini(2)
-        # La scheda ha ancora in mano la versione di prima.
+        # The open sheet still holds the previous version.
         sorpassato = {**self.snapshot(3), "stateVersion": 0}
 
         _pulito, errori, _confronto = self.store.validate_snapshot(sorpassato, for_compile=False)
@@ -2421,14 +2431,14 @@ class LaSchedaCheRestaIndietroDopoUnaCompilazione(banco_web.ConsegnaBase):
 
 
 class IlNomeCheArrivaAlFornitore(banco_web.ConsegnaBase):
-    """L'ultimo anello: il nome con cui il documento parte davvero.
+    """The last link in the chain: the name the document actually ships with.
 
-    ⚠ Il writer costruisce la copia intermedia con il nome del **registro**, e
-    un passo dopo `rinomina_listini` rifaceva il nome leggibile
-    dall'identificativo tecnico: il documento allegato alla mail si chiamava
-    «Ordine NUOVO_FORNITORE_1 — 14 agosto 2026.xlsx», underscore compresi —
-    esattamente la stringa che il cantiere R8 dichiarava di aver tolto
-    (revisione di regressione del 14 agosto 2026).
+    The writer builds its intermediate copy using the registry's name.
+    A step later, `rinomina_listini` must keep that display name rather
+    than rebuild it from the technical identifier: getting this wrong
+    would make the document attached to the email end up named
+    "Ordine NUOVO_FORNITORE_1 — 14 agosto 2026.xlsx", underscores included —
+    exactly the raw identifier the display-name work was meant to hide.
     """
 
     def test_il_nome_leggibile_non_torna_all_identificativo_tecnico(self) -> None:
@@ -2458,18 +2468,19 @@ class IlNomeCheArrivaAlFornitore(banco_web.ConsegnaBase):
 
 
 class DueOrdiniSullaStessaRigaDelListino(banco_web.ConsegnaBase):
-    """⚠ Il bloccante della revisione avversariale del 14 agosto 2026.
+    """Two plan rows pointing at the same price-list row must not silently sum into one cell.
 
-    I due compilatori — il writer Node e `xls_writer` per Noce — sommano le
-    quantita' di due righe del piano che puntano alla stessa riga del listino, e
-    per due articoli del gestionale che sono lo stesso articolo del fornitore
-    quella somma e' giusta.
+    Both compilers — the Node writer and `xls_writer` for Noce — sum the
+    quantities of two plan rows that point to the same price-list row, and
+    for two management-software items that are the same supplier item, that
+    sum is correct.
 
-    Non lo e' fra un collo e un espositore, e il programma sa costruire il caso
-    da solo: l'offerta di un espositore porta il numero di riga del suo **collo
-    padre**, e la riga padre resta ordinabile per conto suo. Quattro colli piu'
-    sei espositori diventavano un `10` in una cella sola, e il fornitore leggeva
-    dieci di qualcosa che nessuno aveva ordinato.
+    It isn't correct between a carton and a display, and the program can
+    build that case on its own: a display's offer carries the row number of
+    its parent carton, while the parent row stays independently
+    orderable. Four cartons plus six displays would turn into a single
+    cell reading `10`, and the supplier would read ten of something nobody
+    ordered.
     """
 
     def ordine(self, **campi: Any) -> dict[str, Any]:
@@ -2500,11 +2511,11 @@ class DueOrdiniSullaStessaRigaDelListino(banco_web.ConsegnaBase):
         self.assertIn("un numero solo", frase)
 
     def test_lo_stesso_articolo_del_fornitore_per_due_articoli_del_gestionale_si_somma(self) -> None:
-        """L'altra meta' della regola: qui la somma e' quello che si vuole.
+        """The other half of the rule: here summing is exactly what's wanted.
 
-        Due codici del gestionale che sono lo stesso articolo del fornitore
-        ordinano la stessa merce nella stessa unita': fermarsi sarebbe togliere
-        all'utente un ordine legittimo.
+        Two management-software codes that are the same supplier item order
+        the same goods in the same unit: refusing this would deny the user
+        a legitimate order.
         """
 
         self.assertEqual(banco_web.SERVER.ReviewStore.righe_di_listino_contese([
@@ -2519,12 +2530,12 @@ class DueOrdiniSullaStessaRigaDelListino(banco_web.ConsegnaBase):
         ]), [])
 
     def test_la_compilazione_vera_si_ferma_e_lo_dice(self) -> None:
-        """La guardia collegata: dal confronto fino al rifiuto della compilazione."""
+        """The guard end to end: from the comparison data to compilation refusing to run."""
 
         confronto = json.loads(self.review_path.read_text(encoding="utf-8"))
         espositore = next(voce for voce in confronto["products"] if voce["id"] == "display-solbao-96")
-        # L'espositore porta il numero di riga del suo collo padre: e' quello che
-        # `display_offer` scrive davvero.
+        # The display carries the row number of its parent carton: that's
+        # what `display_offer` actually writes.
         espositore["offers"][0]["sourceRow"] = 10
         self.review_path.write_text(json.dumps(confronto), encoding="utf-8")
         snapshot = {
@@ -2542,29 +2553,30 @@ class DueOrdiniSullaStessaRigaDelListino(banco_web.ConsegnaBase):
 
         codici = {str(voce.get("code")) for voce in fermata.exception.errors}
         self.assertIn("RIGA_LISTINO_CONTESA", codici, fermata.exception.errors)
-        # E non resta in giro nessuna cartella di consegna a meta'.
+        # And no half-finished delivery folder is left behind.
         self.assertFalse(list(self.orders_dir.glob("*")) if self.orders_dir.is_dir() else [])
 
 
 class IlRiepilogoDelWriter(banco_web.ConsegnaBase):
-    """Il writer dichiara che cosa ha prodotto: il servizio gli crede.
+    """The writer declares what it produced, and the service must trust that declaration.
 
-    ⚠ Il nome della copia lo costruisce il writer con il `display_name` che la
-    regola di scrittura porta dal registro — «Sapori & Co.» diventa
-    `ORDINE_SAPORI_CO_<listino>.xlsx` — mentre il servizio se lo ricalcolava
-    dall'identificativo tecnico.  Per i quattro fornitori di oggi i due nomi
-    coincidono per combinazione, perche' l'identificativo maiuscolo *e'* il
-    nome; al primo fornitore imparato con un nome vero la compilazione
-    sarebbe fallita con la copia giusta li' accanto, e l'utente avrebbe letto
-    «Il writer non ha creato la copia prevista».
+    The writer builds the copy's name from the `display_name` the write
+    rule carries from the registry — "Sapori & Co." becomes
+    `ORDINE_SAPORI_CO_<listino>.xlsx`. The service must read that
+    declared name rather than recompute it from the technical identifier:
+    for a supplier whose uppercase identifier happens to equal its name
+    the two names would coincide by chance anyway, but for a learned
+    supplier with a real display name, recomputing would fail compilation
+    with the correct copy sitting right next to it, and the user would
+    read "the writer didn't create the expected copy".
 
-    L'altra meta' del riepilogo sono le righe che il writer ha scritto **senza
-    poter controllare** che fossero quelle giuste: le sue frasi finivano sulla
-    console del programma, cioe' in nessun posto che qualcuno guardi.
+    The other half of this summary is the rows the writer wrote without
+    being able to verify they were the right ones: those messages used
+    to end up only on the program's console, where nobody looks.
     """
 
     def prepara(self, fornitore: str, listino: Path) -> tuple[Path, Path]:
-        """Configurazione di scrittura, cartella della compilazione e piano."""
+        """Set up the write configuration, compilation folder, and plan."""
 
         node = self.root / "node.exe"
         node.write_bytes(b"")
@@ -2589,11 +2601,11 @@ class IlRiepilogoDelWriter(banco_web.ConsegnaBase):
         crea: str | None,
         riepilogo: dict[str, Any] | None,
     ) -> Any:
-        """Node sostituito: crea il documento che gli si dice e stampa il riepilogo.
+        """Fake Node: creates the requested document and prints the summary.
 
-        ⚠ Su `stdout` c'e' anche la riga della libreria dei fogli di calcolo,
-        apposta: e' il motivo per cui il riepilogo e' marcato invece di essere
-        tutto quello che il writer stampa.
+        `stdout` deliberately also carries the spreadsheet library's own
+        line, which is exactly why the summary is marked instead of being
+        assumed to be everything the writer prints.
         """
 
         def esecuzione_finta(command: list[str], **_altro: Any) -> Any:
@@ -2603,8 +2615,8 @@ class IlRiepilogoDelWriter(banco_web.ConsegnaBase):
             uscita = "Inspect result written to file: C:\\temp\\copia.inspect.ndjson\n"
             if riepilogo is not None:
                 uscita += "RIEPILOGO_COMPILAZIONE: " + json.dumps(riepilogo) + "\n"
-                # Il blocco indentato per gli occhi, che il writer vero stampa
-                # dopo quello marcato: non deve confondere chi legge.
+                # The indented, human-readable block the real writer prints
+                # after the marked one: must not confuse the reader.
                 uscita += json.dumps(riepilogo, indent=2) + "\n"
             return subprocess.CompletedProcess(command, 0, uscita, "")
 
@@ -2629,7 +2641,7 @@ class IlRiepilogoDelWriter(banco_web.ConsegnaBase):
         }
 
     def test_il_nome_della_copia_lo_dichiara_il_writer(self) -> None:
-        """Il fornitore imparato: identificativo `sapori`, nome «Sapori & Co.»."""
+        """A learned supplier: identifier `sapori`, display name "Sapori & Co."."""
 
         listino = banco_web.listino_finto(self.root / "listino_sapori.xlsx", "SAPORI")
         piano, cartella = self.prepara("sapori", listino)
@@ -2644,16 +2656,16 @@ class IlRiepilogoDelWriter(banco_web.ConsegnaBase):
         self.assertEqual(prodotte, [("sapori", listino.resolve(), cartella / nome)])
         self.assertIn(cartella / nome, generati)
         self.assertEqual(avvisi, [])
-        # Il nome che il servizio avrebbe ricalcolato non esiste sul disco: e'
-        # esattamente la differenza che questa prova difende.
+        # The name the service would have recomputed doesn't exist on disk:
+        # that's exactly the difference this test protects.
         self.assertFalse((cartella / "ORDINE_SAPORI_listino_sapori.xlsx").exists())
 
     def test_un_fornitore_che_il_riepilogo_non_nomina_ferma_la_compilazione(self) -> None:
-        """Il writer ha parlato e questo fornitore non l'ha nominato.
+        """The writer's summary never names this supplier's copy.
 
-        Il documento col nome che ci aspettiamo c'e' anche, e non basta: se lo
-        avessimo preso, avremmo consegnato un file che il writer non dichiara
-        di aver scritto in questa compilazione.
+        A document with the expected name exists on disk too, and that
+        isn't enough: taking it anyway would deliver a file the writer
+        never declared it wrote in this run.
         """
 
         piano, cartella = self.prepara("larice", self.listini["larice"])
@@ -2669,7 +2681,7 @@ class IlRiepilogoDelWriter(banco_web.ConsegnaBase):
         self.assertIn("non dichiara nessuna copia", str(errore.exception))
 
     def test_una_copia_saltata_dal_writer_non_si_prende_lo_stesso(self) -> None:
-        """`skipped` è il writer che dice «configurato, ma non ordinato»."""
+        """`skipped` is how the writer says "configured, but not ordered"."""
 
         piano, cartella = self.prepara("larice", self.listini["larice"])
         riepilogo = self.copia_dichiarata(cartella, "ORDINE_LARICE_listino_larice.xlsx", "larice")
@@ -2682,7 +2694,7 @@ class IlRiepilogoDelWriter(banco_web.ConsegnaBase):
         self.assertIn("non dichiara nessuna copia", str(errore.exception))
 
     def test_una_copia_dichiarata_fuori_dalla_cartella_non_si_consegna(self) -> None:
-        """La consegna è la cartella datata: da lì escono lo zip e l'elenco."""
+        """The delivery is the dated folder: the zip and the listing are both built from it."""
 
         piano, cartella = self.prepara("larice", self.listini["larice"])
         estranea = self.root / "ORDINE_LARICE_listino_larice.xlsx"
@@ -2696,7 +2708,7 @@ class IlRiepilogoDelWriter(banco_web.ConsegnaBase):
         self.assertIn("fuori dalla cartella della compilazione", str(errore.exception))
 
     def test_le_righe_scritte_senza_verifica_si_contano(self) -> None:
-        """Nessuna frase per riga, ma tre righe nessuno le ha controllate."""
+        """No per-row message, but three rows that nothing verified."""
 
         piano, cartella = self.prepara("larice", self.listini["larice"])
         nome = "ORDINE_LARICE_listino_larice.xlsx"
@@ -2731,7 +2743,7 @@ class IlRiepilogoDelWriter(banco_web.ConsegnaBase):
         self.assertIn("una riga su 5", avvisi[0])
 
     def test_le_righe_che_hanno_gia_la_loro_frase_non_si_contano_due_volte(self) -> None:
-        """L'avviso del writer nomina la riga: ripeterlo come numero è rumore."""
+        """The writer's warning already names the row: counting it again would be noise."""
 
         piano, cartella = self.prepara("larice", self.listini["larice"])
         nome = "ORDINE_LARICE_listino_larice.xlsx"
@@ -2753,7 +2765,7 @@ class IlRiepilogoDelWriter(banco_web.ConsegnaBase):
         self.assertEqual(avvisi, [detta])
 
     def test_gli_avvisi_del_writer_arrivano_dove_li_legge_l_utente(self) -> None:
-        """Fino a oggi morivano sulla console: la copia usciva senza una parola."""
+        """Writer warnings must reach the user, not stay lost on the console while the copy ships silently."""
 
         detta = (
             "La riga 10 del listino LARICE è descritta «ALTRO PRODOTTO» e il piano dice "
@@ -2765,28 +2777,29 @@ class IlRiepilogoDelWriter(banco_web.ConsegnaBase):
                 mock.patch.object(self.store, "run_writer", scrittore):
             esito = self.store.compile(self.snapshot(2, "larice"))
 
-        # La copia si consegna: l'avviso non e' un rifiuto.
+        # The copy is delivered: the warning isn't a rejection.
         self.assertEqual(esito["status"], "FILES_READY")
         self.assertEqual(esito["writerIssues"], [detta])
-        # ⚠ Nel messaggio il **numero**, non il testo: la pagina l'elenco ce
-        # l'ha gia' da `writerIssues`, e ripeterlo lo faceva comparire due volte
-        # (revisione avversariale del 14 agosto 2026). Il numero resta perche'
-        # lo storico delle compilazioni mostra il messaggio e non l'elenco.
+        # The message carries only the count, not the text: the page
+        # already gets the full list from `writerIssues`, and repeating it
+        # here would show it twice. The count stays because the compilation
+        # history shows this message, not the list.
         self.assertIn("Su un listino preparato c'è una segnalazione da leggere.", esito["message"])
         self.assertNotIn(detta, esito["message"])
         cartella = self.orders_dir / esito["cartella"]
         self.assertEqual(len(list(cartella.glob("*.xlsx"))), 1)
-        # E restano scritti anche nell'audit, che e' il documento che sopravvive
-        # alla pagina.
+        # And they're also written to the audit log, which is the record
+        # that outlives the page.
         audit = json.loads((cartella / "compilazione.json").read_text(encoding="utf-8"))
         self.assertIn(detta, audit["avvisi"])
 
     def test_l_avviso_del_writer_non_diventa_il_motivo_di_una_copia_mai_creata(self) -> None:
-        """«La quantità è stata scritta lo stesso» dentro «non è stato creato niente».
+        """"The quantity was written anyway" showing up inside "nothing was created".
 
-        Quando tutte le copie vengono scartate, il motivo sono le copie
-        scartate. Gli avvisi del writer parlano di righe **scritte**: messi lì
-        dentro si contraddicono a vicenda (revisione del 14 agosto 2026).
+        When every copy is discarded, the reason given must be the
+        discarded copies. Writer warnings talk about rows that were
+        written: placed inside that message, the two would contradict
+        each other.
         """
 
         detta = (
@@ -2802,12 +2815,12 @@ class IlRiepilogoDelWriter(banco_web.ConsegnaBase):
         self.assertIn("Non sono state create copie dei listini", esito["message"])
         self.assertNotIn(detta, esito["message"])
         self.assertIn("riga d'ordine richiesta", esito["message"])
-        # Nell'elenco invece ci sono tutti e due, ed è il posto giusto.
+        # The full list carries both, which is where they belong.
         self.assertIn(detta, esito["writerIssues"])
         self.assertEqual(len(esito["writerIssues"]), 2, esito["writerIssues"])
 
     def test_l_avviso_del_writer_sta_davanti_a_quello_della_copia_scartata(self) -> None:
-        """Due voci diverse: una parla della copia consegnata, l'altra di quella no."""
+        """Two separate entries: one about the delivered copy, one about the discarded one."""
 
         detta = "Di LARICE 2 righe su 6 sono state scritte senza poter verificare che fossero le righe giuste."
         scrittore = ScrittoreCheGuasta(
@@ -2826,19 +2839,19 @@ class IlRiepilogoDelWriter(banco_web.ConsegnaBase):
 
 
 # ---------------------------------------------------------------------------
-# 4. Che cosa legge l'utente quando il writer si ferma
+# 4. What the user reads when the writer stops
 # ---------------------------------------------------------------------------
 
 
 class IlLanciatoreConIlSoloNode(unittest.TestCase):
-    """Dal 5 settembre 2026 al writer basta Node.
+    """The writer needs nothing more than Node.
 
-    La libreria .NET in WebAssembly che ricostruiva il file da capo non c'e'
-    piu': `scripts/lib/xlsx_in_posizione.mjs` tocca il solo XML del foglio con
-    la libreria standard.  Il lanciatore non deve piu' cercare un
-    `node_modules`, ne' scriverlo in configurazione — un `node_modules`
-    dichiarato e poi assente fermava la compilazione per una cartella che non
-    serve (difetto I5, 12 agosto 2026).
+    `scripts/lib/xlsx_in_posizione.mjs` patches only the sheet XML with
+    the standard library, rather than rebuilding the whole file with a
+    .NET-in-WebAssembly library. The launcher must not look for a
+    `node_modules`, nor write one into the configuration: a declared but
+    missing `node_modules` would stop compilation over a folder the
+    writer doesn't actually need.
     """
 
     @classmethod
@@ -2893,7 +2906,7 @@ class LaSpiegazioneDelWriter(unittest.TestCase):
         )
 
     def test_una_traccia_di_node_non_arriva_mai_all_utente(self) -> None:
-        """⚠ È quello che l'utente si trovava scritto in pagina il 12 agosto."""
+        """None of this raw Node output must reach the user's page."""
 
         stderr = (
             "file:///C:/Users/HP/Desktop/comparatore-ordini/scripts/write.mjs:196\n"

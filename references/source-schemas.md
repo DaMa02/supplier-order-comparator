@@ -1,277 +1,258 @@
-# Schemi delle fonti
+# Source schemas
 
-## Indice
+## Index
 
-1. Regole comuni
-2. Export gestionale
+1. Common rules
+2. Management-software export
 3. BETULLA
 4. Larice
-4-bis. Larice — il canvass nuovo
-5. Espositori Larice
+4-bis. Larice — the new canvass
+5. Larice displays
 6. Cipresso
 7. Noce CSV
-8. Noce listino .xls
-9. Scrittura degli ordini
+8. Noce price list (`.xls`)
+8-bis. OFFERTE (header-less promotional sheet)
+9. Writing the orders
 
-## 1. Regole comuni
+## 1. Common rules
 
-- Trattare gli input come read-only.
-- Il formato di un file lo dicono i suoi primi byte, non l'estensione: `D0 CF 11 E0` è un Excel 97-2003 e si legge con `app/xls_reader.py`, `PK\x03\x04` è un Excel 2007 o successivo e si legge con openpyxl, tutto il resto passa dal lettore CSV. Un listino rinominato non deve produrre un errore incomprensibile.
-- Leggere l'intero foglio attivo; non usare come limite il range di una tabella, un filtro o un'anteprima.
-- Considerare validi soltanto valori collegati a celle attive. Non cercare EAN direttamente nei file XML interni o in `sharedStrings.xml`.
-- Conservare EAN e codici articolo come testo, inclusi zeri iniziali e codici non standard.
-- Non deduplicare un listino usando soltanto l'EAN.
+- Treat every input as read-only.
+- A file's format is decided by its first bytes, not its extension: `D0 CF 11 E0` is Excel 97-2003 and is read with `app/xls_reader.py`; `PK\x03\x04` is Excel 2007+ and is read with `openpyxl`; everything else goes through the CSV reader. A renamed price list must not produce an unreadable error.
+- Read the whole active sheet; never limit the scan to a formatted table's range, a filter, or a preview.
+- Only values attached to live cells count. Never look for an EAN directly inside the workbook's internal XML or in `sharedStrings.xml`.
+- Keep EANs and item codes as text, including leading zeros and non-standard codes.
+- Never deduplicate a price list on the EAN alone.
 
-## 2. Export gestionale
+## 2. Management-software export
 
-Firma attesa nel foglio `Foglio1`:
+Expected signature on sheet `Foglio1`:
 
-- riga documento iniziale con tipo `T`;
-- riga intestazioni contenente `Codice`, `Descrizione`, `Colli`, `Quantità`, `Prezzo`, `Sconto`, `IVA`, `Totale`;
-- righe prodotto con tipo `C` in colonna A.
+- an opening document row with type `T`;
+- a header row containing `Codice`, `Descrizione`, `Colli`, `Quantità`, `Prezzo`, `Sconto`, `IVA`, `Totale`;
+- product rows with type `C` in column A.
 
-Mappatura:
+Mapping:
 
-| Campo | Colonna |
+| Field | Column |
 | --- | --- |
-| EAN source of truth | B `Codice` |
-| Descrizione | D |
-| UM | E |
-| Colli esportati | F, riusata come quantità predefinita in colli (`suggested_colli` → `product.suggestedQuantity`) |
-| Quantità esportata | G, da ignorare per il nuovo ordine |
-| Ultimo prezzo netto pagato | H `Prezzo` |
-| Sconto informativo | I |
-| IVA | J |
-| Totale storico | K |
+| EAN, source of truth | B `Codice` |
+| Description | D |
+| Unit | E |
+| Exported cartons | F, reused as the default carton quantity (`suggested_colli` → `product.suggestedQuantity`) |
+| Exported quantity | G, ignored for the new order |
+| Last net price paid | H `Prezzo` |
+| Informational discount | I |
+| VAT | J |
+| Historical total | K |
 
-Nel comparatore HTML l'utente inserisce direttamente il numero di colli da ordinare: non c'è arrotondamento e non esiste eccedenza. La colonna `Colli` (F) non va più ignorata: il suo valore precompila il campo quantità di ogni prodotto (`quantitySource: "gestionale"`); se l'utente lo modifica il prodotto passa a `quantitySource: "utente"`. La colonna `Quantità` (G) resta storica e continua a non essere riusata. Per ciascuna offerta il totale riga è `totale = colli * prezzo per collo` (equivalente a `colli * pezzi per collo * prezzo per pezzo`). Nel vecchio comparativo Excel opzionale, `Colli da ordinare` resta invece una colonna manuale vuota.
+In the web comparator the user enters the number of cartons to order directly: there is no rounding and no surplus. Column `Colli` (F) prefills every product's quantity field (`quantitySource: "gestionale"`); editing it switches the product to `quantitySource: "utente"`. Column `Quantità` (G) is never reused for the order. Each offer's line total is `total = cartons * price per carton` (equivalent to `cartons * pieces per carton * price per piece`).
 
 ## 3. BETULLA
 
-Firma attesa: `EAN`, `CodArt`, `ORDINE`, `Descr.Commerciale`, `PzCt`, `Cessione`, `Pedana`, `Iva`, `TOTALI`.
+Expected signature: `EAN`, `CodArt`, `ORDINE`, `Descr.Commerciale`, `PzCt`, `Cessione`, `Pedana`, `Iva`, `TOTALI`.
 
-| Campo | Colonna |
+| Field | Column |
 | --- | --- |
 | EAN | A |
-| Codice articolo | B |
-| Quantità/colli d'ordine | C |
-| Descrizione | D |
-| Pezzi per cartone | E |
-| Prezzo unitario netto | F `Cessione` |
-| Pedana | G |
-| IVA | H |
-| Totale riga | I |
+| Item code | B |
+| Order quantity (cartons) | C |
+| Description | D |
+| Pieces per carton | E |
+| Net unit price | F `Cessione` |
+| Pallet | G |
+| VAT | H |
+| Line total | I |
 
-La formula totale riga è `ORDINE * PzCt * Cessione`. La riga finale contiene il totale generale.
+The line-total formula is `ORDINE * PzCt * Cessione`. The last row carries the grand total.
 
 ## 4. Larice
 
-Il nome del foglio cambia con numero e date del canvass. Usare il primo foglio commerciale e validarne il profilo delle colonne; non codificare il nome della run corrente. Il foglio può superare di molto il range della tabella formattata. Scansionare fino all'ultima riga attiva del worksheet.
+The sheet name carries the canvass's number and dates and changes every week. Use the first commercial sheet and validate its column shape; never hard-code the current run's sheet name. The sheet can extend well past a formatted table's range — scan to the worksheet's actual last row.
 
-| Campo | Colonna |
+| Field | Column |
 | --- | --- |
-| Famiglia/promozione | A, spesso nascosta |
-| Indicatore | B |
-| Codice articolo | C |
-| Quantità/colli d'ordine | D |
-| Pezzi per cartone | E |
-| Pedana | F |
-| Descrizione | G |
-| Annotazione prezzo precedente | M |
-| Prezzo pre-sconto | O |
-| Percentuale o codice sconto | P |
-| IVA | Q |
+| Family / promotion | A, often hidden |
+| Indicator | B |
+| Item code | C |
+| Order quantity (cartons) | D |
+| Pieces per carton | E |
+| Pallet | F |
+| Description | G |
+| Previous-price note | M |
+| Pre-discount price | O |
+| Discount percentage or code | P |
+| VAT | Q |
 | EAN | R |
 
-Calcolare il prezzo post-sconto deterministicamente:
+The post-discount price is computed deterministically:
 
 ```text
-se P è numerico: prezzo_post = O * (1 - P)
-se P è testuale: prezzo_post = O
+if P is numeric: post_price = O * (1 - P)
+if P is text:     post_price = O
 ```
 
-I valori numerici sono percentuali Excel, per esempio `0,10 = 10%`. `TP` e `SM` significano nessuno sconto. Applicare la stessa regola a ogni altro valore testuale, ma segnalare come anomalo un codice testuale diverso da quelli conosciuti; nel file di riferimento esistono anche poche righe con `**`.
+Numeric values are Excel percentages, e.g. `0.10 = 10%`. The known text codes in column P are `TP` (transit price: no discount, an ordinary orderable row) and `SM` (the reward row of a threshold-gift promotion — it carries a real code, EAN and description, but is not purchasable on its own). Any other text code is flagged as anomalous rather than silently treated as "no discount"; a few rows in the reference file also carry the code `**`.
 
-Confrontare e totalizzare usando il prezzo post-sconto. Conservare nel comparativo anche prezzo pre-sconto e valore di P per audit.
+Compare and total using the post-discount price. Keep the pre-discount price and the value of P in the comparison data too, for audit.
 
-## 4-bis. Larice — il canvass nuovo (`larice_canvass_v1`)
+## 4-bis. Larice — the new canvass (`larice_canvass_v1`)
 
-⚠ Dal **4 settembre 2026** Larice manda un secondo canvass, con uno schema che con quello del §4 non ha niente in comune: `New Larice N°37(v.0)`, intestato «Larice Ingrosso Srl». Il §4 **non si tocca**: il fornitore può tornare al formato di prima da una settimana all'altra, e i due adattatori convivono sullo stesso `supplier_id`.
+Larice also sends a second canvass, `New Larice N°37(v.0)`, headed "Larice Ingrosso Srl", whose layout has nothing in common with §4. §4 stays as it is: the supplier can revert to the old format from one week to the next, and the two adapters coexist under the same `supplier_id`.
 
-Le due firme si escludono a vicenda apposta: il §4 pretende almeno 18 colonne (qui sono 16), questo pretende le sue intestazioni (là non ce n'è nessuna). Le intestazioni stanno alla **riga 11**, i dati dalla **12**; sopra c'è il blocco con i dati del fornitore, quelli del cliente e i quattro totali.
+The two signatures are deliberately mutually exclusive: §4 requires at least 18 columns (this schema has 16), and this one requires its own header row (§4's sheet has none). Headers sit on row 11, data from row 12; above that is the block with the supplier's data, the customer's data, and the four totals.
 
-| Campo | Colonna | Intestazione |
+| Field | Column | Header |
 | --- | --- | --- |
 | EAN | B | `CODICE EAN` |
-| Codice articolo | C | `CODICE` |
-| Quantità/colli d'ordine | D | `QTA` |
-| Descrizione | E | `DESCRIZIONE ARTICOLO` |
-| Marcatore di riga | F | _nessuna_ (`PROMO`, `NOVITA`) |
-| IVA | G | `IVA` |
-| Pezzi per cartone | H | `IMB.` |
-| Prezzo pre-sconto | I | `LISTINO` |
-| Percentuale di sconto | J | `SCONTO` |
-| **Prezzo post-sconto** | **K** | `NETTO` |
+| Item code | C | `CODICE` |
+| Order quantity (cartons) | D | `QTA` |
+| Description | E | `DESCRIZIONE ARTICOLO` |
+| Row marker | F | _none_ (`PROMO`, `NOVITA`) |
+| VAT | G | `IVA` |
+| Pieces per carton | H | `IMB.` |
+| Pre-discount price | I | `LISTINO` |
+| Discount percentage | J | `SCONTO` |
+| Post-discount price | K | `NETTO` |
 
-⚠ **Il prezzo su cui si confronta è NETTO (K), e si legge così com'è.** A differenza del §4 non si calcola niente: la percentuale di J il fornitore l'ha già applicata dentro K. Dichiarare `unit_price_pre_discount` su questo schema accenderebbe il ramo che ricalcola lo sconto, e lo applicherebbe una seconda volta.
+The price used for comparison is NETTO (K), read as-is. Unlike §4, nothing is computed here: the supplier has already applied column J's percentage inside K. Declaring `unit_price_pre_discount` on this schema would turn on the branch that recomputes the discount and apply it a second time.
 
-**Le righe premio non sono marcate.** La colonna F dice `PROMO` su tutta la merce in promozione, premio compreso: la riga «IN OMAGGIO 1CT …» si riconosce solo dal testo, e va dichiarata con `row_markers.reward_rows`. Misurato sul listino del 4 settembre 2026: sei righe premio su 6.537, zero falsi positivi, e **cinque delle sei ripetono l'EAN di un articolo già a listino a prezzo pieno** — l'EAN `8019580330416` sta a 0,68 come merce e a 0,65 come regalo.
+Reward rows are not marked. Column F reads `PROMO` on every promoted item, reward rows included; a reward row such as "IN OMAGGIO 1CT …" is recognized only from its text and must be declared through `row_markers.reward_rows`. Measured on one price list: six reward rows out of 6,537, zero false positives, and five of the six repeat the EAN of an item that is also listed at full price — EAN `8019580330416` appears both at 0.68 as merchandise and at 0.65 as the reward.
 
-**Le condizioni commerciali** stanno disposte a blocchi come nel §4 — intestazione con la quantità, merce ammessa, riga dell'omaggio — ma tutte nella **stessa colonna E**, nome del premio compreso: `commercial_conditions.fields` dichiara `description` sia per `text` sia per `reward`. Sei soglie su sei, misurate.
+Commercial conditions are laid out in blocks as in §4 — a heading with the quantity, the eligible merchandise, the reward row — but all in the same column E, reward name included: `commercial_conditions.fields` declares `description` for both `text` and `reward`. Measured: six thresholds out of six.
 
-**Espositori**: in questo schema non c'è nessuna struttura padre/componenti (H e I sono numeriche), e il §5 non si applica. Se un canvass nuovo ne porterà uno, le colonne si dichiarano con quel documento davanti.
+Displays: this schema has no parent/component structure (H and I are numeric), so §5 does not apply. If a future canvass introduces one, its columns are declared once that document is available.
 
-## 5. Espositori Larice
+## 5. Larice displays
 
-Un espositore è un'offerta composta ordinabile sulla riga padre. Non modellarlo come una sequenza di prodotti autonomi.
+A display is a composed offer, orderable on its parent row. Do not model it as a sequence of independent products.
 
-Riga padre tipica:
+Typical parent row:
 
-- etichetta promozione/espositore in A;
-- indicatore e codice articolo in B/C;
-- quantità ordine in D e unità commerciale in E;
-- descrizione padre in G;
-- prezzo e sconto in O/P;
-- EAN padre spesso assente o non identificativo in R.
+- promotion/display label in A;
+- indicator and item code in B/C;
+- order quantity in D, pieces per carton in E;
+- parent description in G;
+- price and discount in O/P;
+- parent EAN in R, often absent or not identifying.
 
-Righe componente tipiche:
+Typical component row:
 
-- stessa etichetta/blocco in A;
-- codice articolo fornitore C assente;
-- quantità componente in H e descrizione in I;
-- prezzo componente in O e sconto in P;
-- EAN componente in R spesso presente.
+- same label/block in A;
+- supplier item code in C absent;
+- component quantity in H, description in I;
+- component price in O, discount in P;
+- component EAN in R, often present.
 
-L'assenza riguarda quindi il **codice fornitore**, non necessariamente l'EAN. Usare congiuntamente semantica del nome, struttura padre/figli, continuità del blocco, quantità e prezzi. Rifiutare negazioni come `NO ESPO` e falsi positivi lessicali come `ESPRESSO`.
+The absence is specifically of the supplier code, not necessarily of the EAN. Combine name semantics, parent/child structure, block continuity, quantities and prices. Reject negations like `NO ESPO` and lexical false positives like `ESPRESSO`.
 
-Riconciliazioni:
+Reconciliation:
 
 ```text
-quantità dichiarata padre = somma quantità componenti
-prezzo lordo padre = somma(quantità componente * prezzo lordo componente)
-prezzo netto espositore = prezzo lordo padre * (1 - sconto numerico)
+declared parent quantity = sum of component quantities
+gross parent price = sum(component quantity * component gross price)
+net display price = gross parent price * (1 - numeric discount)
 ```
 
-Tollerare arrotondamenti monetari minimi, conservarli nell'audit e abbassare la confidenza se quantità o prezzi componenti non sono disponibili. Le righe componente devono avere `usable = false`; la sola riga padre conserva la colonna ordine.
+Tolerate small rounding differences and record them in the audit; lower confidence when component quantities or prices are unavailable. Component rows must have `usable = false`; only the parent row carries the order column.
 
 ## 6. Cipresso
 
-Firma attesa: una riga iniziale con `COD.ART.`, `DES.ARTICOLO`, `UM`, `QT`,
-`LISTINO`, `COD.EAN`, `ORDINE`. Il nome del foglio contiene normalmente la
-data e non è una firma: usare il primo foglio solo dopo aver verificato le
-intestazioni.
+Cipresso sends two layouts (`cipresso_v1` and `cipresso_con_ordine_v1`), distinguished only by whether column G already holds an `ORDINE` header — never by the sheet name, which normally carries the price list's date and is not a signature.
 
-| Campo | Colonna |
+Expected header row: `COD.ART.`, `DES.ARTICOLO`, `UM`, `QT`, `LISTINO`, `COD.EAN`, `ORDINE`.
+
+| Field | Column |
 | --- | --- |
-| Codice articolo | A `COD.ART.` |
-| Descrizione | B `DES.ARTICOLO` |
-| Unità | C `UM` |
-| Pezzi per cartone | D `QT` |
-| Prezzo unitario netto | E `LISTINO` |
+| Item code | A `COD.ART.` |
+| Description | B `DES.ARTICOLO` |
+| Unit | C `UM` |
+| Pieces per carton | D `QT` |
+| Net unit price | E `LISTINO` |
 | EAN | F `COD.EAN` |
-| Quantità/colli d'ordine | G `ORDINE` |
+| Order quantity | G `ORDINE` |
 
-Il listino verificato non contiene colonne di IVA, sconto o disponibilità:
-assumere la riga disponibile nel confronto, ma non inventare sconti. Conservare
-anche EAN non standard come testo. Prima di scrivere una copia controllare
-foglio, `G1 = ORDINE`, hash dell'originale e riga sorgente.
+`cipresso_v1` has one row of formulas above the header, which sits on row 2 (data from row 3), and no `ORDINE` column of its own: the order column is confirmed by the user and written to G regardless. `cipresso_con_ordine_v1` has the header on row 1 (data from row 2) and already ships an `ORDINE` column at G. Which adapter applies to a given document is decided by matching every candidate against what the document actually contains, not by inspecting the file name — the two schemas can arrive with the same file-name pattern.
 
-Un espositore Cipresso può apparire su una sola riga ordinabile senza righe
-figlie. Riconoscerlo soltanto con regole dichiarate nel preflight (nome,
-codice, quantità e prezzo coerenti); presentarlo come espositore completo e
-richiedere conferma se non esistono componenti EAN+quantità con cui
-riconciliarne la composizione.
+The verified price list carries no VAT, discount or availability columns: assume the row is available in the comparison, but never invent a discount. Keep non-standard EANs as text too. Before writing a copy, check the sheet, `G1 = ORDINE`, the original's hash, and the source row.
+
+A Cipresso display can appear on a single orderable row with no child rows. Recognize it only through rules declared in the preflight step (name, code, quantity and price consistent with each other); present it as a complete display and ask for confirmation if there are no EAN+quantity components with which to reconcile its composition.
 
 ## 7. Noce CSV
 
-CSV atteso:
+Expected CSV columns:
 
-| Campo | Colonna CSV |
+| Field | CSV column |
 | --- | --- |
-| Pagina | `catalog_page` |
+| Catalog page | `catalog_page` |
 | EAN | `ean` |
-| Descrizione | `product` |
-| Confezione | `packaging` |
-| Disponibilità | `availability` |
-| Variazione | `variation` |
-| Prezzo unitario | `price` |
-| Unità | `unit` |
+| Description | `product` |
+| Packaging | `packaging` |
+| Availability | `availability` |
+| Variation | `variation` |
+| Unit price | `price` |
+| Unit | `unit` |
 
-Il campo `packaging` è informativo (`Um/Ct/Str`) e non deve essere convertito automaticamente in pezzi per cartone. Per i totali Noce usare soltanto il moltiplicatore esplicito in `unit`, per esempio `x 1,0`; se non è interpretabile, richiedere verifica. Una riga è utilizzabile automaticamente solo se disponibile, con prezzo valido e moltiplicatore d'ordine valido.
+`packaging` is informational (`Um/Ct/Str`) and must not be automatically converted into pieces per carton. For Noce totals, use only the explicit multiplier in `unit`, e.g. `x 1,0`; if it can't be parsed, ask for confirmation. A row is usable automatically only if it is available, has a valid price, and has a valid order multiplier.
 
-Accettare EAN vuoti o non standard. Non eliminare righe soltanto perché l'EAN è duplicato.
+Accept empty or non-standard EANs. Never drop a row just because its EAN is a duplicate.
 
-## 8. Noce listino .xls (`noce_xls_v1`)
+## 8. Noce price list (`.xls`, `noce_xls_v1`)
 
-Noce manda anche il listino completo come file Excel 97-2003, con nomi che
-non dicono niente (`formattato_104233.xls`). La firma è la riga di intestazione,
-mai il nome del file: `codice_a_barre`, `codice`, `descrizione_articolo`,
-`pezzi_x_cartone`, `prezzo`, `quantita`, `offerta`, `Importo`, `cat`,
-`ragione_sociale`. Foglio `Foglio1`, intestazione alla riga 5, primo prodotto
-alla riga 6.
+Noce also sends the complete price list as an Excel 97-2003 file, under names that say nothing (`formattato_104233.xls`). The signature is the header row, never the file name: `codice_a_barre`, `codice`, `descrizione_articolo`, `pezzi_x_cartone`, `prezzo`, `quantita`, `offerta`, `Importo`, `cat`, `ragione_sociale`. Sheet `Foglio1`, header on row 5, first product on row 6.
 
-| Campo | Colonna |
+| Field | Column |
 | --- | --- |
 | EAN | B `codice_a_barre` |
-| Codice articolo | C `codice`, testo con gli zeri iniziali |
-| Descrizione | D `descrizione_articolo` |
-| Pezzi per cartone | E `pezzi_x_cartone` |
-| Cartoni per strato | F, informativo |
-| Strati per pallet | G, informativo |
-| Prezzo **al pezzo** | H `prezzo` |
-| Quantità d'ordine **in cartoni** | I `quantita`, colonna ordine |
-| Offerta | J `offerta` |
-| Importo | K, formula `=I*H*E` |
-| Reparto | L |
-| Categoria merceologica | M `cat`, vale `FOOD` o `NO FOOD` |
-| Ragione sociale | N |
-| Variato | O |
-| Descrizione offerta | P |
-| IVA | Q `Iva` |
+| Item code | C `codice`, text, with leading zeros |
+| Description | D `descrizione_articolo` |
+| Pieces per carton | E `pezzi_x_cartone` |
+| Cartons per layer | F, informational |
+| Layers per pallet | G, informational |
+| Per-piece price | H `prezzo` |
+| Order quantity in cartons | I `quantita`, order column |
+| Offer | J `offerta` |
+| Amount | K, formula `=I*H*E` |
+| Department | L |
+| Category | M `cat`, `FOOD` or `NO FOOD` |
+| Company name | N |
+| Changed | O |
+| Offer description | P |
+| VAT | Q `Iva` |
 
-Regole dichiarate nell'adattatore:
+Rules declared in the adapter:
 
-- **Prezzo e quantità.** La formula della colonna Importo (`=I*H*E`) dice che il
-  prezzo è al pezzo e che l'unità d'ordine è il cartone. Sono i due campi che il
-  resto del programma già usa (`unit_price_net` e `pieces_per_carton`): non
-  serve nessuna conversione, e non va inventata.
-- **Fine dei dati.** Dopo l'ultimo prodotto restano centinaia di righe che
-  contengono soltanto la formula della colonna Importo (nel file misurato: dati
-  fino alla riga 17148, poi 931 righe vuote fino alla 18079). Il confine è
-  l'ultima riga che ha almeno uno fra EAN, codice articolo e descrizione: non va
-  scritto nel codice e non va preso da `max_row`.
-- **Righe FOOD.** L'utente non tratta l'alimentare: le righe con `cat = FOOD`
-  non entrano nel confronto. Quante ne sono state tolte va dichiarato
-  nell'audit (`inputs[].reading.rows_excluded`), mai scartato in silenzio.
-- **Scadenza nella descrizione.** Circa un terzo delle descrizioni finisce con
-  `<br> Scadenza gg/mm/aaaa`. La data si estrae in `expiry_date` e la
-  descrizione resta pulita, altrimenti il frammento HTML sporca il confronto fra
-  nomi. La data si legge ma non si crede: fuori da una finestra credibile
-  (due anni indietro, dieci avanti) o impossibile sul calendario diventa
-  `expiry_plausible = false` con un avviso, non un errore.
-- **Offerte.** Il segnale è doppio: la colonna `offerta` e il prezzo scritto in
-  grassetto («i prezzi offerta sono in grassetto», nota in D4). Basta uno dei
-  due. Nel file misurato non c'è nessuna offerta attiva, ma il grassetto va
-  letto lo stesso: su un listino con offerte sarebbe l'unico segnale.
-- **Codici a barre.** Accettare EAN vuoti o non standard e non deduplicare per
-  solo EAN: nel file misurato ci sono 55 EAN vuoti, circa 726 più corti di 13
-  cifre e 46 EAN ripetuti.
+- Price and quantity. The `Importo` column's formula (`=I*H*E`) says the price is per piece and the order unit is the carton — exactly the two fields the rest of the program already uses (`unit_price_net` and `pieces_per_carton`): no conversion is needed, and none should be invented.
+- End of data. Hundreds of rows follow the last product, containing only the `Importo` formula (measured: data through row 17148, then 931 empty rows through row 18079). The boundary is the last row that has at least one of EAN, item code or description — it must not be hard-coded, and must not be taken from `max_row`.
+- FOOD rows. The user doesn't handle food items: rows with `cat = FOOD` are excluded from the comparison. How many were removed must be recorded in the audit (`inputs[].reading.rows_excluded`), never dropped silently.
+- Expiry date in the description. About a third of the descriptions end with `<br> Scadenza gg/mm/aaaa`. The date is extracted into `expiry_date` and the description is left clean, otherwise the HTML fragment pollutes name comparisons. The date is read but not trusted: outside a plausible window (two years back, ten ahead) or impossible on the calendar, it becomes `expiry_plausible = false` with a warning, not an error.
+- Offers. The signal is twofold: the `offerta` column, and the price written in bold ("prezzi offerta sono in grassetto" per a note in D4) — either is enough. The measured file has no active offer, but bold must still be checked: on a price list with offers it would be the only signal.
+- Barcodes. Accept empty or non-standard EANs and never deduplicate on EAN alone: the measured file has 55 empty EANs, about 726 shorter than 13 digits, and 46 repeated EANs.
 
-## 9. Scrittura degli ordini
+## 8-bis. OFFERTE (header-less promotional sheet, `offerte_v1`)
 
-- Lavorare esclusivamente su copie.
-- BETULLA: svuotare e riscrivere colonna C.
-- Larice: svuotare e riscrivere colonna D.
-- Cipresso: svuotare e riscrivere colonna G solo dopo aver verificato foglio,
-  intestazione e hash dell'originale.
-- Larice espositore: scrivere la quantità solo sulla riga padre; mai sulle righe componente.
-- Usare la riga sorgente persistita nel risultato del matching; non rieseguire un match semantico durante la scrittura.
-- Preservare formule, formattazione, fogli, filtri e righe totali.
-- ⚠ **L'ordine si scrive dentro un `.xlsx`.** L'unica eccezione è Noce, che
-  dichiara `order_write.mode: patch_xls_in_posizione` e a cui torna il **suo**
-  `.xls` cambiato di quattro byte per cella — e quella strada pretende che la
-  colonna d'ordine sia già tutta numerica a lunghezza fissa. Un `.xls` di
-  chiunque altro **si legge e si confronta**, ma per compilarlo va salvato in
-  `.xlsx` con Excel: non c'è nessuna conversione automatica, perché il
-  documento compilato torna al fornitore e una conversione fatta in Python
-  perderebbe formule, celle unite, disegni e formattazione.
+One price list arrives with no header row at all: above the products there are blank rows and a single cell reading `ORDINE` in column H. With nothing to read by name, the columns are recognized by how they're populated — "there are prices, pieces per carton and barcodes" identifies nothing on its own, since most price lists have those too. What identifies this sheet is three things together: columns A–F populated, G empty, and a single cell in H reading `ORDINE`.
+
+| Field | Column |
+| --- | --- |
+| Item code | A |
+| Description | B |
+| Unit | C |
+| Pieces per carton | D |
+| Net unit price | E |
+| EAN | F |
+| (empty) | G |
+| Order quantity | H, below the `ORDINE` cell |
+| Promotion text | K |
+
+The `ORDINE` cell's row moves week to week, so the sheet is searched for that header rather than assuming a fixed row.
+
+## 9. Writing the orders
+
+- Work exclusively on copies.
+- BETULLA: clear and rewrite column C.
+- Larice: clear and rewrite column D.
+- Cipresso: clear and rewrite column G only after verifying the sheet, header and the original's hash.
+- Larice display: write the quantity only on the parent row, never on component rows.
+- Use the source row persisted in the matching result; never re-run semantic matching while writing.
+- Preserve formulas, formatting, sheets, filters and total rows.
+- The order is written inside an `.xlsx`. The one exception is Noce, which declares `order_write.mode: patch_xls_in_posizione` and gets back its own `.xls`, changed by four bytes per cell — a path that requires the order column to already be entirely numeric at fixed length. Anyone else's `.xls` is read and compared, but filling it in means saving it as `.xlsx` with Excel: there is no automatic conversion, because the filled-in document goes back to the supplier, and a conversion done in Python would lose formulas, merged cells, drawings and formatting.

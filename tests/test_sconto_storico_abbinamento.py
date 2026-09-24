@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
-"""Tre difetti della revisione del 6 settembre 2026, provati dal caso vero.
+"""Regression tests for three supplier-discount and history bugs.
 
-**R6 — lo sconto riassegnava sul confronto nudo.** `set_supplier_discount`
-rifaceva la scelta del fornitore su un confronto ricostruito a mano, senza le
-righe scelte a mano e senza guardare chi il fornitore l'aveva scelto lui: uno
-sconto di testata spostava l'ordine su un'offerta che in pagina non c'era e su
-un fornitore che l'utente aveva appena scartato.
+`set_supplier_discount` re-decides the winning supplier on a comparison
+rebuilt from scratch, ignoring manually matched price-list rows and any
+supplier the user chose by hand; applying a header discount could move the
+order to an offer not shown on the page, or to a supplier the user had just
+rejected.
 
-**R10 — lo storico restava modificato se l'audit falliva.** La registrazione
-dell'ordine precede la scrittura dell'audit; quando l'audit si ferma — disco
-pieno, antivirus — la cartella viene cancellata e lo storico no, e la settimana
-dopo il programma chiede «è arrivata?» di merce mai ordinata.
+Order-history recording happens before the audit file is written; if the
+audit write fails (disk full, antivirus lock), the working folder is rolled
+back but the history entry it recorded is not, leaving a phantom order the
+system later asks about.
 
-**R1 — una scheda vecchia abbinava due articoli sbagliati.** `productId` e
-`sourceRow` sono posizionali: mandati da una scheda ferma al confronto della
-settimana prima, sul confronto nuovo indicano altri due articoli, e
-l'uguaglianza fra i loro codici a barre resta scritta per sempre.
+`productId` and `sourceRow` are positional. A stale page still holding last
+week's comparison can send matches that point at different items in the
+current comparison, and the resulting EAN equality would be written to the
+registry permanently.
 """
 
 from __future__ import annotations
@@ -33,20 +33,19 @@ for cartella in (RADICE / "app", RADICE / "tests"):
     if str(cartella) not in sys.path:
         sys.path.insert(0, str(cartella))
 
-# I due banchi di prova esistenti: il confronto sintetico con il catalogo finto
-# (abbinamento a mano) e la compilazione che arriva davvero a FILES_READY con
-# lo scrittore finto. Rifarli qui vorrebbe dire due verità sullo stesso banco.
+# Reuse the two existing test fixtures (synthetic comparison with manual
+# matching, and the compile flow that reaches FILES_READY with a fake writer)
+# instead of duplicating their setup here.
 import test_abbinamento_a_mano as banco_abbinamento  # noqa: E402
 import test_web_app as banco_web  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
-# R6 — lo sconto riassegna il fornitore
+# Supplier discount reassigns the winning offer
 # ---------------------------------------------------------------------------
 
-# Il caso della revisione, coi suoi numeri: LARICE ha a listino una riga
-# sbagliata da 1 €/pz, quella giusta costa 5 e l'utente l'ha scelta a mano;
-# BETULLA sta a 2 e l'utente ha scelto lui.
+# larice's price list has a wrong row at 1 EUR/unit; the correct row costs 5
+# and was matched by hand. betulla is at 2 and was chosen by the user.
 RIGHE_LARICE = [
     {"source_row": 700, "ean": "8000000000001", "description": "LA RIGA GIUSTA DI LARICE",
      "pieces_per_carton": "6", "unit_price_net": "5.0000", "usable": True},
@@ -90,7 +89,8 @@ def confronto_dello_sconto() -> dict[str, Any]:
 
 
 class LoScontoRiassegnaSulConfrontoCheSiVede(banco_abbinamento.BancoDellAbbinamento):
-    """Lo sconto cambia i prezzi: la scelta la rifà su quelli che si vedono."""
+    """A discount changes prices, so reassignment must use the comparison as
+    it is shown on the page, not a freshly rebuilt one."""
 
     def negozio_dello_sconto(self, decisione: dict[str, Any]) -> Any:
         store = self.negozio(confronto_dello_sconto(), {"larice": list(RIGHE_LARICE)})
@@ -100,7 +100,7 @@ class LoScontoRiassegnaSulConfrontoCheSiVede(banco_abbinamento.BancoDellAbbiname
             "stateVersion": 3,
             "products": [decisione],
         }, ensure_ascii=False), encoding="utf-8")
-        # La riga giusta di LARICE, scelta a mano: 5 €/pz al posto di 1.
+        # Manually match larice's correct row: 5 EUR/unit instead of 1.
         store.abbina_riga_di_listino({
             "productId": "product:1", "supplierId": "larice", "sourceRow": 700,
         })
@@ -113,11 +113,12 @@ class LoScontoRiassegnaSulConfrontoCheSiVede(banco_abbinamento.BancoDellAbbiname
         return str(voce.get("selectedSupplierId") or "")
 
     def test_lo_sconto_non_sposta_un_fornitore_scelto_a_mano(self) -> None:
-        """`selectedSupplierSource == "utente"` vale anche qui.
+        """Applies even here: `selectedSupplierSource == "utente"` blocks
+        reassignment.
 
-        Con l'80% LARICE scende a 1 €/pz e diventa il più conveniente anche sul
-        confronto decorato: la scelta dell'utente resta dov'è lo stesso. Lo
-        sconto cambia i prezzi, non le decisioni prese a mano.
+        An 80% discount drops larice to 1 EUR/unit, making it the cheapest
+        even on the decorated comparison, but the user's manual choice must
+        still stand: a discount changes prices, not manual decisions.
         """
 
         store = self.negozio_dello_sconto({
@@ -133,10 +134,11 @@ class LoScontoRiassegnaSulConfrontoCheSiVede(banco_abbinamento.BancoDellAbbiname
         self.assertEqual(prodotto["selectedSupplierId"], "betulla")
 
     def test_lo_sconto_riassegna_sul_confronto_decorato_non_su_quello_nudo(self) -> None:
-        """La decisione automatica si sposta, ma sui prezzi che si vedono.
+        """Automatic reassignment must use the decorated comparison's prices.
 
-        Sul confronto nudo LARICE ha ancora la riga sbagliata da 1 €/pz e
-        vincerebbe lui; su quello decorato costa 5, e con l'1% BETULLA sta a 1,98.
+        On the raw comparison larice still shows its wrong 1 EUR/unit row and
+        would win; on the decorated one it costs 5, and a 1% discount puts
+        betulla at 1.98.
         """
 
         store = self.negozio_dello_sconto({
@@ -150,25 +152,27 @@ class LoScontoRiassegnaSulConfrontoCheSiVede(banco_abbinamento.BancoDellAbbiname
         self.assertEqual(self.fornitore_deciso(store), "betulla")
         prodotto = store.review()["products"][0]
         self.assertEqual(prodotto["selectedSupplierId"], "betulla")
-        # E il prezzo su cui la scelta è stata fatta è quello della riga scelta
-        # a mano, non quello della riga sbagliata.
+        # The price the decision was made on is the manually matched row,
+        # not the wrong one.
         larice = next(o for o in prodotto["offers"] if o["supplierId"] == "larice")
         self.assertAlmostEqual(larice["unitPriceNet"], 5.0, places=4)
 
 
 # ---------------------------------------------------------------------------
-# R10 — lo storico ordini e l'audit che fallisce
+# Order history vs. a failing audit write
 # ---------------------------------------------------------------------------
 
 class LoStoricoTornaComEraSeLAuditFallisce(banco_web.ConsegnaBase):
-    """Le due parti restano allineate: o la consegna c'è, o non è successo niente."""
+    """History and the delivered order folder must stay in sync: either the
+    delivery happened, or neither side was written."""
 
     def ordine_precedente(self) -> bytes:
-        """Un ordine LARICE della stessa run, ancora senza risposta.
+        """A pending larice order from the same run, not yet answered.
 
-        È la voce che `record_plan` toglie quando lo stesso fornitore viene
-        riconsegnato: se lo storico non torna indietro, quell'ordine — mandato
-        davvero — sparisce e al suo posto ne resta uno che nessuno ha mandato.
+        This is the entry `record_plan` would remove when the same supplier
+        is delivered again. If history isn't rolled back on a failed write,
+        that entry — a real, already-sent order — disappears and nothing
+        records it was ever sent.
         """
 
         storico = {
@@ -206,8 +210,8 @@ class LoStoricoTornaComEraSeLAuditFallisce(banco_web.ConsegnaBase):
         self.assertEqual(self.cartelle(), [])
 
     def test_senza_storico_di_prima_non_ne_resta_uno_dopo(self) -> None:
-        """Il caso gemello: il file non c'era, e non deve nascere da una
-        compilazione che non è arrivata in fondo."""
+        """Mirror case: if the history file didn't exist, a compile that
+        fails partway through must not create one."""
 
         self.assertFalse(self.store.history_path.exists())
         scrittore = banco_web.ScrittoreFinto({"larice": self.listini["larice"]})
@@ -224,11 +228,12 @@ class LoStoricoTornaComEraSeLAuditFallisce(banco_web.ConsegnaBase):
 
 
 # ---------------------------------------------------------------------------
-# R1 — l'abbinamento a mano e la run della scheda
+# Manual matching vs. a stale run id
 # ---------------------------------------------------------------------------
 
 class LAbbinamentoAManoGuardaLaRunDellaScheda(banco_abbinamento.BancoDellAbbinamento):
-    """`productId` e `sourceRow` sono posizionali: da soli non dicono la settimana."""
+    """`productId` and `sourceRow` are positional and say nothing about which
+    run's comparison they were read from."""
 
     def test_una_scheda_di_un_altra_run_non_abbina_niente(self) -> None:
         store = self.negozio()
@@ -240,8 +245,8 @@ class LAbbinamentoAManoGuardaLaRunDellaScheda(banco_abbinamento.BancoDellAbbinam
             })
 
         self.assertIn("ricarica la pagina", str(errore.exception))
-        # Niente scritto: né lo stato, né l'uguaglianza fra i due codici, che
-        # sarebbe permanente e varrebbe per tutti i fornitori.
+        # Nothing is written: neither the state file nor an EAN equality,
+        # which would be permanent and apply across all suppliers.
         self.assertFalse(store.state_path.exists())
         self.assertEqual(self.offerte_disponibili(store.review()), {"cipresso": 1.28})
         self.assertEqual(store.magazzino_conferme().uguaglianze(), [])
@@ -258,7 +263,7 @@ class LAbbinamentoAManoGuardaLaRunDellaScheda(banco_abbinamento.BancoDellAbbinam
         self.assertEqual(self.offerte_disponibili(store.review()), {"cipresso": 1.28, "noce": 1.15})
 
     def test_una_scheda_che_non_dichiara_la_run_abbina_come_sempre(self) -> None:
-        """Una pagina rimasta in cache non porta `runId`: non deve rompersi."""
+        """A cached page without a `runId` field must not break matching."""
 
         store = self.negozio()
 

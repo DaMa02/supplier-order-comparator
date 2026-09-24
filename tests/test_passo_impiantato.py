@@ -1,15 +1,14 @@
-"""Un passo della catena che non risponde piu' non inchioda il programma.
+"""A stuck pipeline step must not hang the whole process.
 
-Fino al 20 agosto 2026 `esegui_comando` faceva `processo.wait()` senza tetto.
-Un passo impiantato non aveva nessuna via d'uscita: teneva `lucchetto_lavori`
-per sempre, ogni «Ricalcola» successivo rispondeva 409, `POST /api/spegni` si
-rifiutava di spegnere mentre una run e' in corso, e il lanciatore — che spegne
-il server vecchio quando i sorgenti sono cambiati — riusava il vecchio.  Cioe'
-si inchiodava anche la sola strada con cui una correzione arriva in negozio.
+`esegui_comando` runs each step with a timeout. Without one, a stuck step
+holds `lucchetto_lavori` forever: every later "Ricalcola" gets a 409,
+`POST /api/spegni` refuses to shut down while a run is active, and the
+launcher (which restarts the server when the sources changed) keeps the
+stuck one running.
 
-⚠ Questo file, a differenza di `test_pipeline_jobs.py`, lancia sottoprocessi
-veri: un tetto che uccide un processo non si puo' provare su un processo
-finto.  Sono figli Python che dormono, e nessuno di loro tocca la rete.
+Unlike `test_pipeline_jobs.py`, this file spawns real subprocesses: a timeout
+that kills a process can't be exercised against a fake one. The children are
+Python processes that sleep; none of them touch the network.
 """
 
 from __future__ import annotations
@@ -53,10 +52,11 @@ class IlTettoUccideIlFiglio(unittest.TestCase):
         self.addCleanup(lambda: setattr(subprocess, "Popen", popen_vero))
 
     def test_un_figlio_che_non_risponde_viene_ucciso_e_lo_si_dice(self) -> None:
-        """⚠ Il figlio dorme e tiene aperto `stdout`: e' il caso vero.
+        """The child sleeps and keeps `stdout` open: this is the real case.
 
-        Un tetto sulla sola `wait` non scatterebbe mai, perche' il programma
-        sarebbe gia' fermo dentro `stdout.read()`, che torna solo all'EOF.
+        A timeout on `wait()` alone would never fire, because the caller
+        would already be blocked inside `stdout.read()`, which only returns
+        at EOF.
         """
 
         partito = time.monotonic()
@@ -74,22 +74,21 @@ class IlTettoUccideIlFiglio(unittest.TestCase):
         self.assertIsNotNone(self.nati[0].poll(), "il figlio è rimasto vivo dopo il tetto")
 
     def test_un_figlio_che_lascia_un_nipote_attaccato_al_tubo_non_pianta_niente(self) -> None:
-        """⚠ Il caso in cui la difesa del tetto si rompeva da sola.
+        """The case where the timeout defense breaks on its own.
 
-        `kill()` uccide il figlio diretto. Se quel figlio aveva lasciato un
-        discendente che ha ereditato `stdout`, il tubo resta aperto e l'EOF non
-        arriva mai: il filo lettore resta dentro `read()`, e `close()` — che
-        pretende il lucchetto interno di quel lettore — non torna piu'.
-        Risultato: `lucchetto_lavori` in mano per sempre, ogni «Ricalcola» a
-        409, `POST /api/spegni` che si rifiuta di spegnere. Cioe' esattamente
-        la fermata che il tetto esiste per evitare, arrivata per un'altra
-        strada.
+        `kill()` only kills the direct child. If that child left a
+        grandchild that inherited `stdout`, the pipe stays open and EOF
+        never arrives: the reader thread stays blocked in `read()`, and
+        `close()` (which needs that reader's internal lock) never returns.
+        Result: `lucchetto_lavori` held forever, every later "Ricalcola"
+        gets a 409, `POST /api/spegni` refuses to shut down — the exact
+        hang the timeout exists to prevent, reached by another path.
 
-        ⚠ Il nipote deve tenere il tubo aperto **oltre** i cinque secondi di
-        pulizia: se muore prima, i `join` bastano a farlo finire da solo e la
-        prova passa anche senza la guardia — cioe' non prova niente. Aspetta un
-        file che il test crea alla fine, con un tetto suo per non lasciare in
-        giro un processo se qualcosa va storto.
+        The grandchild must keep the pipe open past the five-second
+        cleanup window: if it dies earlier, the `join` calls alone let it
+        finish and the test would pass even without the guard, proving
+        nothing. It waits for a file the test writes at the end, with its
+        own timeout so a broken run doesn't leave a stray process behind.
         """
 
         sentinella = self.cartella / "il-nipote-puo-uscire"
@@ -98,13 +97,14 @@ class IlTettoUccideIlFiglio(unittest.TestCase):
         nipote.write_text(
             "import os, tempfile, time\n"
             "from pathlib import Path\n"
-            # ⚠ Il nipote eredita da chi lo lancia la cartella di lavoro, che e'
-            # proprio la temporanea di questa prova.  Su Windows una cartella
-            # con dentro un processo non si cancella, e fra il file che scrive
-            # qui sotto e il momento in cui muore davvero passano dei
-            # millisecondi: la pulizia partiva in quella finestra e falliva con
-            # WinError 32.  Uscire dalla cartella toglie la corsa; il tubo, che
-            # e' la cosa che questa prova misura, resta aperto lo stesso.
+            # The grandchild inherits its working directory from whoever
+            # launches it, which is this test's temp dir. On Windows a
+            # directory holding a running process can't be removed, and a
+            # few milliseconds pass between the file write below and the
+            # process actually exiting: cleanup could start in that window
+            # and fail with WinError 32. Leaving the directory removes the
+            # race; the pipe, which is what this test measures, stays open
+            # regardless.
             "os.chdir(tempfile.gettempdir())\n"
             f"sentinella = Path({str(sentinella)!r})\n"
             "scadenza = time.monotonic() + 60\n"
@@ -133,18 +133,17 @@ class IlTettoUccideIlFiglio(unittest.TestCase):
             durata = time.monotonic() - partito
         finally:
             sentinella.write_bytes(b"")
-            # ⚠ E si aspetta che sia uscito davvero, prima che la cartella
-            # temporanea venga cancellata. Il nipote ha come cartella di lavoro
-            # proprio quella, e su Windows una cartella con dentro il processo
-            # di qualcuno non si cancella: e' il guasto che su questo progetto
-            # ha gia' fatto morire ventinove prove alla pulizia, con i test
-            # mirati tutti verdi.
+            # Wait for the grandchild to actually exit before the temp dir
+            # is removed: it runs with that dir as its working directory,
+            # and on Windows a directory holding someone's running process
+            # can't be removed.
             scadenza = time.monotonic() + 30
             while not uscito.exists() and time.monotonic() < scadenza:
                 time.sleep(0.05)
 
-        # Con la guardia: mezzo secondo di tetto piu' i cinque della pulizia.
-        # Senza: non torna finche' il nipote non molla il tubo, cioe' un minuto.
+        # With the guard: half a second of timeout plus the five-second
+        # cleanup window. Without it: doesn't return until the grandchild
+        # releases the pipe, i.e. a full minute.
         self.assertLess(durata, 20, "è rimasto piantato a chiudere i tubi")
         self.assertTrue(uscito.exists(), "il nipote è ancora vivo dentro la cartella temporanea")
 
@@ -159,11 +158,11 @@ class IlTettoUccideIlFiglio(unittest.TestCase):
         self.assertEqual(risultato.stdout, "fatto")
 
     def test_un_comando_che_finisce_in_tempo_non_perde_niente(self) -> None:
-        """L'avanzamento passa da `stderr` riga per riga, e deve continuare.
+        """Progress events stream from `stderr` line by line and must keep working.
 
-        E' la fase AI a leggerlo: due minuti di silenzio sembrano un programma
-        rotto, e chi ha spostato la lettura di `stdout` in un filo poteva
-        romperlo senza accorgersene.
+        The AI step reads these: two minutes of silence there looks like a
+        stuck program, so moving `stdout` reading to a background thread
+        must not break progress reporting as a side effect.
         """
 
         eventi: list[dict] = []
@@ -187,7 +186,7 @@ class IlTettoUccideIlFiglio(unittest.TestCase):
         self.assertEqual(eventi, [{"fatti": 1, "totali": 2}])
 
     def test_un_figlio_ciarliero_non_pianta_nessuno(self) -> None:
-        """Con i tubi pieni e nessuno che li svuota ci si pianta a vicenda."""
+        """Full pipes with no reader draining them deadlock both sides."""
 
         programma = (
             "import sys\n"
@@ -205,15 +204,16 @@ class IlTettoUccideIlFiglio(unittest.TestCase):
 
 
 class IlTettoMisuraIlSilenzioNonLaDurata(unittest.TestCase):
-    """⚠ La costante diceva una cosa e il codice ne faceva un'altra.
+    """The timeout measures silence between progress events, not total runtime.
 
-    `TETTO_DELLE_FASI` è documentato come «quanto può stare zitto un passo prima
-    che si dichiari impiantato», e `esegui_comando` faceva `wait(timeout=...)`,
-    cioè contava dall'inizio. Una fase AI sana e lunga — tanti casi, un computer
-    lento, un modello che risponde piano — veniva uccisa al tetto e raccontata
-    come «non ha risposto», buttando via le chiamate già pagate.
+    `TETTO_DELLE_FASI` is documented as "how long a step may stay silent
+    before it counts as stuck", so `esegui_comando` must reset the timeout
+    on every progress event rather than counting from the start. Otherwise a
+    healthy but long-running AI step (many cases, a slow machine, a slow
+    model) would be killed at the timeout and reported as unresponsive,
+    discarding calls that were already paid for.
 
-    Prove eseguite, con sottoprocessi veri.
+    Uses real subprocesses.
     """
 
     def setUp(self) -> None:
@@ -222,9 +222,9 @@ class IlTettoMisuraIlSilenzioNonLaDurata(unittest.TestCase):
         self.cartella = Path(self.temporanea.name)
 
     def test_un_passo_che_parla_puo_durare_piu_del_tetto(self) -> None:
-        """Sei righe a mezzo secondo l'una, con un tetto di un secondo: tre
-
-        secondi di lavoro sotto un tetto che dall'inizio sarebbe scattato."""
+        """Six lines half a second apart, with a one-second timeout: three
+        seconds of work under a timeout that would have fired if it counted
+        from the start."""
 
         programma = (
             "import sys, time\n"
@@ -247,7 +247,7 @@ class IlTettoMisuraIlSilenzioNonLaDurata(unittest.TestCase):
         self.assertGreater(time.monotonic() - inizio, 1.0, "non è durato più del tetto")
 
     def test_un_passo_che_smette_di_parlare_viene_ucciso_lo_stesso(self) -> None:
-        """La controprova: il tetto non è stato spento, si è solo spostato."""
+        """Control case: the timeout wasn't disabled, only rebased on progress."""
 
         programma = (
             "import sys, time\n"
@@ -264,7 +264,7 @@ class IlTettoMisuraIlSilenzioNonLaDurata(unittest.TestCase):
 
 
 class LaCatenaSiFermaEDiceQuale(unittest.TestCase):
-    """Il tetto scattato deve arrivare in pagina come una fermata con un nome."""
+    """A fired timeout must reach the page as a named stop, not a silent hang."""
 
     def setUp(self) -> None:
         self.temporanea = tempfile.TemporaryDirectory()
@@ -273,8 +273,8 @@ class LaCatenaSiFermaEDiceQuale(unittest.TestCase):
         self.dati = radice / "current"
         self.uploads = self.dati / "uploads"
         self.uploads.mkdir(parents=True)
-        # Senza un documento la catena si ferma al primo passo per un altro
-        # motivo, e la prova passerebbe per il motivo sbagliato.
+        # Without a source file the pipeline stops at the first step for a
+        # different reason, and the test would pass for the wrong reason.
         (self.uploads / "betulla.xlsx").write_bytes(b"finto")
         self.review = self.dati / "review_data.json"
         self.review.write_bytes(b'{"run": {"id": "vecchia"}, "products": [], "suppliers": []}')
@@ -320,10 +320,10 @@ class LaCatenaSiFermaEDiceQuale(unittest.TestCase):
         self.assertEqual(self.review.read_bytes(), self.prima)
 
     def test_dopo_la_fermata_si_puo_ricalcolare_di_nuovo(self) -> None:
-        """La ragione per cui il tetto esiste: il lucchetto torna libero.
+        """The reason the timeout exists: the job lock is released afterward.
 
-        Senza, ogni «Ricalcola» successivo rispondeva 409 e l'unica uscita era
-        chiudere la finestra a forza.
+        Without it, every later "Ricalcola" got a 409 and the only way out
+        was force-closing the window.
         """
 
         chiamate: list[int] = []
@@ -343,8 +343,9 @@ class LaCatenaSiFermaEDiceQuale(unittest.TestCase):
         tetti = {fase: pipeline_jobs.tetto_della_fase(fase) for fase in pipeline_jobs.FASI}
 
         self.assertTrue(all(valore > 0 for valore in tetti.values()), tetti)
-        # 105 secondi misurati per la fase AI: il tetto e' largo di un ordine
-        # di grandezza, perche' serve solo a distinguere «lento» da «fermo».
+        # 105s measured for the AI step: the timeout is an order of
+        # magnitude wider, since it only needs to distinguish "slow" from
+        # "stuck".
         self.assertEqual(tetti["VALUTAZIONE_AI"], max(tetti.values()))
         self.assertGreaterEqual(tetti["VALUTAZIONE_AI"], 105 * 5)
 

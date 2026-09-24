@@ -1,24 +1,23 @@
 #!/usr/bin/env python3
-"""«Questa riga del listino è il mio prodotto»: un clic, due effetti.
+"""Tests for "this price-list row is my product": one click, two effects.
 
-Il caso, misurato sul confronto vero `2026-08-17_1746`. `LUXA SAPONE LIQ.
-EROG.250ML` sta nel gestionale col codice 4009428623194, che **solo CIPRESSO**
-usa, a 1,28 €/pz. Lo stesso articolo sta su NOCE sotto 8729721830575, a
-1,15. Il nome del gestionale non dice la variante — `EROG.` sta per erogatore, e
-che l'erogatore sia l'`ORIGINAL` e non il `SETA` lo sa chi compra — quindi
-nessun punteggio può dedurlo, e infatti la shortlist di BETULLA aveva la riga
-giusta soltanto seconda.
+A real case: `LUXA SAPONE LIQ. EROG.250ML` sits in the management-software
+export under EAN 4009428623194, which only CIPRESSO uses, at 1.28 EUR/pc.
+The same item sits on NOCE's price list under 8729721830575, at 1.15. The
+management-software name doesn't say which variant it is (`EROG.` just means
+"dispenser"; only the buyer knows whether it's `ORIGINAL` or `SETA`), so no
+score can infer it, and the correct row ranked only second in the shortlist.
 
-Qui si prova che cosa deve succedere quando l'utente la sceglie a mano:
+This file tests what a manual choice by the user must do:
 
-1. **subito**, l'offerta entra nel confronto di adesso;
-2. **per sempre**, i due codici a barre restano dichiarati lo stesso articolo,
-   ed è quello che al prossimo ricalcolo li fa incontrare da soli — su tutti i
-   fornitori, non solo su quello scelto;
-3. quando uno dei due codici **non c'è**, il secondo effetto non è possibile, e
-   va detto invece di lasciarlo credere;
-4. un «no» dato prima all'analisi automatica non torna a spegnere l'offerta
-   appena scelta.
+1. Immediately: the chosen offer enters the current comparison.
+2. Permanently: the two barcodes stay declared as the same item, so the next
+   run matches them on their own, across every supplier, not just the one
+   chosen.
+3. When one of the two EANs is missing, the permanent effect is not
+   possible, and the response must say so rather than imply it happened.
+4. A previous "no" on the automatic match must not suppress an offer just
+   chosen manually.
 """
 
 from __future__ import annotations
@@ -52,11 +51,11 @@ RIGHE_NOCE = [
 
 
 class CatalogoFinto:
-    """Il catalogo vero apre i listini dal disco: qui le righe sono dichiarate.
+    """Fake catalog: rows are declared inline instead of read from disk.
 
-    Espone soltanto quello che il servizio gli chiede davvero, e `_offer` è la
-    funzione vera del modulo — la regola su che cosa è ordinabile non si
-    riscrive qui, altrimenti la prova direbbe di sé più di quanto sa.
+    Exposes only what the service actually calls, and delegates to the real
+    `_offer` function so this fake doesn't reimplement the orderability rule
+    and end up testing its own logic instead of the module's.
     """
 
     def __init__(self, righe: dict[str, list[dict[str, Any]]]) -> None:
@@ -169,9 +168,8 @@ class SubitoNelConfrontoDiAdesso(BancoDellAbbinamento):
         self.assertEqual(self.offerte_disponibili(store.review()), {"cipresso": 1.28, "noce": 1.15})
 
     def test_l_offerta_dice_di_essere_stata_scelta_a_mano(self) -> None:
-        """A valle non serve nessun caso speciale, ma chi guarda deve poter
-        risalire: un'offerta entrata per una decisione umana non è una trovata
-        dal codice a barre."""
+        """Downstream code needs no special case, but the offer must still say
+        it came from a human choice, not from a barcode match."""
 
         store = self.negozio()
         store.abbina_riga_di_listino({
@@ -187,9 +185,8 @@ class SubitoNelConfrontoDiAdesso(BancoDellAbbinamento):
         self.assertIs(offerta["sceltaManuale"], True)
 
     def test_una_riga_che_non_si_puo_ordinare_non_si_abbina(self) -> None:
-        """La riga 5000 è il separatore del listino: niente prezzo, niente
-        confezione. Metterla in ordine vorrebbe dire una quantità che non si sa
-        calcolare."""
+        """Row 5000 is a separator row: no price, no carton size. Ordering it
+        would mean a quantity that can't be computed."""
 
         store = self.negozio()
 
@@ -221,8 +218,8 @@ class SubitoNelConfrontoDiAdesso(BancoDellAbbinamento):
         self.assertEqual(scelte[0]["sourceRow"], 4793)
 
     def test_un_no_dato_prima_non_spegne_l_offerta_appena_scelta(self) -> None:
-        """Due risposte umane sullo stesso prodotto: vince la più recente, e si
-        toglie invece di lasciarle convivere."""
+        """Two human answers on the same product: the newest one wins, and the
+        stale rejection is removed rather than left alongside it."""
 
         store = self.negozio()
         stato = {
@@ -255,8 +252,8 @@ class PerSempreLUguaglianzaFraCodici(BancoDellAbbinamento):
         self.assertIn("per tutti i fornitori", esito["message"])
 
     def test_la_dichiarazione_dice_da_dove_viene(self) -> None:
-        """Un'uguaglianza sbagliata è un ordine sbagliato ogni lunedì: deve
-        restare scritto guardando che cosa qualcuno l'ha dichiarata."""
+        """A wrong equivalence causes a wrong order on every run after it, so
+        the record must keep saying what row was declared equivalent to what."""
 
         store = self.negozio()
         store.abbina_riga_di_listino({
@@ -269,11 +266,9 @@ class PerSempreLUguaglianzaFraCodici(BancoDellAbbinamento):
         self.assertTrue(voce["valida_dal"])
 
     def test_si_rilegge_in_impostazioni_e_si_toglie(self) -> None:
-        """⚠ Dal 18 agosto 2026 l'elenco **non** viaggia più col confronto: sta
-        in Impostazioni, con i nomi e una ricerca. Ci stava perché doveva
-        essere visibile senza cercarla, ma il posto era dentro un prodotto — e
-        due numeri di tredici cifre senza i nomi non permettono di giudicare se
-        la dichiarazione è giusta."""
+        """The equivalence list lives in Settings, with names and a search, not
+        inside the comparison payload: two thirteen-digit codes with no names
+        don't let anyone judge whether a declared equivalence is correct."""
 
         store = self.negozio()
         store.abbina_riga_di_listino({
@@ -289,8 +284,8 @@ class PerSempreLUguaglianzaFraCodici(BancoDellAbbinamento):
         self.assertEqual(store.elenco_delle_uguaglianze()["uguaglianze"], [])
 
     def test_l_elenco_porta_i_due_nomi_e_il_fornitore(self) -> None:
-        """È la ragione per cui l'elenco è stato spostato: con i soli codici non
-        si può valutare la correttezza di quello che si è confermato."""
+        """Codes alone don't let anyone judge whether a confirmed equivalence
+        is correct; the list must also carry both item names and the supplier."""
 
         store = self.negozio()
         store.abbina_riga_di_listino({
@@ -307,8 +302,8 @@ class PerSempreLUguaglianzaFraCodici(BancoDellAbbinamento):
         self.assertTrue(voce["dal"])
 
     def test_la_ricerca_guarda_tutto_quello_che_si_vede(self) -> None:
-        """Un elenco che cresce di una riga a settimana dopo un anno ne ha
-        cinquanta, e cercarle a occhio è il modo di non rileggerle mai."""
+        """A list that keeps growing needs search: scanning it by eye is a way
+        of never reviewing the older entries again."""
 
         store = self.negozio()
         store.abbina_riga_di_listino({
@@ -323,10 +318,9 @@ class PerSempreLUguaglianzaFraCodici(BancoDellAbbinamento):
         self.assertEqual(assente["totale"], 1)
 
     def test_senza_codice_a_barre_vale_solo_per_questo_confronto_e_lo_dice(self) -> None:
-        """6 prodotti su 457 non hanno EAN nel gestionale, e gli espositori
-        LARICE non ce l'hanno a listino: lì non c'è niente da dichiarare uguale,
-        e lasciarlo sembrare uguale sarebbe una promessa che salta al primo
-        ricalcolo."""
+        """Some management-software items and LARICE display offers have no
+        EAN: there's nothing to declare equivalent, and pretending otherwise
+        would be a promise that breaks on the next run."""
 
         store = self.negozio(review=confronto(ean_prodotto=""))
 
@@ -335,14 +329,12 @@ class PerSempreLUguaglianzaFraCodici(BancoDellAbbinamento):
         })
 
         self.assertIs(esito["uguaglianzaRicordata"], False)
-        # La frase dice **che cosa** manca, non solo che non ha funzionato: il
-        # magazzino rifiuterebbe comunque un codice vuoto, ma con un messaggio
-        # da magazzino, e chi legge la pagina deve sapere che il problema è il
-        # prodotto e non un guasto del programma.
+        # The message must name what's missing, not just say it failed: the
+        # reader needs to know the problem is the product's data, not a bug.
         self.assertIn("il prodotto non ha un codice a barre", esito["message"])
         self.assertIn("Non vale per i prossimi", esito["message"])
         self.assertEqual(store.uguaglianze_in_vigore(), [])
-        # L'abbinamento di oggi però c'è, ed è il punto.
+        # The match for the current comparison still happens, which is the point.
         self.assertEqual(self.offerte_disponibili(store.review())["noce"], 1.15)
 
     def test_due_codici_gia_uguali_non_producono_una_dichiarazione(self) -> None:
@@ -358,15 +350,14 @@ class PerSempreLUguaglianzaFraCodici(BancoDellAbbinamento):
 
 
 class IlMagazzinoNonSiApreSeNonServe(BancoDellAbbinamento):
-    """Leggere il confronto non deve creare il file delle conferme.
+    """Reading the comparison must not create the confirmations database file.
 
-    ⚠ È una regola che questo progetto ha già pagato una volta: SQLite tiene il
-    file aperto finché la connessione vive, su Windows un file aperto blocca la
-    cartella che lo contiene, e ventinove prove morirono alla pulizia della
-    cartella temporanea mentre i test mirati erano tutti verdi. Le uguaglianze
-    si leggono a **ogni** lettura del confronto: aprirle sempre riporterebbe
-    quel guasto identico, e lo riporterebbe in una forma che solo la suite
-    intera vede.
+    SQLite keeps the file open for the life of the connection, and on
+    Windows an open file locks the directory containing it; a temp-directory
+    cleanup can fail while every test that checks the file directly still
+    passes. Equivalences are read on every read of the comparison, so
+    opening the database unconditionally would reproduce that failure, and
+    only the full test suite (not a single targeted test) would show it.
     """
 
     def test_leggere_il_confronto_non_crea_nessun_conferme_db(self) -> None:
@@ -410,23 +401,22 @@ class IlListinoSiSfoglia(BancoDellAbbinamento):
 
 
 class LAutosalvataggioNonPortaViaNiente(BancoDellAbbinamento):
-    """Il guasto del 19 agosto 2026, e la regola che gli impedisce di tornare.
+    """A save must not drop state that a different route wrote.
 
-    `validate_snapshot` ricostruisce da zero tutto `state.json` a ogni
-    salvataggio, e la scheda nello snapshot manda soltanto le quantita': le
-    chiavi scritte dalle rotte parziali le deve ricopiare dal disco. Ne
-    ricopiava tre su quattro. Il quarto era l'abbinamento a mano, cioe' la
-    strada che l'utente prende **quando l'analisi automatica ha gia' fallito**:
-    450 ms dopo aver toccato una quantita' spariva, l'offerta scelta tornava
-    non disponibile, e siccome una quantita' c'era il salvataggio si spegneva
-    con `OFFERTA_NON_VALIDA` — da li' in poi non si salvava piu' niente.
+    `validate_snapshot` rebuilds all of `state.json` on every save; the
+    autosave payload only carries quantities, so keys written by partial
+    routes must be copied back from disk. Manual matches are exactly the
+    path a user takes once the automatic match has already failed, so
+    losing them on the next autosave turns the chosen offer unavailable and
+    makes `save_state` raise `OFFERTA_NON_VALIDA`, which then blocks every
+    save after it.
     """
 
     def salva_le_quantita(self, store: ReviewStore, quantita: int = 1, fornitore: str = "noce") -> dict:
-        """Quello che manda la scheda 450 ms dopo un tocco sulla quantita'.
+        """The debounced autosave payload the client sends after a quantity edit.
 
-        Gli abbinamenti a mano non ci sono: la scheda non li manda, e non e' un
-        difetto suo — li ha scritti una rotta a parte.
+        It carries no manual matches by design; those are written by a
+        separate route, not by this one.
         """
 
         sul_disco = json.loads((self.root / "state.json").read_text(encoding="utf-8"))
@@ -461,9 +451,9 @@ class LAutosalvataggioNonPortaViaNiente(BancoDellAbbinamento):
         )
 
     def test_il_salvataggio_dopo_non_si_spegne(self) -> None:
-        """La conseguenza vera: perso l'abbinamento, l'offerta con la quantita'
-        sopra non e' piu' utilizzabile e `save_state` alza `SnapshotError` per
-        sempre. Due salvataggi di fila bastano a farlo vedere."""
+        """The real consequence: if the match is lost, the offer with the
+        quantity on it becomes unusable and `save_state` keeps raising
+        `SnapshotError`. Two saves in a row are enough to show it."""
 
         store = self.negozio()
         store.abbina_riga_di_listino({
@@ -476,7 +466,7 @@ class LAutosalvataggioNonPortaViaNiente(BancoDellAbbinamento):
         self.assertEqual(self.stato_sul_disco()["products"][0]["quantity"], 2)
 
     def test_le_altre_tre_chiavi_restano_ricopiate(self) -> None:
-        """La correzione non doveva togliere quello che già funzionava."""
+        """Regression guard: fixing the missing key must not break the ones already working."""
 
         store = self.negozio()
         stato = {
@@ -490,8 +480,8 @@ class LAutosalvataggioNonPortaViaNiente(BancoDellAbbinamento):
         }
         (self.root / "state.json").write_text(json.dumps(stato), encoding="utf-8")
 
-        # Qui non c'è nessun abbinamento a mano: l'unica offerta utilizzabile è
-        # quella che l'analisi ha trovato da sé.
+        # No manual match here: the only usable offer is the one the
+        # automatic analysis found on its own.
         self.salva_le_quantita(store, fornitore="cipresso")
 
         dopo = self.stato_sul_disco()
@@ -501,39 +491,37 @@ class LAutosalvataggioNonPortaViaNiente(BancoDellAbbinamento):
 
 
 class NessunaRottaScriveUnaChiaveCheIlSalvataggioNonConosce(unittest.TestCase):
-    """La prova che impedisce alla quinta chiave di ripetere la storia.
+    """Guards against a new partial route writing a key the autosave doesn't copy back.
 
-    Non prova un comportamento: prova che due elenchi coincidono — le chiavi
-    che le rotte parziali scrivono dentro `state`, e quelle che
-    `validate_snapshot` ricopia dal disco. Il difetto del 19 agosto era
-    esattamente uno scarto fra i due, e nessuna prova poteva accorgersene
-    perche' ognuna guardava una chiave sola.
+    Checks a static property, not a behavior: that two sets match — the keys
+    partial routes write into `state`, and the keys `validate_snapshot`
+    copies back from disk. A gap between the two is exactly the class of bug
+    a per-key test can't catch, since each one only looks at its own key.
     """
 
-    # Le rotte che scrivono un pezzo di stato per conto loro, senza passare da
-    # `save_state`. Se ne nasce una nuova, va aggiunta qui.
+    # Routes that write a piece of state on their own, bypassing `save_state`.
+    # Add new ones here.
     ROTTE_PARZIALI = (
         "answer_rejected_candidate",
         "abbina_riga_di_listino",
-        # Il «non è lo stesso articolo»: scrive nel magazzino delle conferme, e
-        # dello stato tocca solo `products` — cioè una chiave di servizio, che la
-        # scheda rimanda per intero a ogni salvataggio. È qui perché il lettore
-        # la controlli: il giorno in cui qualcuno le facesse scrivere una chiave
-        # sua, questa prova diventerebbe rossa invece di lasciar nascere la
-        # quinta chiave che nessuno ricopia.
+        # The "not the same item" route: writes to the confirmations
+        # database and touches only `products` in `state`, a service key the
+        # client resends in full on every save. Listed here so this test
+        # covers it: if it ever wrote a key of its own, this test would fail
+        # instead of letting an uncopied key slip through silently.
         "rifiuta_l_abbinamento",
         "set_supplier_discount",
         "add_manual_product",
     )
 
-    # Le chiavi che `validate_snapshot` rifà da sé a ogni salvataggio, ed è
-    # giusto che le riscriva invece di ricopiarle dal disco.
+    # Keys `validate_snapshot` rebuilds itself on every save, which is
+    # correct: they must not be copied back from disk.
     #
-    # `products` è l'unica che una rotta parziale scrive **e** che va comunque
-    # ricostruita: `set_supplier_discount` crea la decisione dei prodotti che
-    # non ne hanno ancora una, ma le decisioni le manda tutte la scheda a ogni
-    # salvataggio (`snapshot()` mappa `state.review.products` per intero).
-    # Ricopiarla dal disco vorrebbe dire ignorare le quantità appena scritte.
+    # `products` is the only key a partial route writes that still needs
+    # rebuilding: `set_supplier_discount` fills in a default decision for
+    # products that don't have one yet, but the client resends every
+    # decision on each save (`snapshot()` maps `state.review.products` in
+    # full). Copying it from disk would ignore quantities just written.
     CHIAVI_DI_SERVIZIO = frozenset({
         "schemaVersion", "runId", "updatedAt", "stateVersion", "stateVersionOrigin",
         "products",
@@ -541,7 +529,7 @@ class NessunaRottaScriveUnaChiaveCheIlSalvataggioNonConosce(unittest.TestCase):
 
     @staticmethod
     def chiavi_scritte(metodo: ast.FunctionDef) -> set[str]:
-        """Ogni `state["x"] = ...` e ogni `state.setdefault("x", ...)`."""
+        """Return every key set via `state["x"] = ...` or `state.setdefault("x", ...)`."""
 
         trovate: set[str] = set()
         for nodo in ast.walk(metodo):

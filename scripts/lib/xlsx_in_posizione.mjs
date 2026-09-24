@@ -1,32 +1,31 @@
-// Scrive le quantita' d'ordine dentro una copia di un `.xlsx` toccando SOLO il
-// foglio dell'ordine, e di quel foglio solo le celle della colonna d'ordine.
+// Writes order quantities into a copy of a `.xlsx` file, touching ONLY the
+// order sheet, and on that sheet only the cells of the order column.
 //
-// PERCHE' ESISTE QUESTO MODULO
-// Fino al 5 settembre 2026 le copie le scriveva `@oai/artifact-tool`, una
-// libreria .NET compilata in WebAssembly da 24 MB che importava il documento,
-// se lo ricostruiva in memoria e lo riscriveva **da capo**.  Quello che perdeva
-// per strada usciva lo stesso dalla porta: 34 celle EAN con scritto «1235» al
-// posto del nulla, 641 titoli di sezione spariti (12 agosto), e una copia che
-// Excel, riaperta, contestava (4 settembre).  La guardia cella per cella di
-// `app/copia_fedele.py` prova i **valori**, non la **forma** del file.
+// WHY THIS MODULE EXISTS
+// A full-reserialization library that imports the whole document, rebuilds
+// it in memory and rewrites it from scratch will silently drop or alter
+// content it doesn't fully understand — dropped section headers, corrupted
+// values, copies Excel then refuses to open. The cell-by-cell guard in
+// `app/copia_fedele.py` proves the values, not the shape of the file, but
+// it's a safety net, not a substitute for not causing the damage.
 //
-// Qui non si ricostruisce niente.  Un `.xlsx` e' uno ZIP con dentro dell'XML:
-// si apre lo ZIP con `zlib` e basta, si cambia il testo delle sole celle da
-// scrivere dentro il foglio dell'ordine, e si richiude lo ZIP copiando ogni
-// altra parte **byte per byte** com'era — stili, formule, disegni, celle unite,
-// nomi definiti, tutto.  Il documento resta quello del fornitore, con la sola
-// colonna d'ordine riempita: e' lo stesso principio della patch in posizione
-// del `.xls` di Noce (`app/xls_writer.py`).
+// Nothing is reconstructed here. A `.xlsx` is a ZIP containing XML: the ZIP
+// is opened with plain `zlib`, only the text of the cells being written in
+// the order sheet is changed, and the ZIP is closed again by copying every
+// other part byte-for-byte as it was — styles, formulas, drawings, merged
+// cells, defined names, all of it. The document stays the supplier's own,
+// with only the order column filled in: the same principle as the in-place
+// `.xls` patch in `app/xls_writer.py`.
 //
-// Qui dentro non entra nessuna dipendenza: solo `node:zlib` e `node:fs`.
+// No dependency beyond `node:zlib` and `node:fs`.
 //
-// Che cosa NON fa, e di proposito:
-// - non scrive testo: una quantita' e' un numero, e il numero non ha bisogno
-//   di `sharedStrings.xml`;
-// - non tocca una cella che porta una formula: la ferma e lo dice, perche'
-//   sovrascrivere una formula del fornitore e' proprio la cosa da non fare;
-// - non ricalcola i totali: se il foglio ha formule, chiede a Excel di
-//   ricalcolare all'apertura (`fullCalcOnLoad` in `workbook.xml`).
+// What this deliberately does NOT do:
+// - write text: a quantity is a number, and a number needs no
+//   `sharedStrings.xml` entry;
+// - touch a cell that carries a formula: it stops and says so, because
+//   overwriting a supplier's formula is exactly the wrong move;
+// - recalculate totals: if the sheet has formulas, it asks Excel to
+//   recalculate on open (`fullCalcOnLoad` in `workbook.xml`).
 
 import { readFile, writeFile } from "node:fs/promises";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
@@ -34,26 +33,26 @@ import { deflateRawSync, inflateRawSync } from "node:zlib";
 const FIRMA_FINE_DIRECTORY = 0x06054b50;
 const FIRMA_VOCE_DIRECTORY = 0x02014b50;
 const FIRMA_INTESTAZIONE_LOCALE = 0x04034b50;
-// Il commento finale di uno ZIP sta in due byte: al massimo 65.535 caratteri,
-// piu' i 22 dell'intestazione di coda.
+// A ZIP's trailing comment length is a 2-byte field: at most 65,535
+// characters, plus the 22-byte end-of-central-directory record itself.
 const MASSIMO_COMMENTO = 65535 + 22;
 const METODO_DEFLATE = 8;
 const METODO_NESSUNO = 0;
-// Il bit 3 dei flag dice «le dimensioni stanno in un descrittore dopo i dati»:
-// le intestazioni le riscriviamo noi con le dimensioni dentro, quindi va spento.
+// Flag bit 3 means "sizes are in a descriptor after the data"; headers are
+// rewritten here with the sizes inline, so this bit must be cleared.
 const FLAG_DESCRITTORE = 0x0008;
-// Oltre questo numero di celle la griglia non si costruisce: un foglio che
-// dichiara una cella a XFD1048576 non e' un listino, e' un file rovinato.
+// Above this many cells the grid isn't built: a sheet declaring a cell at
+// XFD1048576 isn't a price list, it's a corrupted file.
 const MASSIME_CELLE_IN_GRIGLIA = 50_000_000;
 
 export class ContenitoreNonLeggibile extends Error {}
 export class FoglioNonScrivibile extends Error {}
 
 // ---------------------------------------------------------------------------
-// ZIP: lettura
+// ZIP: reading
 // ---------------------------------------------------------------------------
 
-/** Dove comincia l'intestazione di coda dello ZIP. */
+/** Offset where the ZIP's end-of-central-directory record starts. */
 function fineDirectory(dati) {
   const minimo = Math.max(0, dati.length - MASSIMO_COMMENTO);
   for (let posizione = dati.length - 22; posizione >= minimo; posizione -= 1) {
@@ -63,10 +62,10 @@ function fineDirectory(dati) {
 }
 
 /**
- * Le voci dell'elenco centrale, nell'ordine in cui stanno nel file.
+ * Central directory entries, in file order.
  *
- * Si tiene tutto quello che serve per **riscrivere** le intestazioni: chi
- * legge soltanto ne usa la meta'.
+ * Keeps everything needed to rewrite the headers; a read-only caller only
+ * uses about half these fields.
  */
 export function elencoVoci(dati) {
   const fine = fineDirectory(dati);
@@ -74,8 +73,8 @@ export function elencoVoci(dati) {
   const dimensione = dati.readUInt32LE(fine + 12);
   const inizio = dati.readUInt32LE(fine + 16);
   if (quante === 0xffff || dimensione === 0xffffffff || inizio === 0xffffffff) {
-    // Un `.xlsx` di un listino non arriva mai a 4 GB o 65.535 parti: se ci
-    // arriva, meglio dirlo che leggere numeri sbagliati.
+    // A price-list `.xlsx` never reaches 4 GB or 65,535 parts; if it does,
+    // better to say so than to read garbage offsets.
     throw new ContenitoreNonLeggibile("Il documento usa il formato ZIP64: non è un listino.");
   }
   const voci = [];
@@ -107,7 +106,7 @@ export function elencoVoci(dati) {
   return voci;
 }
 
-/** I byte compressi di una voce, cosi' come stanno nel file. */
+/** The compressed bytes of an entry, exactly as they sit in the file. */
 function byteDellaVoce(dati, voce) {
   const testa = voce.offsetLocale;
   if (testa + 30 > dati.length || dati.readUInt32LE(testa) !== FIRMA_INTESTAZIONE_LOCALE) {
@@ -122,7 +121,7 @@ function byteDellaVoce(dati, voce) {
   return dati.subarray(inizio, inizio + voce.byteCompressi);
 }
 
-/** Il contenuto di una parte, gia' decompresso, come testo UTF-8. */
+/** The content of a part, already decompressed, as UTF-8 text. */
 export function leggiParte(dati, voce) {
   const crudo = byteDellaVoce(dati, voce);
   if (voce.metodo === METODO_NESSUNO) return crudo.toString("utf8");
@@ -133,7 +132,7 @@ export function leggiParte(dati, voce) {
 }
 
 // ---------------------------------------------------------------------------
-// ZIP: scrittura
+// ZIP: writing
 // ---------------------------------------------------------------------------
 
 const TABELLA_CRC = (() => {
@@ -146,7 +145,7 @@ const TABELLA_CRC = (() => {
   return tabella;
 })();
 
-/** Il CRC-32 dello ZIP, calcolato a mano: `zlib.crc32` esiste solo da Node 22. */
+/** ZIP CRC-32, computed by hand: `zlib.crc32` only exists from Node 22 on. */
 export function crc32(dati) {
   let crc = 0xffffffff;
   for (let i = 0; i < dati.length; i += 1) crc = TABELLA_CRC[(crc ^ dati[i]) & 0xff] ^ (crc >>> 8);
@@ -154,10 +153,10 @@ export function crc32(dati) {
 }
 
 /**
- * Lo ZIP riscritto: ogni parte copiata **compressa com'era**, tranne quelle
- * sostituite.  Le intestazioni si riscrivono tutte, senza campi extra e senza
- * descrittori: e' la forma piu' semplice che ogni lettore accetta, e i byte
- * dei dati restano quelli del fornitore.
+ * The rewritten ZIP: every part copied compressed exactly as it was,
+ * except the replaced ones. All headers are rewritten fresh, with no extra
+ * fields and no data descriptors — the simplest form every reader accepts,
+ * while the data bytes of untouched parts stay the supplier's own.
  */
 function costruisciZip(dati, voci, sostituite) {
   const locali = [];
@@ -232,12 +231,12 @@ function costruisciZip(dati, voci, sostituite) {
 }
 
 // ---------------------------------------------------------------------------
-// L'XML dei fogli
+// Sheet XML
 // ---------------------------------------------------------------------------
 
-// Nei file veri i tag arrivano nudi (`<c>`, come li scrive Excel); qualche
-// altro programma li scrive con un prefisso (`<x:c>`).  Si leggono tutti e due;
-// scrivendo, si usa il prefisso che il foglio usa gia'.
+// Real files use bare tags (`<c>`, as Excel writes them); some other
+// programs write them with a namespace prefix (`<x:c>`). Both are read;
+// when writing, whichever prefix the sheet already uses is kept.
 const PREFISSO = "(?:[A-Za-z_][\\w.-]*:)?";
 
 export function decodificaXml(testo) {
@@ -251,7 +250,7 @@ export function decodificaXml(testo) {
     .replace(/&amp;/g, "&");
 }
 
-/** I testi `<t>` di un frammento, concatenati: basta per `<si>` e `<is>`. */
+/** Concatenated `<t>` text of a fragment; enough for `<si>` and `<is>`. */
 function testoDeiTag(frammento) {
   const testo = new RegExp(`<${PREFISSO}t(?:\\s[^>]*)?(?:/>|>([\\s\\S]*?)</${PREFISSO}t>)`, "g");
   let contenuto = "";
@@ -260,7 +259,7 @@ function testoDeiTag(frammento) {
   return contenuto;
 }
 
-/** Le stringhe condivise, nell'ordine in cui le indicizzano le celle. */
+/** Shared strings, in the order cells index them by. */
 function stringheCondivise(xml) {
   const elenco = [];
   if (!xml) return elenco;
@@ -270,7 +269,7 @@ function stringheCondivise(xml) {
   return elenco;
 }
 
-/** I fogli del libro, in ordine, con il nome della loro parte XML. */
+/** The workbook's sheets, in order, with the name of their XML part. */
 export function partiDeiFogli(libro, relazioni) {
   const bersagli = new Map();
   const relazione = /<[^>]*\bId="([^"]+)"[^>]*\bTarget="([^"]+)"[^>]*>/g;
@@ -299,14 +298,14 @@ export function partiDeiFogli(libro, relazioni) {
   return fogli;
 }
 
-/** `A` diventa 1, `AB` diventa 28. */
+/** `A` becomes 1, `AB` becomes 28. */
 export function numeroDiColonna(lettere) {
   let numero = 0;
   for (const carattere of String(lettere).toUpperCase()) numero = numero * 26 + (carattere.charCodeAt(0) - 64);
   return numero;
 }
 
-/** 1 diventa `A`, 28 diventa `AB`. */
+/** 1 becomes `A`, 28 becomes `AB`. */
 export function letteraDiColonna(numero) {
   let resto = Number(numero);
   let lettera = "";
@@ -325,10 +324,10 @@ function spezzaIndirizzo(indirizzo) {
 }
 
 /**
- * Un foglio: il suo XML, letto una volta, con le righe e le celle come stanno
- * scritte.  Ogni riga e ogni cella conserva il proprio **testo originale**, e
- * quando si salva si rimettono in fila quei testi: una riga che non si e'
- * toccata esce identica a com'era, carattere per carattere.
+ * A sheet: its XML, parsed once, with rows and cells kept as written.
+ * Every row and cell retains its original text, and saving just
+ * concatenates those texts back together, so an untouched row comes out
+ * character-for-character identical to how it started.
  */
 class Foglio {
   constructor(nome, parte, xml, condivise) {
@@ -348,8 +347,8 @@ class Foglio {
     this.prefisso = apertura[1] ?? "";
     const p = this.prefisso;
     if (apertura[2] === "/") {
-      // `<sheetData/>`: nessuna riga.  Si riapre come coppia di tag, cosi' chi
-      // scrive una riga ha dove metterla.
+      // `<sheetData/>`: no rows. Reopened as a tag pair so a write has
+      // somewhere to insert a row.
       const inizio = apertura.index;
       this.xml = `${this.xml.slice(0, inizio)}<${p}sheetData></${p}sheetData>${this.xml.slice(inizio + apertura[0].length)}`;
       this.inizioRighe = inizio + `<${p}sheetData>`.length;
@@ -398,7 +397,7 @@ class Foglio {
     return this.righe.find((riga) => riga.numero === numero) ?? null;
   }
 
-  /** Quello che c'e' scritto in una cella, come lo vedrebbe chi apre il foglio. */
+  /** What's stored in a cell, as it would display to whoever opens the sheet. */
   valore(indirizzo) {
     const { colonna, riga } = spezzaIndirizzo(indirizzo);
     const cella = this._riga(riga)?.celle.find((voce) => voce.colonna === colonna);
@@ -422,10 +421,9 @@ class Foglio {
   }
 
   /**
-   * La griglia dei valori, dalla cella A1: `values[riga - 1][colonna - 1]`.
-   * `rowIndex` e `columnIndex` valgono zero e ci sono perche' chi la legge
-   * (`write_supplier_orders.mjs`) faceva gia' quel conto sull'intervallo
-   * usato della libreria di prima.
+   * The value grid, from cell A1: `values[row - 1][column - 1]`. `rowIndex`
+   * and `columnIndex` are always zero; they exist because `write_supplier_orders.mjs`
+   * already does that arithmetic against a used-range shape.
    */
   griglia() {
     let ultimaRiga = 0;
@@ -495,7 +493,7 @@ class Foglio {
     this.modificato = true;
   }
 
-  /** Scrive un numero nella cella: l'unica cosa che una quantita' d'ordine e'. */
+  /** Writes a number into the cell: the only thing an order quantity is. */
   scriviNumero(indirizzo, numero) {
     if (typeof numero !== "number" || !Number.isFinite(numero)) {
       throw new FoglioNonScrivibile(`In ${indirizzo} si voleva scrivere «${numero}», che non è un numero.`);
@@ -503,20 +501,19 @@ class Foglio {
     const { colonna, riga } = spezzaIndirizzo(indirizzo);
     const esistente = this._riga(riga)?.celle.find((voce) => voce.colonna === colonna);
     if (esistente) this._rifiutaSeFormula(esistente, indirizzo);
-    // Una cella che esiste tiene il suo stile; una cella nuova non ne prende
-    // nessuno.  ⚠ Ereditarlo dalla colonna (`<cols>`) o dalla cella piu'
-    // vicina sembrava piu' furbo, e su `documenti/prova2.xlsx` portava nella
-    // cella nuova un formato «testo» dichiarato per tutte le colonne: la
-    // guardia cella per cella rifiutava la copia, e giustamente, perche' il
-    // numero non si sarebbe piu' mostrato come numero.
+    // An existing cell keeps its own style; a new cell gets none. Inheriting
+    // one from the column (`<cols>`) or the nearest cell looks tempting, but
+    // a column-wide "text" format would then apply to the new cell and the
+    // number would no longer display as a number, which the cell-by-cell
+    // guard correctly rejects.
     const stile = esistente ? this._stile(esistente) : null;
     this._sostituisci(riga, colonna, (attributi, p) => `<${p}c${attributi}><${p}v>${numero}</${p}v></${p}c>`, stile);
   }
 
   /**
-   * Svuota le celle di una colonna fra due righe, **lasciando lo stile**: e'
-   * quello che fa Excel con «Cancella contenuto».  Le celle che non esistono
-   * restano inesistenti.  Torna quante ne ha svuotate.
+   * Clears a column's cells between two rows, leaving the style in place —
+   * the same effect as Excel's "Clear Contents". Cells that don't exist
+   * stay nonexistent. Returns how many cells were cleared.
    */
   svuota(lettera, primaRiga, ultimaRiga) {
     const colonna = numeroDiColonna(lettera);
@@ -534,17 +531,18 @@ class Foglio {
   }
 
   /**
-   * Ferma tutto se in quella colonna, fra due righe, c'e' una formula — anche
-   * su una riga che non si scrive e anche senza il risultato memorizzato.
+   * Stops everything if that column, between two rows, contains a formula —
+   * even on a row that isn't being written, and even one with no cached
+   * result stored.
    *
-   * ⚠ 6 settembre 2026: il «no» alle formule lo dicevano solo `scriviNumero` e
-   * `svuota`, cioe' le celle che si toccano, e `svuota` guarda le celle che un
-   * valore ce l'hanno.  Una formula generata da programma il valore in cache
-   * non ce l'ha — un `.xlsx` salvato da Excel si', quello del gestionale di un
-   * fornitore no — quindi su una riga che nessuno ordina non la prendeva in
-   * mano nessuno: restava nella copia, il confronto cella per cella vedeva
-   * formula contro formula e non trovava differenze, ed Excel all'apertura la
-   * calcolava.  Al fornitore arrivavano colli che nessuno ha chiesto.
+   * This has to be a separate pass: `scriviNumero` and `svuota` only reject
+   * formulas on cells they actually touch, and `svuota` only looks at cells
+   * that have a value. A programmatically generated formula often has no
+   * cached value (unlike one saved by Excel itself), so on a row nobody is
+   * ordering, neither of those would catch it — it would survive into the
+   * copy unchanged, the cell-by-cell comparison would see formula against
+   * formula and find no difference, and Excel would evaluate it on open,
+   * shipping the supplier a quantity nobody requested.
    */
   rifiutaFormuleNellaColonna(lettera, primaRiga, ultimaRiga) {
     const colonna = numeroDiColonna(lettera);
@@ -561,12 +559,12 @@ class Foglio {
     }
   }
 
-  /** Il foglio ha almeno una formula? Serve a chiedere a Excel di ricalcolare. */
+  /** Does the sheet have at least one formula? Used to ask Excel to recalculate. */
   haFormule() {
     return new RegExp(`<${this.prefisso}f\\b`).test(this.xml);
   }
 
-  /** L'XML del foglio da salvare: identico a prima dove non si e' toccato. */
+  /** The sheet's XML to save: identical to before wherever nothing was touched. */
   xmlDaSalvare() {
     if (!this.modificato) return this.xml;
     const p = this.prefisso;
@@ -579,9 +577,9 @@ class Foglio {
   }
 
   /**
-   * `<dimension ref="A1:R7070"/>` dice fin dove arrivano le celle.  Una cella
-   * scritta fuori da quel rettangolo lo allarga: Excel lo tollera anche
-   * sbagliato, ma un lettore prudente potrebbe fermarsi prima.
+   * `<dimension ref="A1:R7070"/>` declares how far the cells extend. A cell
+   * written outside that rectangle expands it: Excel tolerates a wrong
+   * value here, but a stricter reader might refuse the file.
    */
   _conDimensioneAggiornata(xml) {
     const tag = new RegExp(`<${this.prefisso}dimension\\s+ref="([A-Z]{1,3}\\d+)(?::([A-Z]{1,3}\\d+))?"\\s*/>`).exec(xml);
@@ -607,7 +605,7 @@ class Foglio {
 }
 
 // ---------------------------------------------------------------------------
-// Il libro
+// The workbook
 // ---------------------------------------------------------------------------
 
 class Libro {
@@ -628,12 +626,12 @@ class Libro {
     return voce ? leggiParte(this.dati, voce) : null;
   }
 
-  /** I nomi dei fogli, nell'ordine del libro. */
+  /** Sheet names, in workbook order. */
   get nomiDeiFogli() {
     return this.fogli.map((foglio) => foglio.nome);
   }
 
-  /** Il foglio con quel nome, o il primo per «FIRST»; `null` se non c'e'. */
+  /** The sheet with that name, or the first one for "FIRST"; `null` if none matches. */
   foglio(nome) {
     const cercato = String(nome ?? "").trim();
     const scelto = cercato.toUpperCase() === "FIRST"
@@ -649,12 +647,12 @@ class Libro {
   }
 
   /**
-   * `workbook.xml` con `fullCalcOnLoad`, se un foglio toccato ha formule: i
-   * totali che il fornitore calcola sulla colonna d'ordine li ricalcola Excel
-   * all'apertura, perche' qui non si ricalcola niente.  Se `calcPr` non c'e' lo
-   * si mette dove lo schema lo vuole — dopo i fogli e i nomi definiti — perche'
-   * un elemento fuori posto e' proprio il tipo di cosa che fa chiedere a Excel
-   * di «riparare» il file.
+   * `workbook.xml` with `fullCalcOnLoad` set, if a touched sheet has
+   * formulas: the totals the supplier computes on the order column get
+   * recalculated by Excel on open, since nothing is recalculated here.
+   * If `calcPr` doesn't exist yet, it's inserted where the schema expects
+   * it — after the sheets and defined names — because an out-of-place
+   * element is exactly what makes Excel offer to "repair" the file.
    */
   _libroDaSalvare() {
     const toccatiConFormule = [...this.fogliAperti.values()].some((foglio) => foglio.modificato && foglio.haFormule());
@@ -678,7 +676,7 @@ class Libro {
     return `${xml.slice(0, posizione)}<${prefisso}calcPr fullCalcOnLoad="1"/>${xml.slice(posizione)}`;
   }
 
-  /** Scrive la copia: ogni parte com'era, tranne i fogli toccati. */
+  /** Writes the copy: every part as it was, except the touched sheets. */
   async salva(percorso) {
     const sostituite = new Map();
     for (const foglio of this.fogliAperti.values()) {
@@ -691,7 +689,7 @@ class Libro {
   }
 }
 
-/** Apre un `.xlsx` dal disco, in sola lettura: il file di partenza non si tocca mai. */
+/** Opens a `.xlsx` from disk, read-only: the source file is never touched. */
 export async function apriLibro(percorso) {
   const dati = await readFile(percorso);
   return new Libro(dati, elencoVoci(dati));

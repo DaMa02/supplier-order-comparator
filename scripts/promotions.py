@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Rileva e applica in modo conservativo le promozioni dei fornitori.
+"""Detect and conservatively apply supplier promotions.
 
-Il modulo non modifica i listini e non decide autonomamente un fornitore.  Le
-promozioni vengono trasformate in un contratto JSON stabile, valutate rispetto
-alle quantità scelte e infine aggiunte ai dati di revisione.
+The module never modifies price lists and never picks a supplier on its own.
+Promotions are turned into a stable JSON contract, evaluated against the
+chosen quantities, and finally attached to the review data.
 
-Regole di sicurezza economica:
+Economic safety rules:
 
-* omaggi, campioncini e confezioni promozionali non riducono mai il totale;
-* una regola ambigua non influisce mai sulla scelta del fornitore;
-* un prezzo promozionale viene esposto soltanto per uno sconto numerico,
-  deterministico, confermato e attivato;
-* la decorazione conserva sempre prezzi e fornitore selezionato originali.
+* gifts, samples and promotional packs never reduce the total;
+* an ambiguous rule never affects supplier choice;
+* a promotional price is exposed only for a numeric discount that is
+  deterministic, confirmed and active;
+* decoration always preserves the original prices and the selected supplier.
 """
 
 from __future__ import annotations
@@ -51,20 +51,16 @@ KINDS = {
 CERTAINTIES = {CERTAINTY_HIGH, CERTAINTY_MEDIUM, CERTAINTY_REVIEW}
 
 _NUMBER = r"\d+(?:[.,]\d+)?"
-# I verbi che aprono una soglia stanno scritti una volta sola: quando erano
-# ricopiati altrove (il ponte con il listino Larice ne teneva una versione
-# piu' povera) una grafia vera come «ACQUISTANO 5 CT» era soglia per un
-# rilevatore e testo qualunque per l'altro, e la condizione spariva.
+# The verbs that open a threshold are declared once here and imported by
+# every reader: a duplicated, weaker copy elsewhere let a real phrase like
+# "ACQUISTANO 5 CT" match one detector but not the other, silently dropping
+# the condition.
 _VERBI_SOGLIA = r"ACQUISTANDO|ACQUISTA(?:NDO|NO|TI)?|ACQUSITA(?:NDO)?|COMPRANDO|COMPRA|OGNI"
-# Le unita' d'ordine ammesse in una soglia o in un premio. Vanno scritte per
-# esteso, singolare e plurale, **mai** con la lettera finale facoltativa: con
-# «COLLI?» il rilevatore si fermava a «COLL» e il premio usciva con un'unita'
-# che non esiste, portandosi dietro la descrizione tagliata («O (12 PEZZI) DI
-# NEVAL...»). Il 19 agosto 2026 lo stesso difetto era ancora aperto su
-# «CARTONI?» e «PEZZI?»: «IN OMAGGIO 1 CARTONE DI NEVAL DEO» dava unita'
-# «carton» e descrizione «E DI NEVAL DEO», cioe' non diceva che merce si
-# prende in omaggio — che e' l'unica cosa su cui si decide se conviene
-# arrivare alla soglia.
+# Order units accepted in a threshold or a reward. Written out in full,
+# singular and plural, never with an optional trailing letter: a regex like
+# "COLLI?" would match only up to "COLL" and leave the unit truncated, with
+# the rest of the word bleeding into the reward description (the one piece of
+# text that says which item is actually being given away).
 _UNITA_ORDINE = r"CT|CARTON[IE]|COLL[IO]|PZ|PEZZ[IO]"
 _THRESHOLD_RE = re.compile(
     rf"\b(?:{_VERBI_SOGLIA})"
@@ -73,9 +69,9 @@ _THRESHOLD_RE = re.compile(
 )
 _REWARD_RE = re.compile(
     rf"(?:IN\s+OMAGGIO|RICEVI(?:\s+IN\s+OMAGGIO)?)\s+"
-    # ⚠ Il `\b` dopo il gruppo dell'unita' e' quello che `_THRESHOLD_RE` ha
-    # sempre avuto e qui mancava: senza, l'unita' poteva fermarsi a meta' di
-    # una parola e il resto finiva nella descrizione del premio.
+    # The `\b` after the unit group matches `_THRESHOLD_RE`'s own boundary:
+    # without it, the unit match could stop mid-word and the rest would leak
+    # into the reward description.
     rf"(?P<qty>{_NUMBER})\s*(?P<unit>{_UNITA_ORDINE})?\b"
     rf"(?:\s*\((?P<details>[^)]*)\))?\s*(?:OMAGGIO)?\s*(?:DI\s+)?(?P<description>.+)$",
     re.IGNORECASE,
@@ -89,17 +85,16 @@ _PROMOTION_MARKERS_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Le unita' di misura che possono governare una coppia «N+M». Quando una di
-# queste tocca la coppia, i due numeri sono contenuto (millilitri, grammi,
-# metri, lavaggi) e non pezzi in piu' nella confezione. E' l'unico segnale che
-# il testo offre: la grandezza dei numeri non separa i due casi, perche'
-# «8+2» e' un conteggio giusto sui rasoi e una misura sbagliata sui metri di
-# alluminio.
+# Units of measure that can govern an "N+M" pair. When one of these touches
+# the pair, the two numbers are content (milliliters, grams, meters, washes),
+# not extra pieces in the pack. This is the only signal the text offers: the
+# size of the numbers alone doesn't distinguish the two cases, since "8+2" is
+# a valid piece count on razors and a wrong measurement on meters of foil.
 _MISURA = r"(?:ML|CL|LT|L|GR|G|KG|MT|M|CM|MM|LAV(?:AGGI)?|W)"
-# «MT.16+4»: l'unita' precede la coppia, eventualmente con il punto.
+# "MT.16+4": the unit precedes the pair, optionally with a period.
 _MISURA_PRIMA_RE = re.compile(rf"\b{_MISURA}\s*\.?\s*$", re.IGNORECASE)
-# «500+100 Omaggio=600 Ml»: l'unita' segue la coppia, eventualmente dopo la
-# parola promozionale e dopo il totale ricomposto dal fornitore.
+# "500+100 Omaggio=600 Ml": the unit follows the pair, possibly after the
+# promotional word and after the supplier's own recomposed total.
 _MISURA_DOPO_RE = re.compile(
     rf"^\s*(?:GRATIS|OMAGGIO|IN\s+OMAGGIO)?\s*(?:=\s*{_NUMBER})?\s*{_MISURA}\b",
     re.IGNORECASE,
@@ -120,8 +115,8 @@ _UNIT_ALIASES = {
     "espositori": "espositori",
 }
 
-# Il singolare delle unita' normalizzate: serve soltanto a scrivere un
-# messaggio leggibile («1 cartone», non «1 cartoni»).
+# Singular form of the normalized units, used only for a readable message
+# ("1 cartone", not "1 cartoni").
 _UNITA_SINGOLARE = {
     "cartoni": "cartone",
     "colli": "collo",
@@ -178,30 +173,30 @@ _INTESTAZIONE_SOGLIA_RE = re.compile(rf"\b(?:{_VERBI_SOGLIA})\s+{_NUMBER}", re.I
 
 
 def looks_like_threshold_heading(text: Any) -> bool:
-    """Dice se un testo apre un blocco a soglia («ACQUISTANDO 5 CT ...»).
+    """Return whether text opens a threshold block ("ACQUISTANDO 5 CT ...").
 
-    Serve a chi legge un listino a blocchi e deve riconoscere la riga di
-    intestazione prima di avere il testo completo — il nome del premio sta
-    righe piu' sotto e in un'altra colonna.
+    Used by a block-layout price-list reader that needs to recognize the
+    heading row before the full text is available — the reward name sits
+    further down, in another column.
 
-    E' apposta piu' larga di `_THRESHOLD_RE`: qui basta un verbo d'acquisto
-    seguito da un numero, senza pretendere l'unita'. Se pretendesse anche
-    quella, un'intestazione con un'unita' mai vista («ACQUISTANDO 10
-    SCATOLE») non aprirebbe nessun blocco e sparirebbe senza lasciare
-    traccia; larga com'e', il blocco si apre, il rilevatore non lo calcola e
-    chi legge se lo ritrova fra le condizioni da verificare. I verbi restano
-    quelli del rilevatore: e' la duplicazione di quell'elenco che ha gia'
-    fatto sparire una condizione vera.
+    Deliberately looser than `_THRESHOLD_RE`: a purchase verb followed by a
+    number is enough, without requiring a known unit. Requiring the unit too
+    would make a heading with an unrecognized unit ("ACQUISTANDO 10 SCATOLE")
+    open no block and vanish without a trace; being loose instead means the
+    block opens, the detector fails to compute it, and the reader ends up in
+    the "to be checked" list. The verbs are shared with the detector rather
+    than duplicated, since a duplicated list is what made a real condition
+    disappear before.
     """
 
     return bool(_INTESTAZIONE_SOGLIA_RE.search(_plain_text(text)))
 
 
 def looks_like_reward(text: Any) -> bool:
-    """Dice se un testo e' la riga premio di un blocco («IN OMAGGIO 1 CT DI»).
+    """Return whether text is a block's reward row ("IN OMAGGIO 1 CT DI").
 
-    Qui il testo e' per forza parziale — il nome del prodotto regalato sta in
-    un'altra colonna — quindi il segnale resta la sola formula d'apertura.
+    The text here is necessarily partial — the gifted item's name sits in
+    another column — so the only usable signal is the opening phrase.
     """
 
     return bool(re.search(r"\b(?:IN\s+OMAGGIO|RICEVI)\b", _plain_text(text)))
@@ -258,7 +253,7 @@ def make_promotion(
     economic_effect: Mapping[str, Any] | None = None,
     promotion_id: str | None = None,
 ) -> dict[str, Any]:
-    """Crea e valida il contratto JSON di una promozione."""
+    """Build and validate a promotion's JSON contract."""
 
     supplier = str(supplier or "").strip().casefold()
     source_reference = str(source_reference or "").strip()
@@ -312,7 +307,7 @@ def make_promotion(
     effect["affects_supplier_choice"] = bool(effect.get("affects_supplier_choice"))
     effect["already_applied"] = bool(effect.get("already_applied"))
 
-    # Solo uno sconto numerico esplicito può avere effetto economico.
+    # Only an explicit numeric discount can have an economic effect.
     if kind != KIND_NUMERIC_DISCOUNT or certainty == CERTAINTY_REVIEW or not confirmed:
         effect["affects_total"] = False
         effect["affects_supplier_choice"] = False
@@ -339,7 +334,7 @@ def make_promotion(
 
 
 def normalize_promotion(value: Mapping[str, Any]) -> dict[str, Any]:
-    """Rivalida una promozione proveniente da JSON o da un rilevatore."""
+    """Re-validate a promotion coming from JSON or from a detector."""
 
     threshold = value.get("threshold") or {}
     return make_promotion(
@@ -369,7 +364,7 @@ def detect_numeric_discount(
     confirmed: bool = True,
     already_applied: bool = False,
 ) -> dict[str, Any] | None:
-    """Rileva uno sconto numerico Excel (0,10) o percentuale (10)."""
+    """Detect a numeric discount, given as an Excel fraction (0.10) or a percentage (10)."""
 
     rate = _number(discount_value)
     if rate is None or rate <= 0:
@@ -410,7 +405,7 @@ def detect_threshold_gift(
     reward_ean: str | None = None,
     confirmed: bool | None = None,
 ) -> dict[str, Any] | None:
-    """Interpreta regole italiane del tipo "acquista N colli, ricevi X"."""
+    """Parse Italian rules of the form "buy N cartons, get X"."""
 
     normalized = _plain_text(source_text)
     threshold_match = _THRESHOLD_RE.search(normalized)
@@ -454,12 +449,12 @@ def detect_threshold_gift(
             "pieces_per_unit": pieces_per_unit,
             "ean": reward_ean,
         },
-        # La ripetibilita' non si legge nel listino: e' una condizione del
-        # rapporto commerciale, decisa dall'utente e valida per tutte le
-        # soglie. Dedurla dalla parola «OGNI» era una regola scritta guardando
-        # un solo fornitore: nei listini Larice «OGNI» non compare mai, quindi
-        # a soglia 20 con 40 cartoni acquistati il programma dichiarava un
-        # omaggio solo invece di due.
+        # Repeatability isn't readable from the price list: it's a term of
+        # the commercial relationship, set by the operator and applied to
+        # every threshold. Inferring it from the word "OGNI" (every) was a
+        # rule tuned to a single supplier's wording, and failed silently for
+        # suppliers whose text never uses that word — a threshold of 20 with
+        # 40 cartons ordered would report one gift instead of two.
         repeatable=True,
         certainty=certainty,
         confirmed=bool(confirmed),
@@ -480,7 +475,7 @@ def detect_included_pack(
     source_text: str,
     eligible: Any = None,
 ) -> dict[str, Any] | None:
-    """Rileva confezioni come "11+1 gratis", già incluse nel prezzo."""
+    """Detect packs like "11+1 free" that are already included in the price."""
 
     normalized = _plain_text(source_text)
     match = _INCLUDED_PACK_RE.search(normalized)
@@ -489,10 +484,11 @@ def detect_included_pack(
     prima = normalized[: match.start("base")]
     dopo = normalized[match.end("extra") :]
     if _MISURA_PRIMA_RE.search(prima) or _MISURA_DOPO_RE.match(dopo):
-        # «500+100 Omaggio=600 Ml» sono millilitri, «MT.16+4 GRATIS» sono
-        # metri: dichiararli «unita' aggiuntive» con certezza alta sarebbe un
-        # numero inventato. Il testo torna al rilevatore delle offerte
-        # ambigue, che lo mostra all'utente senza calcolarlo.
+        # A pair like "500+100 Omaggio=600 Ml" is milliliters, "MT.16+4
+        # GRATIS" is meters: declaring either as "extra units" with high
+        # certainty would be a fabricated number. The text falls through to
+        # the ambiguous-offer detector instead, which shows it to the
+        # operator without computing it.
         return None
     extra = _number(match.group("extra"))
     return make_promotion(
@@ -533,7 +529,7 @@ def detect_ambiguous_offer(
     source_text: str,
     eligible: Any = None,
 ) -> dict[str, Any] | None:
-    """Conserva un'offerta testuale che non può essere calcolata."""
+    """Preserve a textual offer that can't be computed."""
 
     if not _PROMOTION_MARKERS_RE.search(_plain_text(source_text)):
         return None
@@ -566,7 +562,7 @@ def detect_promotions(
     included_in_product: bool = False,
     numeric_discount_already_applied: bool = False,
 ) -> list[dict[str, Any]]:
-    """Rileva tutte le promozioni presenti in una riga o annotazione fonte."""
+    """Detect every promotion present in a source row or annotation."""
 
     promotions: list[dict[str, Any]] = []
     numeric = detect_numeric_discount(
@@ -607,7 +603,7 @@ def detect_promotions(
 
 
 def calculate_effective_price(base_price: Any, promotion: Mapping[str, Any]) -> dict[str, Any]:
-    """Calcola un prezzo scontato soltanto quando tutte le condizioni sono sicure."""
+    """Compute a discounted price, but only when every condition is certain."""
 
     base = _number(base_price)
     normalized = normalize_promotion(promotion)
@@ -725,7 +721,7 @@ def _quantity_in_threshold_unit(
 
 
 def _con_unita(quantity: Any, unit: str | None, *, fallback: str = "unità") -> str:
-    """«1 cartone», «6 cartoni»: quantità e unità concordate."""
+    """Format quantity and unit with correct agreement ("1 cartone", "6 cartoni")."""
 
     value = _clean_number(_number(quantity))
     unit = normalize_unit(unit) or fallback
@@ -735,12 +731,11 @@ def _con_unita(quantity: Any, unit: str | None, *, fallback: str = "unità") -> 
 
 
 def _premio_per_esteso(reward: Mapping[str, Any]) -> str:
-    """«1 cartone di RESALINA SALE LAVASTOVIGLIE KG1», non «1 cartone».
+    """Spell out the reward with its item name, not just the quantity.
 
-    ⚠ Il 15 agosto 2026, letto sulla scheda di NEVAL SALVIETTE: «dici 10
-    cartoni = 1 cartone omaggio, ma non e' vero».  Aveva ragione: l'omaggio non
-    era un cartone di quel prodotto, era un cartone di sale per lavastoviglie.
-    Una regola che non nomina il premio si legge come «lo stesso prodotto».
+    Names the rewarded item explicitly because a rule that leaves it out
+    reads, by default, as "the same product": a threshold on one item can
+    reward a completely different one, and the operator needs to know which.
     """
 
     quantita = _con_unita(reward.get("qty") or 1, reward.get("unit"))
@@ -759,16 +754,16 @@ def _messaggio_soglia_ottenuta(
     repeatable: bool,
     prodotti_in_offerta: int = 1,
 ) -> str:
-    """Dice quanto manca al prossimo omaggio, non che l'omaggio e' arrivato.
+    """Build the message for an earned threshold: how far to the next gift, not just that one arrived.
 
-    Con le soglie ripetibili «omaggio ottenuto» e' l'informazione inutile: chi
-    ordina deve sapere se conviene aggiungere qualche cartone per prenderne un
-    altro. Il messaggio percio' ripete la regola, la quantita' raggiunta e la
-    distanza dal premio successivo.
+    For repeatable thresholds, "gift earned" alone is not useful: what the
+    operator needs is whether adding a few more cartons earns another one. The
+    message restates the rule, the quantity reached, and the distance to the
+    next reward.
 
-    ⚠ E dice DOVE si conta.  La soglia di LARICE vale su un gruppo di prodotti
-    («ACQUISTANDO 10 CT TRA: …»): sulla scheda di uno solo di quelli, «ne hai
-    49» sembrava riferito a quel prodotto, che di cartoni ne aveva uno.
+    It also states WHERE the count applies: a threshold can span a group of
+    products, and on a single product's card a bare count would look like it
+    referred to that product alone.
     """
 
     fra_i_prodotti = (
@@ -783,9 +778,9 @@ def _messaggio_soglia_ottenuta(
         return f"{regola}: {raggiunto}, l'omaggio spetta una volta sola."
     quanti = "" if reward_count <= 1 else f", sono {reward_count} omaggi"
     prossimo = _ORDINALI.get(reward_count + 1)
-    # ⚠ «per il ottavo». L'unico ordinale di questa tabella che comincia per
-    # vocale e' «ottavo», e con sette omaggi gia' presi la frase si leggeva
-    # cosi' sulla pagina vera (LARICE, 19 agosto 2026).
+    # "ottavo" (eighth) is the only ordinal in this table starting with a
+    # vowel, and needs "l'" instead of "il" for correct Italian ("per
+    # l'ottavo", not "per il ottavo").
     verso = (
         (f"l'{prossimo}" if prossimo[0] in "aeiou" else f"il {prossimo}")
         if prossimo
@@ -807,7 +802,7 @@ def calculate_promotion_state(
     selections: Mapping[str, Mapping[str, Any]] | None = None,
     near_ratio: float = 0.8,
 ) -> dict[str, Any]:
-    """Calcola progresso e stato: ottenuta, vicina o da verificare."""
+    """Compute progress and status: earned, near, or to be checked."""
 
     normalized = normalize_promotion(promotion)
     threshold = normalized["threshold"]
@@ -931,7 +926,7 @@ def decorate_offer(
     promotions: Sequence[Mapping[str, Any]],
     states: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any]:
-    """Aggiunge promozioni a una singola offerta senza mutarne i prezzi base."""
+    """Attach promotions to a single offer without mutating its base prices."""
 
     decorated = copy.deepcopy(dict(offer))
     supplier = str(offer.get("supplierId") or offer.get("supplier") or "").casefold()
@@ -944,8 +939,8 @@ def decorate_offer(
         _compact_promotion(promotion, states[promotion["id"]]) for promotion in relevant
     ]
 
-    # Il prezzo promozionale è un campo aggiuntivo. Il prezzo originale non
-    # viene mai sovrascritto e non si esegue una nuova scelta del fornitore.
+    # The promotional price is an additional field. The original price is
+    # never overwritten, and no new supplier choice is made here.
     applied_prices = []
     for promotion in relevant:
         effect = promotion["economic_effect"]
@@ -975,7 +970,7 @@ def decorate_review_data(
     selections: Mapping[str, Mapping[str, Any]] | None = None,
     near_ratio: float = 0.8,
 ) -> dict[str, Any]:
-    """Decora il modello della pagina di confronto senza cambiare scelte o totali."""
+    """Decorate the comparison page's data model without changing choices or totals."""
 
     decorated = copy.deepcopy(dict(review_data))
     normalized = [normalize_promotion(value) for value in promotions]

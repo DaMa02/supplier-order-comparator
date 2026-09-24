@@ -1,74 +1,65 @@
 #!/usr/bin/env python3
-"""Il passo che accende la Fase 5: la shortlist diventa una decisione.
+"""CLI that turns a shortlist into an AI decision: the pipeline's AI-evaluation step.
 
-`app/ai_client.py` esiste dalla 5a, e' misurato, ha i suoi test — e **non ha
-nessun chiamante di produzione**. La prova sta nell'ultima run vera: zero
-`SEMANTICO_PROPOSTO`, tutti e 948 i casi semantici arrivati al revisore non
-decisi. Questo file e' il chiamante che mancava.
-
-Una CLI come tutte le altre della catena, perche' l'orchestratore della 6c le
-esegue come sottoprocessi e perche' cosi' si prova da sola:
+Like every other script in the pipeline, this runs as a subprocess of the
+orchestrator, and can equally be tested standalone:
 
     scripts/valuta_shortlist.py --shortlists <run>/dati/semantic_shortlists.json
                                 --output     <run>/dati/ai_decisions.json
                                 --rapporto   <run>/dati/ai_rapporto.json
 
-Quattro proprieta' non negoziabili, decise altrove e qui solo applicate.
+Four properties this script enforces, decided elsewhere.
 
-**1. Gli stati senza decisione si omettono dal file, non si inventano.**
-`merge_match_decisions.py` tratta gia' una coppia senza decisione come
-`DA_VERIFICARE`. Scrivere una `UNRESOLVED` finta al posto di un guasto di rete
-farebbe sparire la differenza fra «il modello non ha saputo» e «non ho potuto
-chiedere», e la seconda e' quella che si rimedia rilanciando.
+1. Cases without a decision are omitted from the output file, never faked.
+`merge_match_decisions.py` already treats a pair with no decision as
+`DA_VERIFICARE`. Writing a fake `UNRESOLVED` in place of a network failure
+would erase the difference between "the model couldn't tell" and "the
+question was never asked" — and the second is fixed by rerunning, the first
+isn't.
 
-**2. Il rapporto e' obbligatorio quanto il file delle decisioni.** E' la stessa
-lezione della 6a: `--decisions` facoltativo rendeva una fase AI mai eseguita
-indistinguibile da una che non aveva deciso niente. Un `--rapporto` facoltativo
-la riaprirebbe da un'altra porta, perche' il numero che
-`merge_match_decisions.py --decisions-attese` pretende deve venire da qui — dalla
-contabilita' di chi ha chiamato il modello — e non dal conteggio del file che si
-sta riconciliando, altrimenti il confronto e' una tautologia.
+2. The report is as mandatory as the decisions file. Making `--decisions`
+optional would make an AI phase that never ran indistinguishable from one
+that decided nothing; an optional `--rapporto` would reopen the same problem
+from another angle, since the count `merge_match_decisions.py
+--decisions-attese` expects must come from here — from the accounting of
+whoever actually called the model — not from counting the file being
+reconciled, or the check becomes a tautology.
 
-**3. Il degrado e' un valore di ritorno, mai un'eccezione.** E' il contratto del
-client e vale anche per la CLI: nessuna chiave, tetto di spesa superato, rete
-giu' escono con **i due file scritti**, un rapporto onesto e un codice d'uscita
-che distingue «non ho potuto» da «ho deciso tutto». La catena prosegue lo
-stesso: «se OpenRouter non risponde il programma tira dritto» e' una decisione
-presa, e senza il file delle decisioni `build_review_data.py` produrrebbe un
-confronto monco.
+3. Degradation is a return value, never an exception. Same contract as the
+client, and it holds for this CLI too: no key, spend cap hit, network down —
+all exit with both files written, an honest report, and an exit code that
+distinguishes "couldn't" from "decided everything". The pipeline still moves
+forward: "if OpenRouter doesn't answer, the program keeps going" is a
+deliberate choice, and without the decisions file `build_review_data.py`
+would produce an incomplete comparison.
 
-**4. Nessun test tocca la rete.** Il client accetta un trasporto iniettato, e
-`main()` accetta `crea_client` per la stessa ragione.
+4. No test touches the network. The client accepts an injected transport,
+and `main()` accepts `crea_client` for the same reason.
 
-⚠ **Ogni decisione porta l'impronta del caso su cui e' stata presa**, e la
-verifica `merge_match_decisions.py`. Le guardie della 6a confrontano shortlist e
-listino, **entrambi della run corrente**: rispetto a un file di decisioni preso
-da un'altra run sono cieche per costruzione, perche' il gestionale e' lo stesso
-file di settimana in settimana e le coppie `(riga, fornitore)` si sovrappongono
-quasi tutte.
+Every decision carries the fingerprint of the case it was made on, and
+`merge_match_decisions.py` verifies it. Its guards compare the shortlist and
+price list of the current run only: against a decisions file from another
+run they're blind by construction, because the management-software export is
+the same file week to week and the `(row, supplier)` pairs mostly overlap.
 
-**Che cosa l'impronta prova, e che cosa no** — la prima stesura di questo
-commento prometteva piu' di quanto mantiene, e la revisione l'ha smontata.
-Prova che il caso valutato e' **identico** a quello di oggi: stesso articolo,
-stessi candidati, stesso ordine, stessi punteggi. Se il listino di un fornitore
-non cambia da una settimana all'altra, il caso e' davvero lo stesso e la
-decisione della settimana scorsa passa — ed e' giusto che passi, perche' e'
-esattamente quello che fa apposta la memoria delle risposte. Quello che
-l'impronta **non** dice e' con che cosa quella decisione e' stata presa: per
-quello ogni riga porta anche `ai_modello`, `ai_versione_prompt` e
-`ai_versione_avversario`, e il confronto con la configurazione viva lo fara'
-l'orchestratore della 6c.
+What the fingerprint proves, and what it doesn't: it proves the evaluated
+case is identical to today's — same item, same candidates, same order, same
+scores. If a supplier's price list doesn't change from one week to the next,
+the case really is the same and last week's decision passes — correctly so,
+since that's exactly what the answer memory is for. What the fingerprint does
+not say is what that decision was made with: for that, every row also
+carries `ai_modello`, `ai_versione_prompt` and `ai_versione_avversario`, and
+comparing those against the live configuration is the orchestrator's job.
 
-Codici d'uscita, che sono un contratto con l'orchestratore:
+Exit codes, a contract with the orchestrator:
 
-| Codice | Significato |
+| Code | Meaning |
 |---|---|
-| 0 | valutato tutto quello che c'era da valutare |
-| 2 | errore d'uso: ingresso illeggibile, malformato, o uscite non scrivibili |
-| 5 | degradato: i due file ci sono, ma una parte dei casi non e' stata valutata |
+| 0 | evaluated everything there was to evaluate |
+| 2 | usage error: unreadable/malformed input, or outputs not writable |
+| 5 | degraded: both files exist, but some cases weren't evaluated |
 
-Il 5 **non e' un errore**: e' il modo di dire all'utente che la run e' degradata
-senza fermarla.
+5 is not an error: it tells the user the run is degraded without stopping it.
 """
 
 from __future__ import annotations
@@ -99,11 +90,11 @@ from ai_client import (  # noqa: E402
     oscura,
 )
 
-# L'impronta la definisce chi scrive le shortlist, e la usano in due: questo
-# script che la stampa su ogni decisione e `merge_match_decisions.py` che la
-# verifica. Si importa, non si ricopia — due implementazioni di un'impronta
-# vorrebbe dire che quella dimenticata e' quella che non riconosce un file
-# vecchio.
+# The fingerprint is defined where shortlists are written, and two things
+# use it: this script, which stamps it onto every decision, and
+# `merge_match_decisions.py`, which verifies it. Imported, not duplicated —
+# two implementations of a fingerprint risk drifting apart, and the
+# forgotten one is the one that fails to recognize an old file.
 from build_semantic_shortlists import impronta_caso  # noqa: E402
 
 
@@ -113,17 +104,17 @@ USCITA_DEGRADATO = 5
 
 
 def uscita_in_utf8() -> None:
-    """Stdout e stderr in UTF-8, qualunque sia la tabella codici della console.
+    """Forces stdout and stderr to UTF-8, regardless of the console's code page.
 
-    Stessa ragione di `merge_match_decisions.py`: su Windows un processo che
-    scrive su una pipe usa la codifica di sistema (cp1252 qui), e qui passano le
-    descrizioni vere dei prodotti — basta un `CAFFÈ` perche' l'orchestratore
-    della 6c si trovi davanti byte che non sono UTF-8."""
+    Same reason as `merge_match_decisions.py`: on Windows a process writing
+    to a pipe uses the system encoding (cp1252 here), and real product
+    descriptions flow through this stream — an accented character is enough
+    to hand the orchestrator bytes that aren't valid UTF-8."""
 
     for flusso in (sys.stdout, sys.stderr):
         try:
             flusso.reconfigure(encoding="utf-8")
-        except (AttributeError, ValueError):  # pragma: no cover - flussi rimpiazzati
+        except (AttributeError, ValueError):  # pragma: no cover - streams replaced in tests
             pass
 
 
@@ -155,15 +146,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 # ----------------------------------------------------------------------------
-# Dall'ingresso ai casi
+# From input to cases
 # ----------------------------------------------------------------------------
 
 
 def numero_di_riga(valore: Any, dove: str) -> int:
-    """Un numero di riga intero. Accetta `"441"`, rifiuta `441.5` e `True`.
+    """An integer row number. Accepts `"441"`, rejects `441.5` and `True`.
 
-    Non e' pedanteria: `int(441.9)` fa 441 in silenzio, e una riga sbagliata di
-    uno e' esattamente il difetto che la 6a ha passato tre giri a chiudere."""
+    Not pedantry: `int(441.9)` silently gives 441, and an off-by-one row is a
+    real, hard-to-notice class of bug this guards against."""
 
     if isinstance(valore, bool) or valore is None:
         raise ValueError(f"{dove}: {valore!r} non è un numero di riga")
@@ -173,10 +164,10 @@ def numero_di_riga(valore: Any, dove: str) -> int:
         numero = float(str(valore).strip())
     except (TypeError, ValueError):
         raise ValueError(f"{dove}: {valore!r} non è un numero di riga") from None
-    # `Infinity` e `NaN` sono JSON validi per Python, e `int()` su un infinito
-    # solleva `OverflowError`, che non e' fra quelle che `main` cattura: il
-    # risultato era un traceback, esito 1 e nessuno dei due file scritto.
-    # Trovato dalla revisione della 6b.
+    # `Infinity` and `NaN` are valid JSON as far as Python is concerned, and
+    # `int()` on an infinite value raises `OverflowError`, which `main`
+    # doesn't catch: left unguarded, this would produce a traceback and
+    # neither output file written.
     if not math.isfinite(numero):
         raise ValueError(f"{dove}: {valore!r} non è un numero di riga")
     if numero != int(numero):
@@ -185,12 +176,12 @@ def numero_di_riga(valore: Any, dove: str) -> int:
 
 
 def testo_non_vuoto(valore: Any, dove: str) -> str:
-    """Il testo com'e', purche' non sia vuoto.
+    """The text as-is, as long as it isn't empty.
 
-    Si restituisce **senza normalizzarlo**: e' quello che il modello leggera',
-    ed e' quello su cui si calcola l'impronta. Toglierci gli spazi qui e non in
-    `merge_match_decisions.py` farebbe fallire il confronto delle impronte su
-    ogni caso, cioe' butterebbe una run intera."""
+    Returned without normalizing it: this is what the model will read, and
+    what the fingerprint is computed over. Stripping whitespace here but not
+    in `merge_match_decisions.py` would break the fingerprint comparison on
+    every case, invalidating a whole run."""
 
     if not isinstance(valore, str) or not valore.strip():
         raise ValueError(f"{dove}: {valore!r} non è un testo utilizzabile")
@@ -207,16 +198,17 @@ def punteggio(valore: Any, dove: str) -> float:
 
 
 def caso_dalla_voce(voce: Any, posizione: int) -> CasoValutazione:
-    """Una voce di `semantic_shortlists.json` diventa un caso per il client.
+    """Turns one entry of `semantic_shortlists.json` into a case for the client.
 
-    Un ingresso malformato e' un guasto, non un caso da saltare: la shortlist la
-    scrive `build_semantic_shortlists.py`, quindi una voce storta vuol dire che
-    qualcosa a monte si e' rotto, e proseguire in silenzio toglierebbe prodotti
-    dal confronto senza dirlo.
+    A malformed entry is a failure, not a case to skip: the shortlist is
+    written by `build_semantic_shortlists.py`, so a broken entry means
+    something upstream is broken, and silently continuing would drop
+    products out of the comparison without saying so.
 
-    ⚠ `Candidato` non porta EAN ne' prezzo, ed e' voluto: l'EAN e' la verita' di
-    riferimento del banco di prova e mostrarlo renderebbe falsa ogni misura; il
-    prezzo non c'entra con l'identita' del prodotto. Non aggiungerli."""
+    `Candidato` carries no EAN and no price, deliberately: the EAN is the
+    benchmark's ground truth and showing it would invalidate any
+    measurement; the price has nothing to do with product identity. Don't
+    add them."""
 
     dove = f"voce {posizione}"
     if not isinstance(voce, dict):
@@ -255,17 +247,17 @@ def caso_dalla_voce(voce: Any, posizione: int) -> CasoValutazione:
 def casi_dalle_shortlist(
     shortlists: Any,
 ) -> tuple[list[CasoValutazione], list[CasoValutazione]]:
-    """I casi da valutare e quelli senza nessun candidato, separati.
+    """The cases to evaluate, and the ones with no candidate at all, separated.
 
-    I secondi esistono davvero — sei su 948 nella run del 10 agosto — e non si
-    mandano al modello: chiedergli di scegliere fra niente e' un uso sbagliato
-    dell'API, e infatti `ClientAI` solleva. Si contano nel rapporto e finiscono
-    a `DA_VERIFICARE` come tutte le coppie senza decisione.
+    The latter do occur in practice and are never sent to the model: asking
+    it to choose among nothing is API misuse, and `ClientAI` raises for it.
+    They're counted in the report and end up as `DA_VERIFICARE`, like every
+    pair without a decision.
 
-    Le coppie duplicate si fermano qui. Piu' avanti diventerebbero due decisioni
-    con la stessa coppia, e `merge_match_decisions.py` uscirebbe 3 dicendo
-    «decisione duplicata» — cioe' mandando a cercare il guasto nel file
-    sbagliato."""
+    Duplicate pairs are caught here. Left unchecked, they'd become two
+    decisions for the same pair further down the pipeline, and
+    `merge_match_decisions.py` would exit with a "duplicate decision" error —
+    pointing whoever debugs it at the wrong file."""
 
     if not isinstance(shortlists, list):
         raise ValueError(f"il file delle shortlist deve essere una lista, non {type(shortlists).__name__}")
@@ -286,17 +278,17 @@ def casi_dalle_shortlist(
 
 
 # ----------------------------------------------------------------------------
-# Dagli esiti alle decisioni
+# From outcomes to decisions
 # ----------------------------------------------------------------------------
 
 
 def impronta_del_caso(caso: CasoValutazione) -> str:
-    """L'impronta calcolata su cio' che e' stato davvero mandato al modello.
+    """The fingerprint computed on what was actually sent to the model.
 
-    Si passa il **caso**, non la voce da cui e' nato: se un giorno questo script
-    cambiasse qualcosa fra le due — un candidato scartato, una descrizione
-    accorciata — l'impronta deve raccontare quello che il modello ha visto, non
-    quello che c'era nel file."""
+    Takes the case, not the entry it came from: if this script ever
+    transformed something between the two — a discarded candidate, a
+    shortened description — the fingerprint must reflect what the model saw,
+    not what was in the file."""
 
     return impronta_caso(
         caso.gestionale_source_row,
@@ -311,13 +303,14 @@ def righe_decisioni(
     esiti: Sequence[Any],
     configurazione: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Le decisioni nel formato di `references/ai-decision-format.md`.
+    """The decisions in the format of `references/ai-decision-format.md`.
 
-    `valuta_molti_con_verifica` restituisce gli esiti **nell'ordine dei casi in
-    ingresso**, ed e' su questo che si appoggia l'accoppiamento. Se quella
-    proprieta' saltasse, ogni decisione finirebbe sull'articolo sbagliato con la
-    sua brava confidenza `ALTA`: qui si verifica invece di fidarsi, e un
-    disaccordo ferma tutto — meglio zero decisioni che 948 attribuite a caso."""
+    `valuta_molti_con_verifica` returns outcomes in the same order as the
+    input cases, and this pairing relies on that. If that guarantee ever
+    broke, every decision would land on the wrong item, `ALTA` confidence and
+    all — so this checks the pairing instead of trusting it, and a mismatch
+    stops everything: zero decisions is better than hundreds attributed at
+    random."""
 
     if len(esiti) != len(casi):
         raise RuntimeError(
@@ -337,27 +330,27 @@ def righe_decisioni(
             )
         righe.append({
             **decisione,
-            # Che cosa il modello ha visto: l'impronta la verifica il merge,
-            # la descrizione serve a chi legge un rapporto o un file a mano.
+            # What the model saw: the fingerprint is what the merge step
+            # verifies, the description is for anyone reading a report or a
+            # file by hand.
             "ai_impronta_caso": impronta_del_caso(caso),
             "ai_articolo_mostrato": caso.descrizione,
-            # **Chi** l'ha vista. L'impronta dice che il caso e' lo stesso, e
-            # quando il listino di un fornitore non cambia da una settimana
-            # all'altra il caso **e'** davvero lo stesso: l'impronta combacia e
-            # una decisione vecchia passa. Riapplicarla a un caso identico non
-            # e' sbagliato — e' quello che fa apposta la memoria — ma una presa
-            # con il prompt `v1`, che sbagliava 5 `ALTA` e non aveva la verifica
-            # avversariale, non deve poter entrare in un ordine di oggi senza
-            # che nessuno se ne accorga. Il confronto con la configurazione viva
-            # lo fa l'orchestratore della 6c: qui il dato si scrive, perche' e'
-            # l'unico momento in cui esiste.
+            # Who saw it. The fingerprint proves the case is the same, and
+            # when a supplier's price list doesn't change week to week the
+            # case really is the same, so an old decision legitimately
+            # passes — that's what the answer memory is for. But a decision
+            # made with an outdated, less accurate prompt version must not
+            # be able to enter today's order unnoticed. Comparing this
+            # against the live configuration is the orchestrator's job: this
+            # is only where the data gets recorded, since this is the only
+            # point where it exists.
             **provenienza(configurazione),
         })
     return righe
 
 
 def provenienza(configurazione: dict[str, Any] | None) -> dict[str, Any]:
-    """Con quale modello e con quale prompt è stata presa una decisione."""
+    """Which model and which prompt a decision was made with."""
 
     configurazione = configurazione or {}
     return {
@@ -378,26 +371,25 @@ def costruisci_rapporto(
     durata: float,
     guasto: str,
 ) -> dict[str, Any]:
-    """La contabilita' della fase, che e' l'unica cosa che qualcuno leggera'.
+    """The phase's accounting, and the one thing anyone will actually read.
 
-    Il programma finito gira da solo: cio' che non e' stato valutato va contato
-    qui, perche' i log non li legge nessuno.
+    The finished program runs unattended: what wasn't evaluated has to be
+    counted here, since nobody reads the logs.
 
-    ⚠ Due conteggi per stato, e non e' una svista. `per_stato` ha una voce per
-    caso; `per_stato_incluse_verifiche` viene dalla contabilita' del client e
-    comprende anche il secondo giro avversariale, che parte su ogni `ACCEPT`:
-    la sua somma e' maggiore del numero dei casi, ed e' giusto cosi'."""
+    Two counts by status, deliberately. `per_stato` has one entry per case;
+    `per_stato_incluse_verifiche` comes from the client's own accounting and
+    also includes the adversarial second pass, which runs on every `ACCEPT`
+    — so its total is larger than the number of cases, and that's expected."""
 
     per_stato = Counter(esito.stato for esito in esiti)
     mancanti = Counter(esito.stato for esito in esiti if not esito.decisione)
     per_azione = Counter(str(riga.get("action")) for riga in righe)
     non_decisi = len(casi) - len(righe)
-    # C'era del lavoro davanti e non se n'e' potuto tentare nemmeno un pezzo.
-    # Non e' un caso di scuola: basta che un adattatore cambi e un listino esca
-    # senza prezzi perche' `build_semantic_shortlists.py` scriva centinaia di
-    # voci con `candidates: []` — e senza questa riga il rapporto diceva
-    # «valutato tutto quello che c'era da valutare» ed usciva 0. Trovato dalla
-    # revisione della 6b, eseguendolo.
+    # There was work ahead and none of it could even be attempted. Not a
+    # corner case: an adapter change or a price list missing prices is
+    # enough for `build_semantic_shortlists.py` to write hundreds of entries
+    # with `candidates: []` — without this check the report would claim
+    # everything was evaluated and exit 0.
     niente_da_fare = len(casi) == 0 and len(senza_candidati) > 0
 
     if guasto:
@@ -422,7 +414,7 @@ def costruisci_rapporto(
         "casi_ricevuti": len(casi) + len(senza_candidati),
         "casi_valutabili": len(casi),
         "casi_senza_candidati": len(senza_candidati),
-        # E' il numero che l'orchestratore passera' a
+        # The number the orchestrator will pass to
         # `merge_match_decisions.py --decisions-attese`.
         "casi_decisi": len(righe),
         "casi_senza_decisione": non_decisi,
@@ -448,7 +440,7 @@ def costruisci_rapporto(
 
 
 def scrivi_json(percorso: Path, documento: Any) -> None:
-    """In binario, perché su Windows `write_text` trasforma gli a capo in CRLF."""
+    """Written in binary, since on Windows `write_text` turns newlines into CRLF."""
 
     percorso.parent.mkdir(parents=True, exist_ok=True)
     testo = json.dumps(documento, ensure_ascii=False, indent=2) + "\n"
@@ -456,23 +448,23 @@ def scrivi_json(percorso: Path, documento: Any) -> None:
 
 
 # ----------------------------------------------------------------------------
-# La CLI
+# The CLI
 # ----------------------------------------------------------------------------
 
 
 PREFISSO_AVANZAMENTO = "AVANZAMENTO "
-# Una riga ogni dieci casi, piu' la prima e l'ultima: su 948 casi sono un
-# centinaio di righe, abbastanza per una barra che si muove e poche abbastanza
-# da non trasformare `stderr` in un file di log.
+# One line every ten cases, plus the first and the last: on a run of
+# hundreds of cases that's around a hundred lines, enough for a progress bar
+# to move and few enough not to turn `stderr` into a log file.
 CASI_FRA_DUE_ANNUNCI = 10
 
 
 def _annuncia_avanzamento(client: Any) -> Callable[[int, int], None]:
-    """Stampa su `stderr` a che punto e' l'infornata, in forma leggibile a macchina.
+    """Prints batch progress to `stderr`, in a machine-readable form.
 
-    Il formato e' una riga sola — `AVANZAMENTO {json}` — perche' chi la legge e'
-    un altro programma che scorre il flusso mentre arriva, e un JSON su piu'
-    righe non si sa quando finisce.
+    The format is a single line — `AVANZAMENTO {json}` — because the reader
+    is another program streaming this output as it arrives, and a multi-line
+    JSON value has no clear end marker for a line-based reader.
     """
 
     def annuncia(fatti: int, totali: int) -> None:
@@ -518,10 +510,10 @@ def main(
         flush=True,
     )
 
-    # Da qui in avanti **si scrivono sempre i due file**. Un guasto imprevisto
-    # non deve lasciare in mano all'orchestratore un traceback e nessun
-    # artefatto: il `resolved_matches.json` della run precedente resterebbe sul
-    # disco a farsi leggere come fresco. E' la stessa scelta della 6a.
+    # From here on, both output files are always written. An unexpected
+    # failure must not leave the orchestrator with a traceback and no
+    # artifacts: the previous run's `resolved_matches.json` would still be on
+    # disk, ready to be read as if it were fresh.
     client = None
     esiti: list[Any] = []
     righe: list[dict[str, Any]] = []
@@ -533,20 +525,20 @@ def main(
             if crea_client is not None
             else ClientAI(configurazione, memoria=args.memoria)
         )
-        # L'avanzamento esce su `stderr` e non su `stdout`: `stdout` porta il
-        # rapporto finale, che l'orchestratore legge come JSON, e mescolarci
-        # dentro delle righe di stato lo renderebbe illeggibile.
+        # Progress goes to `stderr`, not `stdout`: `stdout` carries the final
+        # report, which the orchestrator reads as JSON, and interleaving
+        # status lines into it would make that unparseable.
         try:
             client.avanzamento = _annuncia_avanzamento(client)
-        except AttributeError:  # pragma: no cover - un client finto senza attributo
+        except AttributeError:  # pragma: no cover - a stub client with no such attribute
             pass
         esiti = list(client.valuta_molti_con_verifica(casi))
         righe = righe_decisioni(casi, esiti, configurazione)
-    except Exception as errore:  # noqa: BLE001 — il degrado e' un valore di ritorno
-        # `oscura` anche qui: un messaggio d'errore che riporta l'URL chiamato
-        # o un'intestazione puo' portarsi dietro la chiave. Le si passa la
-        # chiave vera invece di `None`: la sostituzione esatta e' la difesa
-        # forte, l'espressione regolare `sk-…` e' solo la rete sotto.
+    except Exception as errore:  # noqa: BLE001 — degradation is a return value
+        # `oscura` here too: an error message echoing the called URL or a
+        # header could carry the key along with it. The real key is passed
+        # in rather than `None`, since exact substitution is the strong
+        # defense and the `sk-…` regex is only the fallback net.
         guasto = f"{type(errore).__name__}: {oscura(str(errore), leggi_chiave())}"
         righe = []
     durata = time.monotonic() - inizio
@@ -564,12 +556,12 @@ def main(
     )
 
     try:
-        # Il rapporto della run precedente si toglie **prima**: se la scrittura
-        # si ferma a meta', chi legge deve trovare un rapporto che non c'e' — e
-        # accorgersene — non quello di ieri accanto alle decisioni di oggi.
+        # The previous run's report is removed first: if the write stops
+        # halfway, whoever reads it should find no report — and notice —
+        # rather than yesterday's report next to today's decisions.
         args.rapporto.unlink(missing_ok=True)
-        # Prima le decisioni, poi il rapporto: un rapporto presente vuol dire
-        # che le decisioni sono state scritte per intero.
+        # Decisions before the report: a report being present means the
+        # decisions were written completely.
         scrivi_json(args.output, righe)
         scrivi_json(args.rapporto, rapporto)
     except OSError as errore:

@@ -38,9 +38,9 @@ from prepare_manifest_sources import (
     read_mapped_xlsx_supplier,
 )
 
-# Lo scrittore di file .xls sta gia' nel collaudo del lettore: costruisce un
-# contenitore OLE2 vero con dentro record BIFF8 veri.  Riusarlo evita di avere
-# due scrittori diversi che possono divergere.
+# The .xls writer already lives in the reader's own test module: it builds a
+# real OLE2 container with real BIFF8 records. Reusing it avoids two writers
+# that could drift apart.
 import test_xls_reader as scrittore_xls
 
 
@@ -63,17 +63,17 @@ def sha256(path: Path) -> str:
 
 
 def impronta_file(path: Path) -> tuple[int, int, str]:
-    """Dimensione, data di modifica e contenuto di un file.
+    """Return a file's size, mtime, and content hash.
 
-    Se cambia anche uno solo dei tre, il file è stato toccato: riscriverlo con
-    gli stessi identici byte ne cambia comunque la data.
+    If any one of the three changes, the file was touched: rewriting it with
+    identical bytes still changes its mtime.
     """
     stato = path.stat()
     return stato.st_size, stato.st_mtime_ns, sha256(path)
 
 
 def esegui_script(name: str, *arguments: object) -> subprocess.CompletedProcess[bytes]:
-    """Esegue uno script della pipeline come lo esegue l'utente."""
+    """Run a pipeline script the same way the operator does."""
     return subprocess.run(
         [sys.executable, str(SCRIPTS / name), *(str(value) for value in arguments)],
         cwd=SKILL_ROOT,
@@ -83,7 +83,7 @@ def esegui_script(name: str, *arguments: object) -> subprocess.CompletedProcess[
 
 
 def esegui_script_riuscito(name: str, *arguments: object) -> subprocess.CompletedProcess[bytes]:
-    """Come esegui_script, ma un fallimento diventa subito leggibile."""
+    """Like `esegui_script`, but a failure is immediately readable instead of a bare exit code."""
     result = esegui_script(name, *arguments)
     if result.returncode != 0:
         raise AssertionError(
@@ -578,7 +578,7 @@ class SchemaPipelineTests(unittest.TestCase):
 # Noce in formato Excel 97-2003 (.xls)
 # ---------------------------------------------------------------------------
 
-# Le intestazioni del listino vero, dalla colonna B alla colonna Q.
+# The real price list's headers, from column B to column Q.
 INTESTAZIONI_NOCE = (
     "codice_a_barre", "codice", "descrizione_articolo", "pezzi_x_cartone",
     "cartoni_x_stra", "strati_x_pal", "prezzo", "quantita", "offerta",
@@ -586,8 +586,8 @@ INTESTAZIONI_NOCE = (
     "descrizione_offerta", "Iva",
 )
 
-# Il listino vero, misurato: 5,5 MB, 17.143 prodotti dalla riga 6 alla 17148,
-# poi 931 righe che contengono soltanto la formula della colonna Importo.
+# The real price list, as measured: 5.5 MB, 17,143 products from row 6 to
+# row 17148, followed by 931 rows that only carry the Importo column formula.
 LISTINO_VERO = Path(
     os.environ.get(
         "LISTINO_XLS_DI_PROVA",
@@ -601,12 +601,12 @@ def celle_listino_noce(
     righe_in_coda: int = 0,
     intestazioni: tuple[str, ...] = INTESTAZIONI_NOCE,
 ) -> bytes:
-    """Costruisce i record BIFF di un foglio con la forma del listino Noce.
+    """Build the BIFF records of a sheet shaped like the Noce price list.
 
-    La colonna A resta vuota, l'intestazione sta alla riga 5 e il primo
-    prodotto alla riga 6, come nel file vero.  Le righe in coda contengono
-    soltanto la formula della colonna Importo: sono quelle che Excel si porta
-    dietro dopo l'ultimo prodotto e che non devono diventare articoli.
+    Column A stays empty, the header sits on row 5, and the first product on
+    row 6, matching the real file. Trailing rows carry only the Importo
+    column formula, the same way Excel leaves them after the last product,
+    and they must not turn into products.
     """
     contenuto = scrittore_xls.label(3, 3, "i prezzi offerta sono in grassetto")
     for scarto, testo in enumerate(intestazioni):
@@ -655,12 +655,12 @@ def scrivi_listino_noce(
     righe_in_coda: int = 0,
     intestazioni: tuple[str, ...] = INTESTAZIONI_NOCE,
 ) -> Path:
-    """Scrive un .xls vero: contenitore OLE2, record BIFF8, prezzi in grassetto."""
+    """Write a real .xls file: OLE2 container, BIFF8 records, bold-flagged prices."""
     percorso.write_bytes(
         scrittore_xls.costruisci_xls(
             [("Foglio1", celle_listino_noce(righe, righe_in_coda, intestazioni)), ("Foglio2", b"")],
-            # Due caratteri: normale e grassetto.  Il formato 1 usa il secondo,
-            # ed e' cosi' che si scrive un prezzo in offerta.
+            # Two fonts: regular and bold. Format 1 uses the second one, which
+            # is how a promotional price is flagged in this file format.
             pesi_font=(400, 700),
             font_di_xf=(0, 1),
         )
@@ -690,42 +690,42 @@ def scrivi_gestionale(percorso: Path, ean: str, descrizione: str) -> Path:
     return percorso
 
 
-# L'anno prossimo, cosi' la scadenza credibile resta credibile anche fra
-# qualche anno e il collaudo non scade insieme al prodotto.
+# Anchored to next year, so this stays a plausible expiry date indefinitely
+# instead of the test expiring along with the product.
 ANNO_PROSSIMO = date.today().year + 1
 
 RIGHE_DI_PROVA: list[dict[str, object]] = [
-    # riga 6: articolo normale, e' anche quello che il gestionale cerca
+    # row 6: a normal item, also the one the gestionale export looks up
     {"ean": "8009123304516", "codice": "0000000450011", "descrizione": "ABETO CASSERUOLA CUCINAMI ALL.32 H12",
      "pezzi": 1, "prezzo": 21.75, "cat": "NO FOOD"},
-    # riga 7: scadenza credibile nella descrizione e codice con gli zeri iniziali
+    # row 7: a plausible expiry date in the description, and a code with leading zeros
     {"ean": "8000000000002", "codice": "0000000449070",
      "descrizione": f"DETERSIVO PIATTI ML.500<br> Scadenza 30/08/{ANNO_PROSSIMO}",
      "pezzi": 12, "prezzo": 0.38, "cat": "NO FOOD"},
-    # riga 8: la scadenza assurda, come quella al 2057 del listino vero
+    # row 8: an absurd expiry date, like the 2057 one in the real price list
     {"ean": "8000000000003", "codice": "0000000461823",
      "descrizione": "SGRASSATORE UNIVERSALE ML.750<br> Scadenza 24/05/2057",
      "pezzi": 6, "prezzo": 1.20, "cat": "NO FOOD"},
-    # riga 9: una data che sul calendario non esiste
+    # row 9: a date that doesn't exist on the calendar
     {"ean": "8000000000004", "codice": "0000000461824",
      "descrizione": "SCATOLA REGALO GRANDE<br> Scadenza 31/02/2027",
      "pezzi": 4, "prezzo": 2.10, "cat": "NO FOOD"},
-    # riga 10: senza codice a barre
+    # row 10: no barcode
     {"ean": "", "codice": "0000000135976", "descrizione": "SAPONE SENZA CODICE A BARRE",
      "pezzi": 24, "prezzo": 0.55, "cat": "NO FOOD"},
-    # riga 11: codice a barre corto, cioe' interno del fornitore
+    # row 11: a short barcode, i.e. a supplier-internal code
     {"ean": "87177756", "codice": "0000000449069", "descrizione": "PRODOTTO CON CODICE INTERNO",
      "pezzi": 12, "prezzo": 0.49, "cat": "NO FOOD"},
-    # riga 12: il codice articolo scritto come numero invece che come testo
+    # row 12: the item code written as a number instead of text
     {"ean": "8000000000007", "codice": 449070, "descrizione": "CODICE SCRITTO COME NUMERO",
      "pezzi": 6, "prezzo": 3.30, "cat": "NO FOOD"},
-    # riga 13: offerta segnalata solo dal prezzo in grassetto
+    # row 13: a promotion signalled only by the bold price
     {"ean": "8000000000008", "codice": "0000000000123", "descrizione": "OFFERTA SEGNALATA IN GRASSETTO",
      "pezzi": 6, "prezzo": 2.50, "cat": "NO FOOD", "prezzo_in_grassetto": True},
-    # riga 14: offerta dichiarata nella colonna offerta
+    # row 14: a promotion declared in the promotion column
     {"ean": "8000000000009", "codice": "0000000000124", "descrizione": "OFFERTA DICHIARATA IN COLONNA",
      "pezzi": 6, "prezzo": 2.60, "cat": "NO FOOD", "offerta": "SI"},
-    # righe 15 e 16: alimentari, l'utente non li tratta
+    # rows 15-16: food items, which this store doesn't stock
     {"ean": "8000000000010", "codice": "0000000000125", "descrizione": "PASTA DI SEMOLA GR.500",
      "pezzi": 20, "prezzo": 0.89, "cat": "FOOD"},
     {"ean": "8000000000011", "codice": "0000000000126",
@@ -740,10 +740,10 @@ RIGHE_FOOD = len(RIGHE_DI_PROVA) - RIGHE_NO_FOOD
 
 
 class NoceXlsTests(unittest.TestCase):
-    """L'adattatore noce_xls_v1 dal riconoscimento del file al confronto.
+    """The `noce_xls_v1` adapter, from file recognition through to the comparison.
 
-    Il listino di prova viene letto una volta sola: tutte le prove guardano lo
-    stesso risultato, come farebbe l'utente con una sola esecuzione.
+    The test price list is read once; every test in this class inspects the
+    same result, the way a single pipeline run would.
     """
 
     maxDiff = None
@@ -766,8 +766,8 @@ class NoceXlsTests(unittest.TestCase):
             }),
         ]}), encoding="utf-8")
 
-        # Prima il cancello: un manifest che nomina noce_xls_v1 deve passare
-        # la validazione, altrimenti l'adattatore non entra nella pipeline.
+        # The gate first: a manifest naming noce_xls_v1 must pass validation,
+        # or the adapter never enters the pipeline.
         convalida = cls.radice / "manifest_report.json"
         esegui_script_riuscito(
             "validate_input_manifest.py",
@@ -787,10 +787,10 @@ class NoceXlsTests(unittest.TestCase):
         cls.righe = {record["source_row"]: record for record in cls.normalized["noce"]}
         cls.addClassCleanup(shutil.rmtree, cls.radice, True)
 
-    # -- riconoscimento del formato ----------------------------------------
+    # -- format recognition --------------------------------------------------
 
     def test_lo_xls_e_riconosciuto_dai_byte_e_non_dall_estensione(self) -> None:
-        """Un listino .xls rinominato .xlsx resta un .xls e viene letto lo stesso."""
+        """An .xls price list renamed to .xlsx is still read as .xls."""
         with tempfile.TemporaryDirectory() as temporaneo:
             radice = Path(temporaneo)
             travestito = scrivi_listino_noce(radice / "listino_noce.xlsx", RIGHE_DI_PROVA, RIGHE_IN_CODA)
@@ -811,7 +811,7 @@ class NoceXlsTests(unittest.TestCase):
             self.assertIn("riga 6", " ".join(hint["evidence"]))
 
     def test_un_xlsx_rinominato_xls_non_fa_esplodere_niente(self) -> None:
-        """La strada opposta: dentro c'è un .xlsx e va letto con openpyxl."""
+        """The reverse case: an .xlsx file inside must be read with openpyxl."""
         with tempfile.TemporaryDirectory() as temporaneo:
             radice = Path(temporaneo)
             travestito = radice / "listino_betulla.xls"
@@ -835,10 +835,10 @@ class NoceXlsTests(unittest.TestCase):
             self.assertEqual(profilo["details"]["format"], "xlsx")
             self.assertEqual(profilo["deterministic_hint"]["adapter_id"], "betulla_v1")
 
-    # -- ingresso nella pipeline -------------------------------------------
+    # -- entering the pipeline ------------------------------------------------
 
     def test_il_listino_xls_entra_nel_confronto(self) -> None:
-        """Il manifest passa la validazione e il prodotto arriva al confronto."""
+        """The manifest passes validation and the product reaches the comparison."""
         self.assertTrue(self.convalida["valid"], self.convalida["errors"])
         self.assertEqual(self.convalida["suppliers"], ["noce"])
         self.assertEqual(self.audit["inputs"][1]["content_format"], "xls")
@@ -848,7 +848,7 @@ class NoceXlsTests(unittest.TestCase):
         self.assertEqual(self.audit["exact_unique_usable"]["noce"], 1)
 
     def test_un_foglio_sbagliato_viene_spiegato_in_italiano(self) -> None:
-        """Se la mappatura punta al foglio sbagliato l'utente deve capire perché."""
+        """When the mapping points at the wrong sheet, the operator needs a readable reason."""
         adattatore = next(
             voce for voce in json.loads(ADAPTERS.read_text(encoding="utf-8"))["adapters"]
             if voce["id"] == "noce_xls_v1"
@@ -879,10 +879,10 @@ class NoceXlsTests(unittest.TestCase):
         self.assertIn("non arriva alla riga 5", messaggio)
         self.assertNotIn("list index out of range", messaggio)
 
-    # -- le regole dichiarate ----------------------------------------------
+    # -- the declared rules -----------------------------------------------------
 
     def test_le_righe_food_sono_scartate_e_contate(self) -> None:
-        """L'utente non tratta l'alimentare: le righe FOOD non entrano, e si sa quante."""
+        """This store doesn't stock food items: FOOD rows are excluded, and the count is reported."""
         self.assertEqual(len(self.normalized["noce"]), RIGHE_NO_FOOD)
         self.assertEqual(self.lettura["rows_excluded"], {"food": RIGHE_FOOD})
         self.assertEqual(self.lettura["rows_kept"], RIGHE_NO_FOOD)
@@ -893,7 +893,7 @@ class NoceXlsTests(unittest.TestCase):
         self.assertNotIn("BISCOTTI FROLLINI GR.300", descrizioni)
 
     def test_il_confine_dei_dati_non_lascia_prodotti_fantasma(self) -> None:
-        """Dopo l'ultimo prodotto restano solo formule: non sono articoli."""
+        """Rows after the last product carry only formulas; they must not become items."""
         self.assertEqual(self.lettura["sheet_rows"], ULTIMA_RIGA_DATI + RIGHE_IN_CODA)
         self.assertEqual(self.lettura["data_start_row"], PRIMA_RIGA_DATI)
         self.assertEqual(self.lettura["data_end_row"], ULTIMA_RIGA_DATI)
@@ -902,7 +902,7 @@ class NoceXlsTests(unittest.TestCase):
         self.assertTrue(all(record["description"] for record in self.normalized["noce"]))
 
     def test_la_scadenza_esce_dalla_descrizione_che_resta_pulita(self) -> None:
-        """La data si legge, la descrizione si ripulisce dal frammento HTML."""
+        """The expiry date is parsed out, and the description is stripped of the HTML fragment."""
         record = self.righe[7]
         self.assertEqual(record["description"], "DETERSIVO PIATTI ML.500")
         self.assertEqual(record["expiry_date"], f"{ANNO_PROSSIMO}-08-30")
@@ -914,7 +914,8 @@ class NoceXlsTests(unittest.TestCase):
         self.assertEqual(self.lettura["expiry_dates_read"], 2)
 
     def test_una_data_assurda_si_segnala_e_non_ferma_la_lettura(self) -> None:
-        """Il 2057 e il 31 febbraio si leggono, si dichiarano e non si credono."""
+        """An implausible year and a nonexistent calendar date are both parsed,
+        flagged, and not trusted as real expiry dates."""
         assurda = self.righe[8]
         self.assertEqual(assurda["description"], "SGRASSATORE UNIVERSALE ML.750")
         self.assertEqual(assurda["expiry_date"], "2057-05-24")
@@ -932,19 +933,19 @@ class NoceXlsTests(unittest.TestCase):
         self.assertEqual(sorted(avvisi), [8, 9])
         self.assertIn("fuori dal credibile", avvisi[8])
         self.assertIn("scritta male", avvisi[9])
-        # la lettura e' andata avanti fino in fondo
+        # reading continued through to the end of the sheet
         self.assertEqual(len(self.normalized["noce"]), RIGHE_NO_FOOD)
 
     def test_gli_zeri_iniziali_del_codice_articolo_restano(self) -> None:
-        """Il codice fornitore è un testo: 0000000449070 non è 449070."""
+        """The supplier code is text: 0000000449070 is not the same as 449070."""
         self.assertEqual(self.righe[7]["supplier_code"], "0000000449070")
         self.assertIsInstance(self.righe[7]["supplier_code"], str)
-        # e una cella scritta come numero diventa testo, senza la coda ".0"
+        # a cell written as a number also becomes text, without a trailing ".0"
         self.assertEqual(self.righe[12]["supplier_code"], "449070")
         self.assertIsInstance(self.righe[12]["supplier_code"], str)
 
     def test_un_ean_corto_o_vuoto_non_fa_scartare_la_riga(self) -> None:
-        """Codici a barre interni o assenti restano articoli ordinabili."""
+        """A short internal code or a missing barcode still leaves the row orderable."""
         vuoto = self.righe[10]
         self.assertEqual(vuoto["ean"], "")
         self.assertEqual(vuoto["description"], "SAPONE SENZA CODICE A BARRE")
@@ -954,18 +955,18 @@ class NoceXlsTests(unittest.TestCase):
         self.assertTrue(corto["usable"])
 
     def test_il_prezzo_e_al_pezzo_e_l_ordine_in_cartoni(self) -> None:
-        """I due campi che il resto del programma già usa, senza conversioni inventate."""
+        """The two fields the rest of the program already relies on, without invented conversions."""
         record = self.righe[7]
         self.assertEqual(record["unit_price_net"], "0.3800")
         self.assertEqual(record["pieces_per_carton"], "12.0000")
         self.assertIsNone(record["order_multiplier"])
         self.assertEqual(record["order_column"], "I")
-        # Il totale di riga e' quello della colonna Importo: cartoni * prezzo al
-        # pezzo * pezzi per cartone.  Con 3 cartoni: 3 * 0,38 * 12 = 13,68.
+        # The row total is the Importo column: cartons * price per piece *
+        # pieces per carton. With 3 cartons: 3 * 0.38 * 12 = 13.68.
         self.assertAlmostEqual(3 * float(record["unit_price_net"]) * float(record["pieces_per_carton"]), 13.68, places=4)
 
     def test_il_prezzo_in_grassetto_segnala_l_offerta(self) -> None:
-        """«I prezzi offerta sono in grassetto»: quel segnale non si butta via."""
+        """The reader's "bold price means promotion" rule; that signal must not be lost."""
         grassetto = self.righe[13]
         self.assertTrue(grassetto["offer_price_bold"])
         self.assertTrue(grassetto["offer"])
@@ -984,7 +985,7 @@ class NoceXlsTests(unittest.TestCase):
     "Si può indicare un altro percorso con la variabile d'ambiente LISTINO_XLS_DI_PROVA.",
 )
 class ListinoNoceVeroTests(unittest.TestCase):
-    """La stessa pipeline sul file vero da 5,5 MB, con i numeri già misurati."""
+    """The same pipeline run against the real 5.5 MB file, against pre-measured numbers."""
 
     maxDiff = None
 
@@ -1016,7 +1017,7 @@ class ListinoNoceVeroTests(unittest.TestCase):
         cls.addClassCleanup(shutil.rmtree, cls.radice, True)
 
     def test_i_numeri_del_listino_vero(self) -> None:
-        """17.143 righe di dati: 8.292 alimentari fuori, 8.851 dentro."""
+        """17,143 data rows: 8,292 food items excluded, 8,851 kept."""
         self.assertEqual(self.lettura["sheet_rows"], 18079)
         self.assertEqual(self.lettura["data_start_row"], 6)
         self.assertEqual(self.lettura["data_end_row"], 17148)
@@ -1026,7 +1027,7 @@ class ListinoNoceVeroTests(unittest.TestCase):
         self.assertEqual(len(self.normalized["noce"]), 8851)
 
     def test_codici_scadenze_e_codici_a_barre_del_listino_vero(self) -> None:
-        """I campi delicati, contati sul file vero e non stimati."""
+        """The delicate fields, counted on the real file rather than estimated."""
         righe = self.normalized["noce"]
         self.assertTrue(all(isinstance(record["supplier_code"], str) for record in righe))
         self.assertTrue(all(len(record["supplier_code"]) == 13 for record in righe))
@@ -1038,16 +1039,16 @@ class ListinoNoceVeroTests(unittest.TestCase):
         self.assertTrue(all(record["usable"] for record in righe))
 
     def test_il_listino_vero_non_viene_toccato(self) -> None:
-        """Principio numero uno: gli input originali restano come sono arrivati.
+        """Source inputs must stay exactly as they arrived.
 
-        Si guarda anche la data di modifica, non solo il contenuto: riscrivere
-        un file con gli stessi byte lo lascia identico ma non è leggerlo.
+        The mtime is checked too, not just content: rewriting a file with the
+        same bytes leaves it byte-identical but isn't the same as not touching it.
         """
         self.assertEqual(impronta_file(LISTINO_VERO), self.prima)
 
 
 # ---------------------------------------------------------------------------
-# Fase 9b — la mappatura delle colonne e il grassetto
+# Column mapping and the bold-price signal
 # ---------------------------------------------------------------------------
 
 
@@ -1056,10 +1057,10 @@ def scrivi_listino_noce_xlsx(
     righe: list[dict[str, object]],
     intestazioni: tuple[str, ...] = INTESTAZIONI_NOCE,
 ) -> Path:
-    """Lo stesso listino, ma in .xlsx: e' cosi' che arriva se qualcuno lo risalva.
+    """Build the same price list, but as .xlsx, matching what a re-save produces.
 
-    Serve a provare che il grassetto del prezzo — il segnale dell'offerta — non
-    dipende dal formato in cui il documento e' arrivato.
+    Proves that the bold-price promotion signal doesn't depend on the
+    document's original file format.
     """
     workbook = Workbook()
     sheet = workbook.active
@@ -1083,7 +1084,7 @@ def scrivi_listino_noce_xlsx(
 
 
 class MappaturaDelleColonneTests(unittest.TestCase):
-    """Una colonna dichiarata per nome non deve mai diventare un'altra colonna."""
+    """A column declared by name must never silently resolve to a different one."""
 
     maxDiff = None
 
@@ -1100,10 +1101,10 @@ class MappaturaDelleColonneTests(unittest.TestCase):
         self.assertEqual(column_number("Codice", intestazione), 2)
 
     def test_un_nome_assente_non_ripiega_sulle_lettere(self) -> None:
-        """«cat» e' anche un riferimento di colonna Excel valido: CAT = 2394.
+        """`cat` is also a valid Excel column reference (CAT = column 2074).
 
-        Col ripiego, un listino che rinomina quella colonna verrebbe letto
-        puntando a una colonna vuota, e nessuno se ne accorgerebbe.
+        Falling back to that interpretation would silently point a price list
+        that renamed the column at an empty column instead, with no warning.
         """
         intestazione = ["codice_a_barre", "codice", "descrizione_articolo", "categoria"]
         with self.assertRaises(ValueError) as errore:
@@ -1111,20 +1112,20 @@ class MappaturaDelleColonneTests(unittest.TestCase):
         messaggio = str(errore.exception)
         self.assertIn("«cat»", messaggio)
         self.assertIn("categoria", messaggio)
-        # 2074 è la colonna CAT secondo la stessa funzione che il progetto usa
-        # per le lettere: se comparisse nel messaggio vorrebbe dire che il
-        # ripiego è tornato.
+        # 2074 is what the project's own letter-to-column function resolves
+        # "CAT" to; seeing it in the message would mean the letter fallback
+        # crept back in.
         self.assertEqual(column_index_from_string("CAT"), 2074)
         self.assertNotIn("2074", messaggio)
 
     def test_senza_intestazione_le_lettere_restano_ammesse(self) -> None:
-        """Dove non c'è una riga di intestazione da leggere, la lettera è l'unico modo."""
+        """Where there's no header row to read, a column letter is the only option."""
         self.assertEqual(column_number("C"), 3)
         self.assertEqual(column_number("AA"), 27)
         self.assertEqual(column_number(7), 7)
 
     def test_una_colonna_rinominata_ferma_la_lettura_invece_di_far_entrare_il_food(self) -> None:
-        """La prova che conta: 2 righe alimentari su 11 non devono entrare in silenzio."""
+        """The test that matters: 2 food rows out of 11 must not slip through silently."""
         with tempfile.TemporaryDirectory() as temporaneo:
             intestazioni = tuple(
                 "categoria_merceologica" if nome == "cat" else nome
@@ -1142,7 +1143,7 @@ class MappaturaDelleColonneTests(unittest.TestCase):
             self.assertIn("categoria_merceologica", messaggio)
 
     def test_il_grassetto_del_prezzo_si_legge_anche_da_un_xlsx(self) -> None:
-        """Risalvare il listino in .xlsx non deve far sparire il segnale dell'offerta."""
+        """Re-saving the price list as .xlsx must not lose the promotion signal."""
         with tempfile.TemporaryDirectory() as temporaneo:
             listino = scrivi_listino_noce_xlsx(
                 Path(temporaneo) / "listino_noce.xlsx", RIGHE_DI_PROVA,
@@ -1158,12 +1159,12 @@ class MappaturaDelleColonneTests(unittest.TestCase):
             normale = righe["ABETO CASSERUOLA CUCINAMI ALL.32 H12"]
             self.assertFalse(normale["offer_price_bold"])
             self.assertFalse(normale["offer"])
-            # La colonna «offerta» continua a valere da sola, senza grassetto.
+            # The "offerta" column still counts on its own, without bold.
             self.assertTrue(righe["OFFERTA DICHIARATA IN COLONNA"]["offer"])
             self.assertFalse(righe["OFFERTA DICHIARATA IN COLONNA"]["offer_price_bold"])
 
     def test_il_valore_delle_celle_non_cambia_leggendo_anche_il_grassetto(self) -> None:
-        """Il ramo .xlsx è stato riscritto: i valori devono restare quelli."""
+        """The .xlsx branch was rewritten to also read bold formatting; cell values must be unaffected."""
         with tempfile.TemporaryDirectory() as temporaneo:
             listino = scrivi_listino_noce_xlsx(
                 Path(temporaneo) / "listino_noce.xlsx", RIGHE_DI_PROVA,
@@ -1180,7 +1181,7 @@ class MappaturaDelleColonneTests(unittest.TestCase):
             self.assertEqual(prima["pieces_per_carton"], "1.0000")
 
     def test_una_cella_vuota_non_e_un_prezzo_in_offerta(self) -> None:
-        """Le celle mai scritte non hanno il carattere: valgono «non in grassetto»."""
+        """A cell that was never written has no font style; it counts as "not bold"."""
         senza_prezzo = [*RIGHE_DI_PROVA, {
             "ean": "8000000000099", "codice": "0000000000999",
             "descrizione": "ARTICOLO SENZA PREZZO", "pezzi": 6, "prezzo": None, "cat": "NO FOOD",
@@ -1196,7 +1197,7 @@ class MappaturaDelleColonneTests(unittest.TestCase):
             self.assertFalse(riga["usable"])
 
     def test_il_grassetto_si_legge_solo_quando_la_mappatura_lo_chiede(self) -> None:
-        """Leggerlo da un .xlsx costa dal 5 al 45%: non si paga senza motivo."""
+        """Reading bold formatting from an .xlsx adds real overhead (5-45%); it's not paid unless requested."""
         with tempfile.TemporaryDirectory() as temporaneo:
             listino = scrivi_listino_noce_xlsx(Path(temporaneo) / "listino.xlsx", RIGHE_DI_PROVA)
             senza = {chiave: valore for chiave, valore in self.mappatura.items() if chiave != "offer_from_bold"}
@@ -1219,8 +1220,8 @@ class MappaturaDelleColonneTests(unittest.TestCase):
             self.assertIn("riga di intestazione -1", str(errore.exception))
 
     def test_un_csv_senza_intestazione_si_mappa_dichiarandolo(self) -> None:
-        """Senza una via d'uscita, un CSV senza intestazione non sarebbe più leggibile:
-        la prima riga di prodotti verrebbe presa per la riga dei nomi."""
+        """Without a way to declare "no header row", a headerless CSV would be
+        unreadable: its first product row would be mistaken for the header."""
         with tempfile.TemporaryDirectory() as temporaneo:
             percorso = Path(temporaneo) / "listino_senza_intestazione.csv"
             percorso.write_text(
@@ -1251,12 +1252,12 @@ class MappaturaDelleColonneTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Fase 4 — l'inspector smette di conoscere i fornitori
+# The inspector doesn't hardcode supplier knowledge
 # ---------------------------------------------------------------------------
 
-# Intestazioni che non somigliano a niente di censito: nessuno di questi token
-# compare nell'elenco di parole di `header_candidates`.  Servono a provare che
-# un fornitore nuovo arriva al registro lo stesso.
+# Headers that don't resemble anything the inspector knows about: none of
+# these tokens appear in `header_candidates`' word list. They prove that a
+# new supplier still reaches the registry.
 INTESTAZIONI_MAI_VISTE = ["Rif. Interno", "Barre", "Denominazione", "Confezione", "Imponibile"]
 
 INTESTAZIONI_BETULLA = ["EAN", "CodArt", "ORDINE", "Descr.Commerciale", "PzCt",
@@ -1264,13 +1265,12 @@ INTESTAZIONI_BETULLA = ["EAN", "CodArt", "ORDINE", "Descr.Commerciale", "PzCt",
 
 
 class MotoreDelRegistroTests(unittest.TestCase):
-    """Il riconoscimento viene dal registro, non da costanti scritte qui dentro.
+    """Recognition comes from the adapter registry, not from constants hardcoded here.
 
-    Il programma finito gira da solo: quando un fornitore cambia il listino
-    l'unica cosa che si potrà toccare è `references/adapters.json`. Queste
-    prove servono a dimostrare che è davvero così — che una regola aggiunta al
-    registro cambia l'esito, e che una regola tolta dal registro fa sparire un
-    fornitore che il codice "conosceva".
+    When a supplier's price list changes, the only thing that should ever
+    need editing is `references/adapters.json`. These tests prove that's
+    really the case: adding a rule to the registry changes the outcome, and
+    removing one makes a supplier the code "knew" disappear again.
     """
 
     maxDiff = None
@@ -1280,10 +1280,10 @@ class MotoreDelRegistroTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.radice, True)
 
     def usa_registro(self, voci: list[dict[str, object]], nome: str = "adapters.json") -> Path:
-        """Fa leggere all'inspector un registro di prova al posto di quello vero.
+        """Point the inspector at a test registry instead of the real one.
 
-        Il registro vero lo legge una persona prima del commit: un collaudo non
-        deve poterlo toccare nemmeno per sbaglio.
+        The real registry is read by a person before a commit; a test must
+        not be able to touch it, even by accident.
         """
         percorso = self.radice / nome
         percorso.write_bytes(json.dumps(
@@ -1301,14 +1301,15 @@ class MotoreDelRegistroTests(unittest.TestCase):
     def hint(self, percorso: Path) -> dict[str, object]:
         return inspect_sources.profile_file(percorso)["deterministic_hint"]
 
-    # -- la regola sta nel registro ----------------------------------------
+    # -- the rule lives in the registry --------------------------------------
 
     def test_un_fornitore_mai_visto_si_riconosce_dichiarandolo_nel_registro(self) -> None:
-        """La prova che dice se la Fase 4 è servita a qualcosa.
+        """The test that proves the registry-driven design actually works.
 
-        Nessuna di queste intestazioni è mai stata dentro `inspect_sources`: se
-        il riconoscimento arrivasse ancora dal codice, dichiarare l'adattatore
-        non basterebbe e servirebbe un programmatore a ogni fornitore nuovo.
+        None of these headers has ever appeared inside `inspect_sources`: if
+        recognition still came from hardcoded code, declaring the adapter
+        alone wouldn't be enough, and every new supplier would need a
+        developer to add code for it.
         """
         percorso = self.radice / "listino_di_un_fornitore_nuovo.xlsx"
         save_workbook(percorso, [
@@ -1334,17 +1335,17 @@ class MotoreDelRegistroTests(unittest.TestCase):
         self.assertIsNone(sconosciuto["adapter_id"])
         self.assertEqual(dichiarato["state"], "SCHEMA_NOTO")
         self.assertEqual(dichiarato["adapter_id"], "fornitore_nuovo_v1")
-        # E il motivo per cui ci è arrivato: `header_candidates` non avrebbe
-        # tenuto nemmeno una riga, perché nessuna di quelle parole è nel suo
-        # elenco. Senza `header_rows` il registro non avrebbe niente da leggere.
+        # And why it got there: `header_candidates` wouldn't have kept a
+        # single row, since none of those words are in its list. Without
+        # `header_rows`, the registry check would have nothing to read.
         self.assertEqual(foglio["header_candidates"], [])
         self.assertEqual(foglio["header_rows"][0]["row"], 1)
         self.assertEqual(foglio["header_rows"][0]["values"], INTESTAZIONI_MAI_VISTE)
 
     def test_togliere_la_firma_dal_registro_fa_sparire_un_fornitore_noto(self) -> None:
-        """BETULLA era scritto dentro `known_xlsx_hint`: se ci fosse ancora,
-        questa prova resterebbe verde con l'adattatore tolto dal registro.
-        È la differenza fra una regola dichiarata e una cablata."""
+        """If this supplier's signature were still hardcoded anywhere in the
+        code, this test would stay green even with its adapter removed from
+        the registry. It's the difference between a declared rule and a wired one."""
         percorso = self.radice / "listino_betulla.xlsx"
         save_workbook(percorso, [
             INTESTAZIONI_BETULLA,
@@ -1361,8 +1362,8 @@ class MotoreDelRegistroTests(unittest.TestCase):
         self.assertEqual(senza["evidence"], ["Nessuna firma nota sufficiente"])
 
     def test_anche_il_csv_chiede_al_registro(self) -> None:
-        """La firma del CSV Noce era un insieme scritto dentro `profile_csv`:
-        adesso è una voce del registro come tutte le altre."""
+        """CSV recognition goes through the same registry lookup as every
+        other format, not a separate hardcoded signature."""
         percorso = self.radice / "noce.csv"
         with percorso.open("w", encoding="utf-8-sig", newline="") as stream:
             scrittore = csv.writer(stream)
@@ -1376,26 +1377,26 @@ class MotoreDelRegistroTests(unittest.TestCase):
 
         self.assertEqual(noto["state"], "SCHEMA_NOTO")
         self.assertEqual(noto["adapter_id"], "noce_csv_v1")
-        # Un CSV non ha fogli: l'impronta lo dice invece di inventarne uno.
+        # A CSV has no sheets: the fingerprint says so instead of inventing one.
         self.assertIsNone(noto["signature"]["sheet"])
         self.assertEqual(noto["signature"]["header_row"], 1)
         self.assertEqual(ignoto["state"], "AMBIGUO")
         self.assertIsNone(ignoto["adapter_id"])
 
     def test_normalized_non_e_una_seconda_implementazione(self) -> None:
-        """Due normalizzazioni che si allontanano di un carattere vorrebbero
-        dire un listino riconosciuto dall'inspector e non ritrovato nel
-        registro, senza che nessuno capisca perché."""
+        """Two normalization functions drifting apart by even one character
+        would mean a document the inspector recognises but the registry
+        doesn't match, with no obvious reason why."""
         originale = registro.normalizza
         registro.normalizza = lambda valore: "una_sola_implementazione"
         self.addCleanup(setattr, registro, "normalizza", originale)
 
         self.assertEqual(inspect_sources.normalized("Cod.Art."), "una_sola_implementazione")
 
-    # -- quello che il manifest deve portare --------------------------------
+    # -- what the manifest must carry ----------------------------------------
 
     def test_il_profilo_del_foglio_guadagna_header_rows_senza_perdere_niente(self) -> None:
-        """Chi legge il manifest oggi continua a trovare quello che trovava."""
+        """Adding `header_rows` to the sheet profile must not drop any existing field."""
         listino = scrivi_listino_noce(
             self.radice / "formattato_104233.xls", RIGHE_DI_PROVA, RIGHE_IN_CODA)
 
@@ -1405,21 +1406,20 @@ class MotoreDelRegistroTests(unittest.TestCase):
             with self.subTest(chiave=chiave):
                 self.assertIn(chiave, foglio)
         righe = foglio["header_rows"]
-        # Le righe si consegnano come sono, senza sceglierne nessuna: la riga 4
-        # è la nota sul grassetto e intestazione non è, ma a dirlo è il
-        # registro confrontando le obbligatorie, non questo elenco.
+        # Rows are handed over as they are, with no selection applied: row 4
+        # is the note about bold prices and isn't a header row, but that's for
+        # the registry to decide by checking required columns, not this list.
         self.assertEqual([riga["row"] for riga in righe][:3], [4, 5, 6])
         self.assertIn("i prezzi offerta sono in grassetto", righe[0]["values"])
         self.assertIn("codice_a_barre", righe[1]["values"])
 
     def test_un_intestazione_oltre_la_ventesima_riga_non_sparisce(self) -> None:
-        """Nessun documento che si riconosceva ieri deve smettere oggi.
+        """A document recognised today must not become unrecognised tomorrow.
 
-        Prima di questa fase il riconoscimento guardava le righe scelte da
-        `header_candidates`, che arrivano fino alla cinquantesima. Consegnare
-        al registro solo le prime venti farebbe sparire un fornitore con un
-        preambolo lungo, e nessuno se ne accorgerebbe: il listino diventerebbe
-        semplicemente «da interpretare».
+        `header_candidates` looks at rows up to the fiftieth, while the
+        registry lookup gets a shorter list. Truncating that list to the
+        first twenty rows would silently drop a supplier with a long preamble:
+        the price list would just become "unrecognised".
         """
         percorso = self.radice / "listino_con_preambolo.xlsx"
         preambolo = [[f"Condizioni di vendita, comma {numero}"] for numero in range(1, 26)]
@@ -1435,15 +1435,15 @@ class MotoreDelRegistroTests(unittest.TestCase):
         self.assertEqual(hint["adapter_id"], "betulla_v1")
         self.assertEqual(hint["signature"]["header_row"], 26)
         numeri = [riga["row"] for riga in foglio["header_rows"]]
-        # Le prime venti ci sono tutte, e la ventiseiesima è arrivata perché la
-        # riconosceva già `header_candidates`.
+        # The first twenty are all there, and row 26 made it in because
+        # `header_candidates` already recognised it as a header candidate.
         self.assertEqual(numeri[:inspect_sources.RIGHE_PER_IL_REGISTRO], list(range(1, 21)))
         self.assertIn(26, numeri)
 
     def test_il_hint_conserva_le_chiavi_del_server_e_ne_aggiunge_quattro(self) -> None:
-        """`app/server.py` e `app/launcher.py` leggono state, adapter_id,
-        confidence ed evidence: toglierne una spegnerebbe la pagina senza
-        nessun errore da leggere."""
+        """`app/server.py` and `app/launcher.py` read `state`, `adapter_id`,
+        `confidence`, and `evidence`; dropping one would break the page with
+        no error to point at."""
         listino = scrivi_listino_noce(
             self.radice / "formattato_104233.xls", RIGHE_DI_PROVA, RIGHE_IN_CODA)
         profili = self.radice / "profiles.json"
@@ -1467,8 +1467,8 @@ class MotoreDelRegistroTests(unittest.TestCase):
         self.assertEqual(hint["missing_headers"], [])
 
     def test_una_colonna_mappata_che_sparisce_si_legge_nel_manifest(self) -> None:
-        """L'utente non guarda i log: se il listino cambia deve trovarlo scritto
-        nel manifest, con il nome della verifica che non è passata."""
+        """The operator doesn't read logs: if the price list changes, the
+        manifest must name the check that failed."""
         intestazioni = tuple(nome for nome in INTESTAZIONI_NOCE if nome != "Iva")
         listino = scrivi_listino_noce(
             self.radice / "formattato_104233.xls", RIGHE_DI_PROVA, RIGHE_IN_CODA, intestazioni)
@@ -1479,16 +1479,16 @@ class MotoreDelRegistroTests(unittest.TestCase):
         hint = json.loads(profili.read_text(encoding="utf-8"))["profiles"][0]["deterministic_hint"]
         self.assertEqual(hint["state"], "SCHEMA_VARIATO")
         self.assertEqual(hint["adapter_id"], "noce_xls_v1")
-        # Da R4 la firma di noce dichiara anche le posizioni: una colonna
-        # sparita fa fallire due verifiche, e tutte e due stanno nel manifest.
+        # Noce's fingerprint also declares column positions: a missing column
+        # fails two checks, and both are reported in the manifest.
         self.assertEqual([verifica["name"] for verifica in hint["checks"] if not verifica["ok"]],
                          ["colonne_attese", "posizioni_intestazioni"])
         self.assertIn("iva", " ".join(hint["evidence"]))
 
     def test_un_listino_travestito_da_un_altro_fornitore_resta_quello_che_e(self) -> None:
-        """Noce manda «formattato_104233.xls»: il nome non è mai una prova,
-        nemmeno quando sembra dire tutto. Qui il file si chiama come il listino
-        BETULLA, finisce per .xlsx, e dentro è un .xls di Noce."""
+        """A file name is never proof, even when it looks conclusive. Here the
+        file is named after a different supplier's price list, ends in
+        .xlsx, and is actually a Noce .xls file inside."""
         travestito = scrivi_listino_noce(
             self.radice / "LISTINO BETULLA VALIDO FINO AL 28-07-26.xlsx", RIGHE_DI_PROVA, RIGHE_IN_CODA)
         profili = self.radice / "profiles.json"
@@ -1502,11 +1502,11 @@ class MotoreDelRegistroTests(unittest.TestCase):
         self.assertEqual(profilo["deterministic_hint"]["state"], "SCHEMA_NOTO")
 
 
-# Un listino con un blocco promozionale davanti, come QUERCIA: le righe 3-4 sono
-# valorizzazioni di omaggi e non prezzi d'acquisto, la riga 5 dice «LISTINO» e
-# i prodotti veri cominciano alla 6.  La settimana dopo il blocco e' piu'
-# lungo, e il numero di riga della volta scorsa taglierebbe nel punto
-# sbagliato: e' l'unica cosa che questi collaudi guardano.
+# A price list with a promotional block up front: rows 3-4 are valuations of
+# free goods, not purchase prices; row 5 says "LISTINO", and the real products
+# start at row 6. The following week the block is longer, and last week's
+# fixed row number would cut at the wrong point: that's the only thing these
+# tests check.
 INTESTAZIONI_CON_BLOCCO = ["Articolo", "EAN", "Descrizione", "Imballo", "Prezzo", "Ordine"]
 RIGHE_PROMOZIONALI = [
     ["OMA1", "8000000000901", "OMAGGIO PANNO MULTIUSO", 30, 1.05, None],
@@ -1521,10 +1521,9 @@ RIGHE_DI_LISTINO = [
 MAPPATURA_CON_MARCATORE: dict[str, object] = {
     "sheet": "Sheet1",
     "header_row": 1,
-    # Il numero c'e' e resta: e' la riga a cui il marcatore si e' risolto la
-    # volta che l'utente ha confermato lo schema, e serve a chi scrive la copia
-    # dell'ordine.  Chi legge non deve guardarlo mai, ed e' quello che i
-    # collaudi qui sotto verificano.
+    # The resolved row number is kept: it's where the marker resolved to when
+    # the operator confirmed the schema, and it's used by the order-file
+    # writer. The reader must never look at it, which is what the tests below verify.
     "data_start_row": 5,
     "data_start_marker": {"column": "A", "equals": "LISTINO", "offset": 1},
     "columns": {"supplier_code": "Articolo", "ean": "EAN", "description": "Descrizione",
@@ -1537,7 +1536,7 @@ MAPPATURA_CON_MARCATORE: dict[str, object] = {
 
 def scrivi_listino_con_blocco(percorso: Path, promozionali: list[list[object]],
                               separatore: str = "LISTINO") -> Path:
-    """Intestazione, un blocco promozionale di lunghezza variabile, il separatore, i prodotti."""
+    """Build a header, a variable-length promotional block, the separator row, then the products."""
 
     righe: list[list[object]] = [list(INTESTAZIONI_CON_BLOCCO)]
     righe.extend([list(riga) for riga in promozionali])
@@ -1548,12 +1547,13 @@ def scrivi_listino_con_blocco(percorso: Path, promozionali: list[list[object]],
 
 
 class InizioDeiDatiDichiaratoTests(unittest.TestCase):
-    """«I dati cominciano dopo la riga che dice X» invece di «alla riga 69».
+    """The data-start rule is "after the row that says X", not a fixed row number.
 
-    Il numero non sopravvive a una settimana: su QUERCIA le righe 7-67 sono un
-    blocco promozionale che cambia lunghezza, e il listino vero comincia dopo
-    l'unico `A68 = 'LISTINO'` del file.  Un `data_start_row` congelato porta
-    dentro righe fantasma, o ne perde di vere, **senza dire niente**.
+    A hardcoded row doesn't survive a week: on one supplier's price list, a
+    preceding block of promotional rows changes length from one week to the
+    next, and the real product data starts after the single marker row. A
+    frozen `data_start_row` would silently pull in rows that aren't products,
+    or drop real ones, with no error raised.
     """
 
     maxDiff = None
@@ -1576,11 +1576,12 @@ class InizioDeiDatiDichiaratoTests(unittest.TestCase):
         self.assertEqual(records[0]["source_row"], 5)
 
     def test_il_blocco_che_si_allunga_non_sposta_il_taglio(self) -> None:
-        """La prova che il numero non basta: due righe promozionali in piu'.
+        """The test that proves a fixed row number isn't enough: two extra
+        promotional rows.
 
-        Con il solo `data_start_row` della settimana scorsa entrerebbero nel
-        listino delle valorizzazioni di omaggi come se fossero prezzi
-        d'acquisto, e nessuno lo vedrebbe.
+        With only last week's `data_start_row`, free-goods valuations would
+        be read into the price list as if they were purchase prices, and
+        nothing would flag it.
         """
 
         piu_lungo = [*RIGHE_PROMOZIONALI,
@@ -1594,8 +1595,8 @@ class InizioDeiDatiDichiaratoTests(unittest.TestCase):
         self.assertNotIn("OMAGGIO BAYZON TRAPPOLA", self.descrizioni(records))
         self.assertEqual(records[0]["source_row"], 7)
 
-        # E senza marcatore, sullo stesso file, il difetto si vede: il numero
-        # della volta scorsa fa entrare gli omaggi.
+        # Without the marker, on the same file, the failure mode is visible:
+        # last week's fixed row lets the free-goods rows in.
         senza = {chiave: valore for chiave, valore in MAPPATURA_CON_MARCATORE.items()
                  if chiave != "data_start_marker"}
         col_numero, _avvisi = read_mapped_xlsx_supplier(listino, "quercia", senza)
@@ -1615,7 +1616,7 @@ class InizioDeiDatiDichiaratoTests(unittest.TestCase):
         self.assertIn("listino.xlsx", messaggio)
 
     def test_un_marcatore_che_compare_due_volte_ferma_la_lettura(self) -> None:
-        """Due tagli possibili non sono un taglio: sceglierne uno sarebbe indovinare."""
+        """Two matching marker rows means no single cut point: picking one would be guessing."""
 
         righe = [list(INTESTAZIONI_CON_BLOCCO),
                  ["LISTINO", None, None, None, None, None],
@@ -1633,10 +1634,11 @@ class InizioDeiDatiDichiaratoTests(unittest.TestCase):
         self.assertIn("righe 2, 5", messaggio)
 
     def test_il_marcatore_non_ripiega_mai_sul_numero_di_riga(self) -> None:
-        """⚠ La difesa vera: `data_start_row` e' scritto e valido, e non si usa.
+        """The actual guarantee: `data_start_row` is present and valid, and
+        must still be ignored when a marker fails to match.
 
-        Ripiegare in silenzio sul numero della settimana scorsa e' esattamente
-        il difetto che il marcatore chiude: la lettura si ferma.
+        Silently falling back to last week's number is exactly the failure
+        the marker exists to prevent, so reading must fail instead.
         """
 
         listino = scrivi_listino_con_blocco(self.radice / "listino.xlsx", RIGHE_PROMOZIONALI,
@@ -1645,15 +1647,15 @@ class InizioDeiDatiDichiaratoTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             read_mapped_xlsx_supplier(listino, "quercia", MAPPATURA_CON_MARCATORE)
 
-        # Lo stesso documento, con il solo numero, si legge benissimo: la
-        # fermata non viene da un file illeggibile.
+        # The same document, using only the fixed row, reads fine: the
+        # failure above isn't caused by an unreadable file.
         senza = {chiave: valore for chiave, valore in MAPPATURA_CON_MARCATORE.items()
                  if chiave != "data_start_marker"}
         records, _avvisi = read_mapped_xlsx_supplier(listino, "quercia", senza)
         self.assertEqual(len(records), 3)
 
     def test_contains_serve_quando_la_scritta_porta_la_data_della_settimana(self) -> None:
-        """`equals` non basta sempre: «CANVASS 33-34 07-21ago» cambia ogni settimana."""
+        """`equals` isn't always enough: a marker text that includes the week's date changes weekly."""
 
         listino = scrivi_listino_con_blocco(self.radice / "listino.xlsx", RIGHE_PROMOZIONALI,
                                             separatore="LISTINO VALIDO DAL 07/08 AL 21/08")
@@ -1703,7 +1705,7 @@ class InizioDeiDatiDichiaratoTests(unittest.TestCase):
                 self.assertIn(atteso, str(errore.exception))
 
     def test_il_validatore_accetta_il_marcatore_al_posto_del_numero(self) -> None:
-        """Una mappatura scritta a mano può dichiarare solo la regola."""
+        """A hand-written mapping may declare the marker rule alone, without a fixed row number."""
 
         from validate_input_manifest import incomplete_mapping
 
@@ -1717,7 +1719,8 @@ class InizioDeiDatiDichiaratoTests(unittest.TestCase):
                       incomplete_mapping(senza_niente, "supplier", Path("listino.xlsx")))
 
     def test_un_marcatore_malfatto_non_passa_per_una_dichiarazione_buona(self) -> None:
-        """Senza questo, bastava scrivere `data_start_marker: {}` per saltare il controllo."""
+        """Without this check, an empty `data_start_marker: {}` would be
+        enough to bypass the validator."""
 
         from validate_input_manifest import incomplete_mapping
 
@@ -1730,13 +1733,13 @@ class InizioDeiDatiDichiaratoTests(unittest.TestCase):
 
 
 class SenzaListiniLoDiceSubitoTests(unittest.TestCase):
-    """«Nessun listino fornitore» era un avviso, e la fase dopo moriva.
+    """A manifest with no supplier price list must fail validation with a clear reason.
 
-    La validazione dichiarava il manifest valido; `prepare_manifest_sources`
-    sollevava «Nessun fornitore incluso nel manifest» e usciva 1; in pagina
-    arrivava la frase generica del passo fallito — «il problema è in uno dei
-    documenti caricati» — a chi aveva caricato un documento solo, e giusto. La
-    cosa da fare la sapeva già la fase prima.
+    Without this check, validation would mark the manifest valid, a later
+    step would raise a bare "no supplier included" error and exit, and the
+    page would show a generic failure message to an operator who had
+    correctly uploaded a single document. The validation step already had
+    enough information to give the real reason.
     """
 
     def test_manca_il_listino_e_la_validazione_lo_dice(self) -> None:
@@ -1759,28 +1762,27 @@ class SenzaListiniLoDiceSubitoTests(unittest.TestCase):
         self.assertEqual(esito_processo.returncode, 2)
         self.assertFalse(esito["valid"])
         self.assertEqual([voce["code"] for voce in esito["errors"]], ["NESSUN_FORNITORE"])
-        # E la frase dice che cosa fare, non che cosa manca a un file JSON.
+        # The message says what to do, not which JSON field is missing.
         self.assertIn("carica i listini di questa settimana", esito["errors"][0]["message"])
         self.assertEqual(esito["warnings"], [])
 
 
 class RegistroImparatoNelValidatoreTests(unittest.TestCase):
-    """Il controllo della fase 3 deve vedere il registro VERO, non mezzo.
+    """The manifest validator must see the FULL adapter registry, shipped plus learned.
 
-    Il difetto che queste prove chiudono, misurato il 22 agosto 2026: il
-    validatore leggeva i soli adattatori spediti con un `json.load` suo, e
-    bocciava con `ADATTATORE_NON_VALIDO` ogni documento riconosciuto grazie a
-    un adattatore imparato su questo computer — cioe' tutti i fornitori
-    insegnati dalla mappatura guidata, e da quando esiste il suffisso
-    `__locale` anche ogni fornitore spedito a cui si e' spostata la colonna
-    d'ordine. Un errore del manifest e' una fermata: il confronto della
-    settimana non si faceva, e dalla pagina non c'era niente da premere.
+    A validator reading only the shipped adapters with its own separate
+    `json.load` would reject, with `ADATTATORE_NON_VALIDO`, every document
+    recognised through an adapter learned on this machine — every supplier
+    taught via the schema-mapping wizard, and, once the `__locale` suffix
+    exists, every shipped supplier whose order column was overridden. A
+    manifest error is a hard stop: the week's comparison wouldn't run, and
+    the page would have nothing left for the operator to do.
     """
 
     maxDiff = None
 
     def registro_di_prova(self, radice: Path, imparati: list[dict] | None) -> Path:
-        """Una copia dello spedito, con accanto l'imparato: come nell'installazione vera."""
+        """Build a copy of the shipped registry, plus a learned-adapters file beside it, like a real install."""
 
         spedito = json.loads(ADAPTERS.read_text(encoding="utf-8"))
         percorso = radice / "adapters.json"
@@ -1796,7 +1798,7 @@ class RegistroImparatoNelValidatoreTests(unittest.TestCase):
         return next(voce for voce in spedito["adapters"] if voce["id"] == identificativo)
 
     def esito(self, radice: Path, adattatore: str, imparati: list[dict] | None) -> dict:
-        """Il verdetto del validatore su un manifest che dichiara quell'adattatore."""
+        """Return the validator's verdict on a manifest declaring the given adapter."""
 
         registro_path = self.registro_di_prova(radice, imparati)
         gestionale = radice / "gestionale.xlsx"
@@ -1818,7 +1820,7 @@ class RegistroImparatoNelValidatoreTests(unittest.TestCase):
         return json.loads(uscita.read_text(encoding="utf-8"))
 
     def test_un_fornitore_imparato_qui_passa_la_validazione(self) -> None:
-        """La mappatura guidata insegna «quercia_v1», che nello spedito non c'e'."""
+        """The schema-mapping wizard learns an adapter that never existed in the shipped registry."""
 
         with tempfile.TemporaryDirectory() as temporaneo:
             radice = Path(temporaneo)
@@ -1828,7 +1830,7 @@ class RegistroImparatoNelValidatoreTests(unittest.TestCase):
             self.assertEqual(esito["errors"], [])
 
     def test_una_colonna_spostata_non_ferma_il_confronto_della_settimana_dopo(self) -> None:
-        """Spostare la colonna d'ordine di BETULLA scrive «betulla_v1__locale»."""
+        """Overriding a shipped supplier's order column writes a `..._v1__locale` entry."""
 
         with tempfile.TemporaryDirectory() as temporaneo:
             radice = Path(temporaneo)
@@ -1837,14 +1839,14 @@ class RegistroImparatoNelValidatoreTests(unittest.TestCase):
             self.assertTrue(esito["valid"], esito["errors"])
 
     def test_l_imparato_sparito_lascia_valere_lo_spedito(self) -> None:
-        """Un «__locale» senza la sua voce e' Betulla: il documento resta leggibile."""
+        """A `..._v1__locale` id with no matching learned entry falls back to the shipped one; the document stays readable."""
 
         with tempfile.TemporaryDirectory() as temporaneo:
             esito = self.esito(Path(temporaneo), "betulla_v1__locale", None)
             self.assertTrue(esito["valid"], esito["errors"])
 
     def test_un_adattatore_che_non_esiste_resta_un_errore(self) -> None:
-        """Il cancello non si e' aperto: un nome inventato si ferma ancora qui."""
+        """The gate still holds: a made-up adapter id is still rejected."""
 
         with tempfile.TemporaryDirectory() as temporaneo:
             esito = self.esito(Path(temporaneo), "pippo_v1", None)

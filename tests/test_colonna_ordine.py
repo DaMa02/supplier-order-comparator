@@ -1,25 +1,25 @@
 #!/usr/bin/env python3
-"""La colonna in cui si scrivono le quantità ordinate si cambia quando serve.
+"""The order-quantity column can be moved by the user, not fixed at setup.
 
-Prima del 18 agosto 2026 quella colonna si sceglieva **una volta sola**, nella
-mappatura guidata, che si apre soltanto quando il programma non riconosce le
-colonne di un documento. Per i fornitori conosciuti stava nel registro e la
-pagina la mostrava e basta: per spostarla bisognava aprire un file JSON.
+Besides the guided mapping screen — which only opens when the app can't
+recognize a document's columns — a known supplier's order column also lives
+in the adapter registry and can be moved from the page, instead of requiring
+a hand edit of a JSON file.
 
-Le tre famiglie che questo lavoro deve trattare, e sono diverse davvero — le
-differenze sono misurate sui listini veri della settimana del 17 agosto 2026:
+Three supplier shapes this must handle, each genuinely different — measured
+on real price lists:
 
-* **BETULLA** ha un lettore dedicato e una riga di intestazione: la colonna C si
-  chiama «ORDINE», e quel titolo è quello che il writer verifica;
-* **CIPRESSO** dichiara `from_field_mapping`, cioè registro e mappatura
-  confermata devono dire la **stessa** colonna, e la sua G non ha titolo (la
-  cella è vuota su tutte e 3372 le righe);
-* **LARICE** non ha **nessuna** riga di intestazione: sopra la colonna non c'è
-  nessuna cella, e dichiararne una vuota lo bloccherebbe.
+* A supplier with a dedicated reader and a header row: the order column has a
+  title (e.g. "ORDINE") that the writer verifies before writing.
+* A supplier declaring `from_field_mapping`: the registry and the confirmed
+  field mapping must agree on the same column, and its column can have no
+  title at all (an empty cell across every row).
+* A supplier with no header row whatsoever: there's no cell above the column
+  to look at, so declaring one "empty" instead of "absent" would block it.
 
-E i due rifiuti che contano: una colonna che il programma già legge (l'ordine
-la azzera e la riscrive) e una colonna di formule (scriverci sopra le cancella
-— la I di BETULLA ne ha 6380, misurate).
+And the two rejections that matter: a column the app already reads (the order
+would overwrite it) and a column full of formulas (writing over it destroys
+them).
 """
 
 from __future__ import annotations
@@ -49,11 +49,11 @@ from server import ReviewStore  # noqa: E402
 
 
 # --------------------------------------------------------------------------
-# Le regole di che cosa si dichiara, senza toccare né disco né registro.
+# What gets declared, without touching disk or the registry.
 # --------------------------------------------------------------------------
 class CheCosaSiDichiara(unittest.TestCase):
     def test_una_colonna_con_titolo_diventa_l_intestazione_attesa(self) -> None:
-        """`expected_header` è una misura del documento, non una preferenza."""
+        """`expected_header` reflects what the document has, not a preference."""
 
         nuova = colonna_ordine.dichiarazione_aggiornata(
             {"order_column": "C", "expected_header": "ORDINE"}, "K", "QUANTITA"
@@ -64,10 +64,10 @@ class CheCosaSiDichiara(unittest.TestCase):
         self.assertNotIn("allow_blank_header_if_confirmed", nuova)
 
     def test_una_colonna_senza_titolo_si_dichiara_vuota_e_confermata(self) -> None:
-        """Senza questa dichiarazione la colonna verrebbe scritta **senza
-        nessun controllo**: `expected_header` assente vuol dire «niente da
-        verificare», quindi scegliere una colonna senza titolo spegnerebbe la
-        difesa invece di accenderla."""
+        """Without this declaration the column would be written with no
+        check at all: a missing `expected_header` means "nothing to verify",
+        so picking a titleless column would disable the safeguard instead of
+        enabling it."""
 
         nuova = colonna_ordine.dichiarazione_aggiornata(
             {"order_column": "C", "expected_header": "ORDINE"}, "J", ""
@@ -78,11 +78,11 @@ class CheCosaSiDichiara(unittest.TestCase):
         self.assertIs(nuova["order_header_blank_confirmed"], True)
 
     def test_senza_riga_di_intestazione_non_si_dichiara_nessuna_cella_vuota(self) -> None:
-        """Il caso LARICE. Sopra la colonna non c'è nessuna cella da guardare:
-        dichiararla vuota non rende il controllo più severo, lo rende
-        impossibile — `source_rule` pretende una riga di intestazione per farlo
-        e si fermerebbe accusando il registro di una cosa che il documento non
-        ha."""
+        """A supplier with no header row: there's no cell above the column to
+        look at. Declaring it "empty" wouldn't make the check stricter, it
+        would make it impossible — `source_rule` requires a header row to run
+        it and would fail, blaming the registry for something the document
+        simply doesn't have."""
 
         nuova = colonna_ordine.dichiarazione_aggiornata(
             {"order_column": "D"}, "S", "", c_e_intestazione=False
@@ -94,8 +94,8 @@ class CheCosaSiDichiara(unittest.TestCase):
         self.assertNotIn("order_header_blank_confirmed", nuova)
 
     def test_la_procedura_di_scrittura_resta_dov_era(self) -> None:
-        """Il `.xls` di Noce si scrive in posizione: cambiare colonna non
-        cambia il modo in cui quel documento si tocca."""
+        """A supplier's `.xls` written in-place: moving the column must not
+        change how that document is patched."""
 
         nuova = colonna_ordine.dichiarazione_aggiornata(
             {
@@ -126,9 +126,9 @@ class CheCosaSiDichiara(unittest.TestCase):
         self.assertNotIn("order_header_blank_confirmed", mappatura)
 
     def test_la_colonna_si_indica_per_lettera_o_per_numero(self) -> None:
-        """La pagina manda il numero, il registro scrive la lettera: la
-        traduzione sta in un posto solo, altrimenti i due modi divergono su
-        «AA» contro 27."""
+        """The page sends a column number, the registry stores a letter; the
+        conversion must live in one place, or the two forms could disagree,
+        e.g. "AA" vs 27."""
 
         self.assertEqual(colonna_ordine.indice_scelto("C"), 3)
         self.assertEqual(colonna_ordine.indice_scelto("c"), 3)
@@ -141,7 +141,7 @@ class CheCosaSiDichiara(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
-# Le colonne fra cui si sceglie.
+# The columns offered as candidates.
 # --------------------------------------------------------------------------
 class ColonneFraCuiScegliere(unittest.TestCase):
     def setUp(self) -> None:
@@ -161,9 +161,9 @@ class ColonneFraCuiScegliere(unittest.TestCase):
         return profile_file(percorso)
 
     def test_offre_anche_la_prima_colonna_libera_in_fondo(self) -> None:
-        """Un listino che una colonna d'ordine non ce l'ha ancora deve poterne
-        ricevere una: se si offrissero soltanto le colonne scritte, non ci
-        sarebbe nessun posto dove metterla."""
+        """A price list with no order column yet must still be able to get
+        one: offering only already-written columns would leave nowhere to
+        put it."""
 
         profilo = self.profilo([["EAN", "Descrizione"], ["8000000000001", "SAPONE"]])
 
@@ -173,9 +173,9 @@ class ColonneFraCuiScegliere(unittest.TestCase):
         self.assertEqual(colonne[2]["valori"], 0)
 
     def test_conta_le_formule_di_ogni_colonna(self) -> None:
-        """Il conto non è un campione: `inspect_sources` attraversa ogni riga.
-        È il numero che decide, perché scrivere l'ordine sopra una colonna di
-        formule le cancella."""
+        """The count isn't a sample: `inspect_sources` scans every row. It's
+        the number that decides, since writing the order over a formula
+        column would erase every formula."""
 
         profilo = self.profilo([
             ["EAN", "PzCt", "TOTALI"],
@@ -191,9 +191,9 @@ class ColonneFraCuiScegliere(unittest.TestCase):
         self.assertEqual(colonne["B"]["esempio"], "6")
 
     def test_una_colonna_d_ordine_oltre_l_ultima_scritta_resta_raggiungibile(self) -> None:
-        """Il caso CIPRESSO: la G è vuota su tutte le righe, quindi nel profilo
-        non compare proprio. Senza `fino_a`, l'unica colonna nuova che si
-        potrebbe scegliere sarebbe quella accanto a quella già in uso."""
+        """A column that's empty across every row doesn't show up in the
+        profile at all. Without `fino_a`, the only new column offered would
+        be the one right next to the one already in use."""
 
         profilo = self.profilo([["COD", "DES"], ["019654", "SPAZZOLA"]])
 
@@ -204,9 +204,9 @@ class ColonneFraCuiScegliere(unittest.TestCase):
         self.assertEqual([voce["lettera"] for voce in con], ["A", "B", "C", "D", "E"])
 
     def test_le_colonne_occupate_si_vedono_marcate_non_tolte(self) -> None:
-        """Nasconderle farebbe sembrare che il documento abbia meno colonne di
-        quante ne ha, e chi cerca «quella dopo il prezzo» conta quelle che
-        vede."""
+        """Hiding occupied columns would make the document look like it has
+        fewer columns than it does, and a user counting "the one after the
+        price" counts what's visible."""
 
         effettiva = {
             "columns": [{"campo": "unit_price_net", "etichetta": "Prezzo", "colonna": 2}],
@@ -225,21 +225,22 @@ class ColonneFraCuiScegliere(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
-# Il listino che non è un .xlsx: si legge, ma l'ordine non ci si scrive.
+# A price list openpyxl can read but can't write into: the legacy .xls format.
 # --------------------------------------------------------------------------
 class UnListinoChePerScriverciDentroNonVaBene(unittest.TestCase):
-    """Un `.xls` arriva fin qui, e fino al 4 settembre 2026 esplodeva.
+    """A legacy `.xls` file must fail with a clear, actionable message.
 
-    `source_rule` apre il documento con openpyxl, che di un Excel 97-2003 non
-    sa niente: l'utente riceveva la frase inglese della libreria — «openpyxl
-    does not support the old .xls file format, please use xlrd to read this
-    file» — dentro «Non riesco a leggere il listino LARICE», e la leggeva come
-    «lo legge ma non ci sa scrivere le quantità». Il rimedio è una riga di
-    Excel, e va detto.
+    `source_rule` opens the document with openpyxl, which doesn't support
+    Excel 97-2003 at all: without a translated message, the user would see
+    openpyxl's raw English error — "openpyxl does not support the old .xls
+    file format, please use xlrd to read this file" — inside a generic
+    "can't read this price list" message, easy to misread as "it reads but
+    can't write quantities". The fix is a one-line resave in Excel, and the
+    message must say so.
     """
 
-    # I primi otto byte di un Excel 97-2003. Il formato lo decidono i byte e
-    # non l'estensione: è la stessa firma che legge `inspect_sources`.
+    # First eight bytes of an Excel 97-2003 (OLE2) file. The format is
+    # identified by content, not extension — the same signature `inspect_sources` reads.
     FIRMA_OLE2 = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
     def setUp(self) -> None:
@@ -264,8 +265,8 @@ class UnListinoChePerScriverciDentroNonVaBene(unittest.TestCase):
         self.assertNotIn("openpyxl", motivo)
 
     def test_l_xls_che_si_compila_in_posizione_non_incontra_la_guardia(self) -> None:
-        """Noce il suo `.xls` lo compila davvero, e non deve cambiare:
-        quel ramo esce prima, e la guardia non lo vede nemmeno passare."""
+        """A supplier whose `.xls` is patched in place must be unaffected:
+        that branch returns before this guard, which never even sees it."""
 
         sorgente = self.radice / "formattato.xls"
         sorgente.write_bytes(self.FIRMA_OLE2 + b"\x00" * 512)
@@ -287,13 +288,13 @@ class UnListinoChePerScriverciDentroNonVaBene(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
-# La verifica vera, quella che attiva la compilazione.
+# The actual check that gates writing to the document.
 # --------------------------------------------------------------------------
 class LaVerificaDelDocumento(unittest.TestCase):
-    """`source_rule` è la funzione che decide se un listino si compila. Qui si
-    prova il ramo nuovo: la conferma della cella vuota dichiarata dentro
-    `order_write`, che è l'unico posto in cui può stare per un fornitore con un
-    lettore dedicato e nessuna mappatura."""
+    """`source_rule` decides whether a price list is eligible to be written
+    into. This covers the blank-header confirmation stored inside
+    `order_write` — the only place it can live for a supplier with a
+    dedicated reader and no field mapping."""
 
     def setUp(self) -> None:
         temporanea = tempfile.TemporaryDirectory()
@@ -337,7 +338,8 @@ class LaVerificaDelDocumento(unittest.TestCase):
         self.assertIs(regola["blank_header_confirmed"], True)
 
     def test_una_cella_che_non_e_piu_vuota_ferma_la_compilazione(self) -> None:
-        """La dichiarazione non basta: si va a guardare il documento di oggi."""
+        """The stored declaration isn't enough on its own: today's document is
+        checked too."""
 
         sorgente = self.listino(["EAN", "Descrizione", "PREZZO"], [["8000000000001", "SAPONE", 2]])
 
@@ -365,16 +367,16 @@ class LaVerificaDelDocumento(unittest.TestCase):
 
 
 class ConCheCosaSiScriveDentroQuestoDocumento(unittest.TestCase):
-    """Chi scrive l'ordine lo decide la DECISIONE, non il nome del fornitore.
+    """The run's own decision determines what's written, not the supplier's name.
 
-    ⚠ E' la quinta lezione dello stesso difetto — un `if supplier == "..."`
-    tolto quattro volte da questo progetto, e la quinta il 21 agosto 2026 su
-    BETULLA — ma sul lato della **scrittura**, dove costa di piu': un ordine
-    scritto nella colonna sbagliata esce dal programma e va al fornitore.
+    An `if supplier == "..."` shortcut is a recurring class of bug in this
+    project, and here it's especially costly since it's on the write side: an
+    order written into the wrong column leaves the app and goes to the
+    supplier.
 
-    Due casi in cui il nome del fornitore non basta piu', e tutti e due esistono
-    dal 22 agosto 2026: CIPRESSO ha due schemi con due `order_write` diversi, e
-    la colonna d'ordine spostata dalla pagina scrive una voce `__locale`.
+    Two cases where the supplier name alone isn't enough: a supplier can have
+    two schemas with two different `order_write` blocks, and an order column
+    moved from the page is stored as a `__locale` registry entry.
     """
 
     def setUp(self) -> None:
@@ -403,10 +405,9 @@ class ConCheCosaSiScriveDentroQuestoDocumento(unittest.TestCase):
         return launcher.adattatori_compilabili(self.registro)
 
     def test_fra_due_schemi_dello_stesso_fornitore_vale_quello_della_decisione(self) -> None:
-        """⚠ Prendendo il primo del registro si perdeva `expected_header`,
-        cioe' il controllo che sopra la colonna ci sia scritto ORDINE prima di
-        scriverci dentro. E' la stessa difesa che una voce imparata aveva
-        tolto a BETULLA il 21 agosto 2026.
+        """Picking the registry's first matching entry instead of the one the
+        run actually chose would lose `expected_header` — the check that the
+        column is titled "ORDINE" before writing to it.
         """
 
         scelto = launcher.adattatore_del_documento(
@@ -418,13 +419,13 @@ class ConCheCosaSiScriveDentroQuestoDocumento(unittest.TestCase):
         self.assertEqual(scelto["order_write"]["expected_header"], "ORDINE")
 
     def test_la_colonna_spostata_a_mano_vince_su_quella_spedita(self) -> None:
-        """La decisione della run dice ancora l'id spedito: cercarlo cosi'
-        com'e' scriverebbe l'ordine nella colonna di prima."""
+        """The run's decision still names the shipped adapter's id; looking it
+        up literally would write the order into the old column."""
 
         imparato = registro.percorso_imparato(self.registro)
-        # Dal 5 settembre 2026 una voce sopra una spedita vale solo con il
-        # timbro della spedita su cui e' nata: senza, sarebbe una voce vecchia
-        # da mettere da parte, non la scelta fatta oggi.
+        # An entry that overrides a shipped one is only valid when it carries
+        # the shipped entry's own stamp; without it, it's a stale entry to
+        # set aside, not today's active choice.
         spedita = registro.adattatore("tizio_v1", self.registro)
         imparato.write_text(json.dumps({"schema_version": 1, "adapters": [
             {"id": "tizio_v1__locale", "supplier_id": "tizio", "kind": "supplier",
@@ -442,8 +443,9 @@ class ConCheCosaSiScriveDentroQuestoDocumento(unittest.TestCase):
         self.assertEqual(scelto["order_write"]["order_column"], "H")
 
     def test_una_scheda_senza_adattatore_ripiega_sul_fornitore(self) -> None:
-        """I confronti fatti prima non dichiarano nessun adattatore nella
-        scheda: meglio la voce di quel fornitore che nessuna voce."""
+        """Comparisons run before this feature existed declare no adapter on
+        the file entry: falling back to the supplier's own entry beats no
+        entry at all."""
 
         scelto = launcher.adattatore_del_documento({}, "tizio", self.per_fornitore(), self.registro)
 
@@ -458,7 +460,7 @@ class ConCheCosaSiScriveDentroQuestoDocumento(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
-# Il comando completo, con registro e confronto veri (di prova).
+# The full command, against a real (fixture) registry and comparison.
 # --------------------------------------------------------------------------
 class IlComandoCompleto(unittest.TestCase):
     def setUp(self) -> None:
@@ -472,9 +474,9 @@ class IlComandoCompleto(unittest.TestCase):
         self.uploads.mkdir(parents=True)
         (self.esecuzioni / "run-prova").mkdir(parents=True)
         self.registro = self.radice / "adapters.json"
-        # ⚠ Il registro di prova va messo anche dove lo cercano le funzioni che
-        # lo leggono senza percorso (`fornitori_compilabili`): senza, la prova
-        # girerebbe per meta' sul registro vero del progetto.
+        # The fixture registry must also be reachable where path-less callers
+        # look for it (`fornitori_compilabili`); otherwise the test would
+        # partly run against the project's real registry.
         self.registro_vero = launcher.ADAPTERS_PATH
         launcher.ADAPTERS_PATH = self.registro
         self.addCleanup(setattr, launcher, "ADAPTERS_PATH", self.registro_vero)
@@ -507,11 +509,11 @@ class IlComandoCompleto(unittest.TestCase):
                 "sheet": "FIRST",
                 "header_row": 1,
                 "data_start_row": 2,
-                # ⚠ Le posizioni si scrivono con i token delle INTESTAZIONI, non
-                # con i nomi dei campi: `_verifica_posizioni` cerca «descrizione»
-                # nella riga del documento, e «description» non lo trova mai.
-                # Scritte cosi' facevano uscire questo documento SCHEMA_VARIATO
-                # sempre, e la prova sul riconoscimento non provava piu' niente.
+                # Positions are keyed by the HEADER tokens, not the field
+                # names: `_verifica_posizioni` looks for "descrizione" in the
+                # document's header row, and "description" would never match,
+                # forcing this document to always read as SCHEMA_VARIATO and
+                # defeating the recognition test.
                 "columns": {"ean": 1, "descrizione": 2, "pzct": 4, "prezzo": 5},
                 "required": ["EAN", "Descrizione", "PzCt", "Prezzo"],
             },
@@ -601,16 +603,16 @@ class IlComandoCompleto(unittest.TestCase):
             magazzino.chiudi()
 
     def voce_del_registro(self, identificativo: str = "prova_v1") -> dict[str, Any]:
-        """La voce come la vede il programma: spedito e imparato insieme.
+        """The entry as the app sees it: shipped and learned merged together.
 
-        ⚠ Dal 19 agosto 2026 la colonna d'ordine cambiata qui non torna in
-        `references/adapters.json` — che sta sotto git e l'avvio del negozio
-        riporta indietro — ma nel registro imparato, fuori da git.
+        A column moved from the page never lands in `references/adapters.json`
+        — that file is under git, and starting the app resets it — but in the
+        separate learned registry, outside git.
 
-        ⚠ E dal 22 agosto 2026 non ci torna nemmeno con lo stesso `id`: la voce
-        nuova e' `prova_v1__locale`, e quella spedita resta dov'era, intera. Si
-        chiede `voce_in_uso` e non `adattatore`, che e' la stessa domanda che fa
-        il programma quando deve sapere con che cosa scrive l'ordine di oggi.
+        Nor does it land under the same `id`: the new entry is
+        `prova_v1__locale`, and the shipped one stays untouched. This asks
+        `voce_in_uso`, not `adattatore` — the same question the app asks when
+        it needs to know what writes today's order.
         """
 
         letta = registro.voce_in_uso(identificativo, registro.adattatori(self.registro))
@@ -642,18 +644,18 @@ class IlComandoCompleto(unittest.TestCase):
         self.assertIs(esito["ok"], True)
         self.assertEqual(esito["colonna"], "F")
         self.assertEqual(self.scrittura_nel_registro()["order_column"], "F")
-        # Non c'e' titolo sopra la F: si dichiara vuota, e il writer lo
-        # ricontrollera' sul documento prima di scrivere.
+        # No title above column F: it's declared blank, and the writer will
+        # recheck that against the document before writing.
         self.assertIs(self.scrittura_nel_registro()["allow_blank_header_if_confirmed"], True)
         configurazione = json.loads((self.corrente / "writer_config.json").read_text(encoding="utf-8"))
         self.assertEqual(configurazione["supplier_write_rules"]["betulla"]["order_column"], "F")
 
     def test_se_la_scrittura_non_si_rifa_lo_dice_invece_di_tacere(self) -> None:
-        """⚠ A quel punto la colonna **è già cambiata**: la dichiarazione è
-        scritta e ha passato la verifica sul documento. Lasciar uscire
-        l'eccezione direbbe che non è successo niente, mentre è successo quasi
-        tutto — la stessa mezza verità che mostrava il riquadro verde per una
-        compilazione senza nessuna copia."""
+        """By this point the column has already changed: the declaration is
+        written and has passed the document check. Letting the exception
+        propagate unhandled would claim nothing happened, when almost
+        everything did.
+        """
 
         store = self.negozio()
 
@@ -671,9 +673,8 @@ class IlComandoCompleto(unittest.TestCase):
         self.assertNotIn("Vale da subito", esito["message"])
 
     def test_il_registro_tiene_la_versione_di_prima(self) -> None:
-        """Se la settimana dopo la compilazione peggiora, l'unico modo di
-        capire che cosa è cambiato è avere ancora sotto gli occhi la versione
-        precedente."""
+        """If a later run regresses, the only way to see what changed is
+        still having the previous version on record."""
 
         store = self.negozio()
 
@@ -684,9 +685,10 @@ class IlComandoCompleto(unittest.TestCase):
         self.assertEqual(voce["previous_versions"][0]["order_write"]["order_column"], "C")
 
     def test_la_colonna_spostata_non_entra_nel_registro_spedito(self) -> None:
-        """Spostare la colonna d'ordine e' una decisione presa in negozio, e
-        finiva in un file che l'avvio del PC riporta indietro: chi la spostava
-        se la ritrovava dov'era il doppio clic dopo, e la rispostava."""
+        """Moving the order column is a decision made at the store; writing
+        it into the shipped file would lose it on the next app restart,
+        since that file gets reset to the shipped version.
+        """
 
         store = self.negozio()
         spedito_prima = self.registro.read_bytes()
@@ -699,13 +701,11 @@ class IlComandoCompleto(unittest.TestCase):
         self.assertEqual(self.voce_del_registro()["order_write"]["order_column"], "F")
 
     def test_la_voce_spedita_resta_intera_e_quella_nuova_prende_un_id_suo(self) -> None:
-        """⚠ Fino al 22 agosto 2026 spostare la colonna d'ordine scriveva nel
-        registro imparato una **fotocopia completa** della voce spedita, con lo
-        stesso `id`: da quel momento la spedita spariva sotto, e nessun
-        aggiornamento di quell'adattatore arrivava piu' — le condizioni
-        commerciali, gli alias delle intestazioni, le posizioni delle colonne.
-        E' la stessa malattia di `offerte_v1`, dove l'impronta stretta appena
-        scritta e' rimasta spenta sotto una copia imparata.
+        """Moving the order column must not write a full copy of the shipped
+        entry into the learned registry under the same `id`: that would bury
+        the shipped entry and stop any future update to it from ever
+        reaching the app — commercial terms, header aliases, column
+        positions, all of it.
         """
 
         store = self.negozio()
@@ -713,7 +713,7 @@ class IlComandoCompleto(unittest.TestCase):
 
         store.cambia_colonna_d_ordine({"supplierId": "betulla", "colonna": "F"})
 
-        # La voce nuova ha un id suo, e dice da dove viene.
+        # The new entry has its own id and records where it came from.
         imparate = json.loads(
             registro.percorso_imparato(self.registro).read_text(encoding="utf-8")
         )["adapters"]
@@ -721,14 +721,15 @@ class IlComandoCompleto(unittest.TestCase):
         self.assertEqual(imparate[0]["derivato_da"], "prova_v1")
         self.assertEqual(imparate[0]["order_write"]["order_column"], "F")
 
-        # E la spedita e' ancora li', identica: non e' stata coperta da niente.
+        # And the shipped entry is still there, unchanged: nothing shadowed it.
         self.assertEqual(registro.adattatore("prova_v1", self.registro), spedita_prima)
         self.assertEqual(spedita_prima["order_write"]["order_column"], "C")
 
     def test_la_pagina_mostra_subito_la_colonna_nuova(self) -> None:
-        """La decisione della run dice ancora «prova_v1»: chi cercasse quell'id
-        cosi' com'e' ritroverebbe la voce spedita, con la colonna di prima, e
-        si rispostherebbe una colonna gia' spostata."""
+        """The run's decision still names the shipped adapter's id; looking
+        it up literally would find the shipped entry with the old column,
+        undoing a move that already happened.
+        """
 
         store = self.negozio()
         store.cambia_colonna_d_ordine({"supplierId": "betulla", "colonna": "F"})
@@ -740,15 +741,14 @@ class IlComandoCompleto(unittest.TestCase):
         self.assertEqual(store.colonne_d_ordine("betulla")["attuale"]["lettera"], "F")
 
     def test_al_prossimo_ricalcolo_la_colonna_resta_quella_nuova(self) -> None:
-        """La prova che dice se la mossa e' servita a qualcosa.
+        """The test that proves the move actually stuck.
 
-        ⚠ Il prossimo ricalcolo non guarda nessuna decisione vecchia: rifa'
-        `riconosci` sul documento, e i candidati sono due — la voce spedita e
-        quella locale. Le due leggono il documento **esattamente allo stesso
-        modo**, perche' fra loro cambia solo dove si scrive l'ordine: stessa
-        confidenza, stesse verifiche, stesse obbligatorie. Finche' a parita'
-        piena vinceva la spedita, il lunedi' dopo la colonna tornava dov'era e
-        nessuno lo diceva.
+        A later recompute ignores any past decision and reruns `riconosci` on
+        the document, with two candidates: the shipped entry and the local
+        one. Both read the document identically — same confidence, same
+        checks, same required fields — since only the order column differs
+        between them. If ties were broken in favor of the shipped entry, the
+        column would silently revert on the next recompute.
         """
 
         sorgente = self.uploads / "listino.xlsx"
@@ -763,9 +763,9 @@ class IlComandoCompleto(unittest.TestCase):
         self.assertEqual(vincente["order_write"]["order_column"], "F")
 
     def test_spostarla_due_volte_non_moltiplica_le_voci(self) -> None:
-        """Ogni spostamento e' una versione della stessa voce locale, non una
-        voce nuova: un registro che cresce a ogni ripensamento diventa
-        illeggibile proprio quando serve capirci qualcosa."""
+        """Each move is a new version of the same local entry, not a new
+        entry: a registry that grows on every change would become unreadable
+        exactly when it needs to be understood."""
 
         store = self.negozio()
         store.cambia_colonna_d_ordine({"supplierId": "betulla", "colonna": "F"})
@@ -777,7 +777,7 @@ class IlComandoCompleto(unittest.TestCase):
         self.assertEqual([voce["id"] for voce in imparate], ["prova_v1__locale"])
         self.assertEqual(imparate[0]["order_write"]["order_column"], "H")
         self.assertEqual(imparate[0]["schema_version"], 3)
-        # La storia parte dalla spedita e passa da F.
+        # History starts from the shipped column and passes through F.
         storia = [voce["order_write"]["order_column"] for voce in imparate[0]["previous_versions"]]
         self.assertEqual(storia, ["C", "F"])
 
@@ -808,13 +808,13 @@ class IlComandoCompleto(unittest.TestCase):
         self.assertEqual(self.scrittura_nel_registro()["order_column"], "C")
 
     def test_se_la_verifica_del_documento_non_passa_non_si_scrive_niente(self) -> None:
-        """Il cancello vero non è in questo modulo: è `source_rule`, la stessa
-        funzione che attiva la compilazione. Qui si prova che quando lei dice di
-        no, il registro non viene toccato — altrimenti resterebbe scritta una
-        colonna che nessuna settimana potrà usare."""
+        """The real gate isn't in this module: it's `source_rule`, the same
+        function that decides whether a price list is written to. This checks
+        that when it says no, the registry stays untouched — otherwise a
+        column would end up recorded that can never actually be used."""
 
         store = self.negozio()
-        # Una riga di dati **oltre** la fine del foglio: la verifica si ferma.
+        # A data row past the end of the sheet: the check must stop here.
         self.scrivi_registro(order_write={
             "sheet": "FIRST", "header_row": 1, "data_start_row": 99,
             "order_column": "C", "expected_header": "ORDINE",
@@ -836,9 +836,9 @@ class IlComandoCompleto(unittest.TestCase):
         self.assertIn("nessun listino di questo fornitore", str(errore.exception))
 
     def test_durante_un_ricalcolo_non_si_cambia(self) -> None:
-        """La configurazione di scrittura si rifà a fine ricalcolo: cambiarla
-        mentre gira vorrebbe dire vederla sovrascritta un attimo dopo, senza
-        una parola."""
+        """The write configuration is rebuilt when a recompute finishes;
+        changing it while one is running would get silently overwritten a
+        moment later."""
 
         store = self.negozio()
         store.pipeline_jobs.in_corso = lambda: True
@@ -849,9 +849,9 @@ class IlComandoCompleto(unittest.TestCase):
         self.assertEqual(self.scrittura_nel_registro()["order_column"], "C")
 
     def test_per_i_fornitori_con_mappatura_si_cambiano_tutte_e_due(self) -> None:
-        """`source_rule` si rifiuta se registro e mappatura confermata dicono
-        due colonne diverse: cambiarne una sola lascerebbe il fornitore non
-        compilabile, con una frase che accusa la mappatura."""
+        """`source_rule` refuses when the registry and the confirmed field
+        mapping name different columns; updating only one would leave the
+        supplier unwritable, with a message that blames the mapping."""
 
         store = self.negozio()
         self.scrivi_registro(
@@ -890,9 +890,9 @@ class IlComandoCompleto(unittest.TestCase):
         self.assertEqual(riletto["files"][0]["fieldMapping"]["order_column"], "F")
 
     def test_la_decisione_scritta_a_mano_segue(self) -> None:
-        """Una decisione manuale è **sovrana** sul registro: lasciarla indietro
-        vorrebbe dire vedere la colonna nuova oggi e ritrovarsi quella vecchia
-        al primo ricalcolo, senza una parola."""
+        """A manual per-file decision overrides the registry; leaving it
+        stale would show the new column today but silently revert to the
+        old one on the next recompute."""
 
         store = self.negozio()
         decisioni = store.pipeline_jobs.configurazione.decisioni_manuali_path

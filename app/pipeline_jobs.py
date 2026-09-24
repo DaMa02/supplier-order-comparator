@@ -1,36 +1,32 @@
 #!/usr/bin/env python3
-"""L'orchestratore della catena: dal pulsante al confronto pronto.
+"""Pipeline orchestrator: from the "recompute" button to a ready comparison.
 
-E' il pezzo che toglie di mezzo l'assistente di sviluppo.  Fino a ieri i nove
-passi si lanciavano a mano, uno per uno, leggendo l'uscita di ognuno per
-decidere se il seguente si poteva fare; qui quella lettura la fa il programma,
-e la fa in modo che **un fallimento non possa somigliare a un successo**.
+Runs the nine steps in sequence, reading each one's output to decide whether
+the next can proceed, so a failure cannot look like a success.
 
-Tre regole governano tutto il resto.
+Three rules govern the rest of this module.
 
-1. **Ogni esecuzione ha la sua cartella datata** sotto `<dati>/esecuzioni/`, e
-   nasce vuota.  Non e' una comodita' d'archivio: e' il modo con cui «un passo
-   saltato lascia in giro il file di ieri» smette di essere possibile.  Un
-   artefatto che un passo doveva produrre e che non c'e' e' un guasto
-   dichiarato, non un file vecchio riletto come fresco.
-2. **Il confronto vivo si sostituisce alla fine, in un colpo solo.**  Se una
-   fase fallisce, `review_data.json` resta esattamente quello di prima: chi ha
-   premuto il pulsante perde la run, non il confronto su cui stava lavorando.
-3. **Il controllo sui numeri avvisa e non ferma** (decisione di Daniele del 12
-   agosto 2026).  Le fermate sono tre, e sono quelle in cui il programma non
-   ha l'autorita' per decidere perche' l'ingresso non si puo' usare: uno
-   schema che il registro non conosce, un documento che non si legge affatto,
-   e un listino da cui non esce nemmeno una riga ordinabile
-   (`FORNITORE_SENZA_RIGHE`, classificata cosi' il 13 agosto 2026 su delega
-   di Daniele: un fornitore caricato apposta che sparisse dal confronto con
-   un semplice avviso farebbe compilare gli ordini senza di lui, a prezzi
-   potenzialmente peggiori, mentre la fermata costa solo un rilancio — il
-   confronto vivo resta quello di prima).
+1. Each run gets its own dated folder under `<data>/esecuzioni/`, created
+   empty. This is not archival convenience: it is what makes "a skipped step
+   leaves yesterday's file lying around" impossible. An artifact a step was
+   supposed to produce and didn't is a declared failure, not a stale file
+   re-read as fresh.
+2. The live comparison is replaced at the end, in one atomic step. If a phase
+   fails, `review_data.json` stays exactly as it was: the user loses the run,
+   not the comparison they were working from.
+3. The numeric sanity check warns and never blocks. There are exactly three
+   stops, and they cover the cases where the program has no authority to
+   decide because the input cannot be used at all: a layout the adapter
+   registry doesn't recognize, a document that fails to parse, and a price
+   list that yields zero orderable rows (`FORNITORE_SENZA_RIGHE`): a supplier
+   deliberately loaded and then silently dropped from the comparison would
+   let orders go out without them, at potentially worse prices, while a hard
+   stop only costs a re-run — the live comparison stays untouched.
 
-⚠ Quello che questo modulo **non** fa: non manda ordini e non tocca gli
-originali dei fornitori. Il confronto vivo cambia soltanto all'attivazione;
-l'unica altra scrittura persistente e' nel registro degli adattatori, dopo che
-una mappatura confermata ha gia' superato manifest, parsing e costruzione.
+What this module does not do: it never sends orders and never touches the
+suppliers' original files. The live comparison changes only at activation;
+the only other persistent write is to the adapter registry, and only after a
+confirmed mapping has already passed manifest validation, parsing and build.
 """
 
 from __future__ import annotations
@@ -62,11 +58,8 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 import consegna  # noqa: E402
-# «Questa offerta si puo' ordinare» ha una risposta sola e sta nel suo modulo.
-# Qui era riscritta a mano, dentro la funzione che azzera le quantita' dopo un
-# ricalcolo: il giorno in cui la regola cresce nel servizio e non qui, il
-# ricalcolo non azzera una quantita' che la compilazione poi rifiuta, e il
-# sintomo si vede una settimana dopo e altrove.
+# "Is this offer orderable" has exactly one answer, kept in its own module
+# rather than duplicated here, so the rule can evolve in one place.
 from offerta import offer_is_available, offer_supplier_id  # noqa: E402
 import registro  # noqa: E402
 import scrittura_sicura  # noqa: E402
@@ -77,7 +70,7 @@ from conferme import impronta_prodotto  # noqa: E402
 
 
 # --------------------------------------------------------------------------
-# Il contratto verso la pagina
+# Contract with the page
 # --------------------------------------------------------------------------
 
 FASI: tuple[str, ...] = (
@@ -94,10 +87,9 @@ FASI: tuple[str, ...] = (
 
 TITOLI_FASI: dict[str, str] = {
     "PROFILAZIONE": "Lettura dei documenti",
-    # I titoli si leggono in pagina, e si leggono soprattutto quando qualcosa
-    # non va: «schema» e «manifest» sono strutture interne, e sapere che si e'
-    # fermato il «controllo del manifest» non dice niente a chi deve decidere
-    # se rilanciare o guardare i documenti.
+    # These titles show up on the page, especially when something fails:
+    # internal names like "schema" or "manifest" tell the user nothing about
+    # whether to retry or go check the documents.
     "RICONOSCIMENTO": "Riconoscimento delle colonne",
     "VALIDAZIONE": "Controllo dell'elenco dei documenti",
     "PARSING": "Lettura dei listini",
@@ -108,30 +100,26 @@ TITOLI_FASI: dict[str, str] = {
     "ATTIVAZIONE": "Attivazione del confronto",
 }
 
-# Quanto puo' stare zitto un passo prima che si dichiari impiantato, in
-# secondi.  ⚠ Sono tetti, non attese: nessuna run lecita ci arriva vicino — la
-# fase AI, la piu' lunga, e' stata misurata in 105 secondi — e sono larghi
-# apposta perche' il computer del negozio e' piu' lento di quello su cui si
-# misura.  Il tetto serve a un caso solo: un passo che non risponde piu'.
+# Seconds a step may stay silent before it's considered stuck. These are
+# ceilings, not expected durations: no legitimate run gets close (the AI
+# phase, the longest, measured 105s) — they're wide because the store's PC is
+# slower than the one used to measure.
 #
-# ⚠ E adesso misura davvero il **silenzio**, non la durata: fino al 22 agosto
-# 2026 questa riga diceva «quanto puo' stare zitto» e il codice faceva
-# `wait(timeout=...)`, cioe' contava dall'inizio.  Una fase AI sana e lunga —
-# tanti casi, un computer lento, un modello che risponde piano — veniva uccisa
-# a 900 secondi e raccontata come «non ha risposto», buttando via le chiamate
-# gia' pagate.  Il tetto si riarma a ogni riga che il passo scrive; per i passi
-# che non stampano niente le due misure coincidono e non cambia nulla.
-# Senza, quel passo teneva `lucchetto_lavori` per sempre, ogni «Ricalcola»
-# successivo rispondeva 409, `POST /api/spegni` si rifiutava di spegnere e il
-# lanciatore riusava il server vecchio — cioe' si inchiodava anche la sola
-# strada con cui una correzione arriva in negozio.  All'utente restava
-# chiudere la finestra a forza.
+# The timeout measures silence, not total duration: it resets on every line
+# the step prints. A long but healthy AI phase (many cases, a slow machine, a
+# slow model) must not be killed and reported as unresponsive just because
+# the wall-clock timer started at the beginning. For steps that print
+# nothing, the two measures coincide. Without a timeout, a stuck step holds
+# `lucchetto_lavori` forever: every following "Ricalcola" gets a 409,
+# `POST /api/spegni` refuses to shut down, and the launcher reuses the stale
+# server — the only path a code update reaches the store through gets
+# blocked too, leaving the user to force-close the window.
 TETTO_DELLE_FASI: dict[str, float] = {"VALUTAZIONE_AI": 900.0}
 TETTO_PREDEFINITO_DI_FASE = 300.0
 
 
 def tetto_della_fase(fase: str) -> float:
-    """I secondi oltre i quali quel passo si considera piantato."""
+    """Seconds of silence after which this step is considered stuck."""
 
     return TETTO_DELLE_FASI.get(fase, TETTO_PREDEFINITO_DI_FASE)
 
@@ -148,76 +136,74 @@ NOME_STATO = "pipeline_status.json"
 NOME_AUDIT_ESECUZIONE = "esecuzione.json"
 NOME_DECISIONI_MANUALI = "decisioni_schemi.json"
 
-# La cartella di una run non e' una compilazione: le due radici sono diverse
-# apposta, cosi' l'archivio dell'utente («ordini») non si mescola agli
-# artefatti di lavoro, che a nessuno servono dopo qualche settimana.
+# A run folder is not an order compilation: the two roots are kept separate
+# so the user's archive ("orders") never mixes with working artifacts that
+# nobody needs after a few weeks.
 NOME_RADICE_ESECUZIONI = "esecuzioni"
 
-# Quante cartelle di lavoro si tengono.  ⚠ Non ne cancellava nessuna: ogni
-# ricalcolo, riuscito o fallito, ne lascia una — misurata a 13 MB sul confronto
-# vero — e sul PC del negozio faceva circa settecento megabyte l'anno con un
-# ricalcolo a settimana, molti di piu' contando i tentativi.  Non e' lo spazio
-# in se': a disco pieno si aprono in fila i guasti che questo file passa la vita
-# a evitare — lo stato della catena che non si scrive, il lucchetto che resta
-# preso, la copia di sicurezza che salta in silenzio.  Cinque sono piu' di un
-# mese di lavoro normale, e le due cartelle che servono ancora non si contano:
-# quella della run di adesso e quella del confronto vivo.
+# How many run folders to keep. Every recompute, successful or not, leaves
+# one behind (measured at ~13 MB on the real comparison), so this bounds disk
+# growth. It's not the space itself: a full disk is what triggers the
+# failures this file exists to avoid (pipeline state that can't be written,
+# a lock left held, a backup copy that silently fails). Five is more than a
+# month of normal use; the two folders still needed — the run in progress and
+# the one behind the live comparison — are never counted against this cap.
 ESECUZIONI_DA_TENERE = 5
 
-# Quanto puo' cambiare il numero di righe di un listino rispetto alla volta
-# prima senza che valga la pena dirlo.  Non e' una soglia che blocca: e' la
-# soglia oltre la quale l'avviso compare in cima alla pagina.
+# How much a price list's row count can change from the previous run before
+# it's worth mentioning. Not a blocking threshold: just where the warning
+# starts showing at the top of the page.
 SCARTO_RIGHE_DA_SEGNALARE = 0.15
-# Sul prezzo mediano si e' piu' sensibili: un listino che cambia tutti i prezzi
-# del 10% e' una cosa che si vuole sapere prima di mandare un ordine.
+# The median price is watched more closely: a price list where every price
+# shifts by 10% is something worth knowing before an order goes out.
 SCARTO_PREZZO_DA_SEGNALARE = 0.10
 
 MASSIMO_AVANZAMENTO_STDERR = 4000
 
 PREFISSO_AVANZAMENTO = "AVANZAMENTO "
 
-# Il programma sul disco non è più quello che sta girando in memoria. Non è un
-# guasto del codice ed è l'utente a poterlo risolvere, quindi ha un codice suo:
-# «riprova» sarebbe un consiglio sbagliato, qui si chiude e si riapre.
+# The code on disk is no longer the code running in memory. Not a bug, and
+# the user can fix it themselves, so it gets its own code: "retry" would be
+# the wrong advice here — the fix is to close and reopen.
 CODICE_CAMBIATO_DOPO_L_AVVIO = "CODICE_CAMBIATO_DOPO_L_AVVIO"
 
 
 class LavoroGiaInCorso(RuntimeError):
-    """Un secondo ricalcolo mentre il primo sta ancora lavorando."""
+    """A second recompute was requested while the first is still running."""
 
 
 @dataclass
 class Fermata(Exception):
-    """La catena si ferma, e il motivo e' una cosa che deve fare l'utente.
+    """The pipeline stops because the user needs to act.
 
-    Non e' un guasto del programma: e' uno dei due casi in cui il programma non
-    ha l'autorita' per decidere da solo.  Porta con se' il codice, la frase da
-    mostrare e l'elenco dei documenti coinvolti, perche' «non riesco a
-    continuare» senza i nomi non e' un messaggio, e' un ostacolo.
+    Not a program failure: one of the two cases where the program has no
+    authority to decide on its own. Carries the code, the message to show,
+    and the documents involved, because "can't continue" without names is an
+    obstacle, not a message.
     """
 
     codice: str
     messaggio: str
     documenti: list[str] = field(default_factory=list)
     dettaglio: str = ""
-    # Per ogni documento coinvolto, PERCHE' ci finisce: "SCONOSCIUTO" (il
-    # registro non lo conosce) oppure "VARIATO" (lo conosce, ed e' il documento
-    # che non combacia piu' con la firma).  ⚠ `documenti` resta la lista piatta:
-    # e' quella con cui il servizio sa QUALI file configurare, e la ragione e'
-    # un'altra domanda.  Tenerle nello stesso campo e' esattamente l'errore che
-    # faceva scrivere «non riconosco le colonne» sul listino di CIPRESSO.
+    # For each document involved, why it's here: "SCONOSCIUTO" (the registry
+    # doesn't know it) or "VARIATO" (it knows it, but the document no longer
+    # matches the stored signature). `documenti` stays a flat list because
+    # that's what the service needs to know which files to configure; the
+    # reason is a separate question. Merging the two fields would make the
+    # page report unrecognized columns for a supplier the registry knows
+    # whose layout has changed.
     motivi: dict[str, str] = field(default_factory=dict)
 
-    def __str__(self) -> str:  # pragma: no cover - solo per i traceback
+    def __str__(self) -> str:  # pragma: no cover - only for tracebacks
         return self.messaggio
 
 
 class ComandoTroppoLungo(Exception):
-    """Il passo non ha risposto entro il suo tetto ed e' stato ucciso.
+    """A step didn't respond within its timeout and was killed.
 
-    Non porta il nome della fase perche' chi esegue il comando non lo sa: la
-    fase la mette `_esegui`, che e' anche l'unico posto in cui si sa come si
-    chiama in italiano.
+    Doesn't carry the phase name because the command runner doesn't know it;
+    `_esegui` attaches it, and is the only place that knows the phase name.
     """
 
     def __init__(self, secondi: float, stderr: str = "") -> None:
@@ -228,7 +214,7 @@ class ComandoTroppoLungo(Exception):
 
 @dataclass(frozen=True)
 class RisultatoComando:
-    """Che cosa ha fatto un passo della catena: uscita, uscite di testo, JSON."""
+    """What a pipeline step did: exit code, stdout, stderr."""
 
     uscita: int
     stdout: str
@@ -236,11 +222,11 @@ class RisultatoComando:
 
     @property
     def riepilogo(self) -> dict[str, Any]:
-        """L'ultimo oggetto JSON stampato dal comando, o `{}`.
+        """The last JSON object printed by the command, or `{}`.
 
-        Ogni script della catena chiude stampando il proprio riepilogo: e' da
-        li' che arrivano i numeri che la pagina mostra.  Un comando che stampa
-        altro non e' un guasto — il numero semplicemente non c'e'.
+        Every pipeline script ends by printing its own summary; that's where
+        the numbers the page shows come from. A command that prints something
+        else isn't a failure — the number is simply absent.
         """
 
         testo = self.stdout.strip()
@@ -258,8 +244,9 @@ class RisultatoComando:
 
 
 AscoltaAvanzamento = Callable[[dict[str, Any]], None]
-# ⚠ `...` e non la firma per esteso: l'esecutore riceve anche `timeout_secondi`
-# come argomento con nome, e `Callable` non sa dichiarare gli argomenti con nome.
+# `...` rather than the full signature: the runner also receives
+# `timeout_secondi` as a keyword argument, and `Callable` can't express
+# keyword-only parameters.
 Esecutore = Callable[..., RisultatoComando]
 
 
@@ -270,16 +257,17 @@ def esegui_comando(
     *,
     timeout_secondi: float | None = None,
 ) -> RisultatoComando:
-    """Esegue un passo della catena come sottoprocesso, leggendo l'avanzamento.
+    """Run a pipeline step as a subprocess, reading progress as it goes.
 
-    `stdout` si raccoglie tutto insieme perche' e' il riepilogo finale;
-    `stderr` si legge **riga per riga mentre il comando lavora**, perche' e' da
-    li' che passa l'avanzamento della fase AI, che da sola dura due minuti.  Un
-    programma che sta zitto per due minuti sembra rotto.
+    `stdout` is collected in full since it carries the final summary;
+    `stderr` is read line by line while the command runs, since that's how
+    progress from the AI phase (which alone takes about two minutes) is
+    reported. A program silent for two minutes looks broken.
 
-    `PYTHONIOENCODING` non e' un vezzo: senza, su Windows il figlio scrive nel
-    tubo con la codifica del sistema e la prima virgoletta all'italiana di un
-    messaggio lo fa morire di `UnicodeEncodeError` a lavoro finito.
+    `PYTHONIOENCODING` is not cosmetic: without it, on Windows the child
+    writes to the pipe using the system codepage, and the first Italian
+    curly quote in a message crashes it with `UnicodeEncodeError` after the
+    work is already done.
     """
 
     ambiente = dict(os.environ)
@@ -295,12 +283,12 @@ def esegui_comando(
         errors="replace",
     )
     pezzi_errore: list[str] = []
-    # L'ultimo segno di vita del figlio. ⚠ Serve a far misurare al tetto quello
-    # che il suo nome dice — «quanto puo' stare zitto un passo» — e non la
-    # durata totale: `wait(timeout=...)` da solo uccideva una fase sana ma lunga
-    # e la raccontava come «non ha risposto». Per i passi che non stampano
-    # niente le due misure coincidono, e per loro non cambia niente; cambia per
-    # la fase AI, che manda una riga di avanzamento a ogni caso.
+    # Last sign of life from the child. Makes the timeout measure what its
+    # name says — how long a step can stay silent — rather than total
+    # duration: `wait(timeout=...)` alone would kill a long but healthy phase
+    # and report it as unresponsive. For steps that print nothing the two
+    # measures coincide; it matters for the AI phase, which emits a progress
+    # line per case.
     ultimo_segno = [time.monotonic()]
 
     def leggi_errore() -> None:
@@ -329,30 +317,30 @@ def esegui_comando(
 
     lettore = threading.Thread(target=leggi_errore, name="pipeline-stderr", daemon=True)
     lettore.start()
-    # ⚠ Anche `stdout` si legge in un filo, e non e' un vezzo: `read()` torna
-    # all'EOF, cioe' quando il figlio muore o chiude il tubo.  Leggendolo qui
-    # un passo impiantato bloccava PRIMA di arrivare alla `wait`, e un tetto
-    # sulla sola `wait` non sarebbe scattato mai — che e' il modo in cui una
-    # difesa contro i piantamenti si scrive e non funziona.
+    # `stdout` is also read on its own thread, not for symmetry: `read()`
+    # only returns at EOF, i.e. when the child dies or closes the pipe.
+    # Reading it inline would block before `wait` is ever reached, so a
+    # timeout on `wait` alone would never fire — a stuck-process guard that
+    # looks correct but doesn't work.
     lettore_uscita = threading.Thread(target=leggi_uscita, name="pipeline-stdout", daemon=True)
     lettore_uscita.start()
 
     def chiudi() -> None:
-        """⚠ Un tubo si chiude **solo** se chi lo leggeva ha finito.
+        """A pipe is closed only once its reader thread has finished.
 
-        `close()` su un `BufferedReader` pretende il lucchetto interno del
-        lettore, e se un filo e' ancora dentro `read()` si resta li' per
-        sempre — con `lucchetto_lavori` in mano, cioe' esattamente la fermata
-        che il tetto esiste per evitare.  Succede per davvero: `kill()` uccide
-        il figlio diretto, e se quel figlio aveva lasciato un discendente che
-        ha ereditato il tubo l'EOF non arriva mai.  In quel caso i due
-        descrittori restano aperti fino alla morte del processo, ed e' il
-        prezzo giusto: sono due, e l'alternativa e' il programma piantato.
+        `close()` on a `BufferedReader` wants the reader's internal lock; if a
+        thread is still inside `read()`, closing blocks forever — holding
+        `lucchetto_lavori`, exactly the stall the timeout exists to prevent.
+        This is a real case, not theoretical: `kill()` only kills the direct
+        child, and if that child had spawned a descendant that inherited the
+        pipe, EOF never arrives. In that case the two descriptors stay open
+        until the process dies, which is an acceptable cost against a stuck
+        program.
         """
 
-        # Cinque secondi in tutto, non cinque per filo: e' il tempo che si
-        # concede alla pulizia, e raddoppiarlo perche' i lettori sono due
-        # raddoppierebbe anche l'attesa dell'utente davanti a un passo morto.
+        # Five seconds total, not five per thread: this is the time given to
+        # cleanup, and doubling it because there are two readers would double
+        # the user's wait in front of a dead step too.
         scadenza = time.monotonic() + 5
         lettore.join(timeout=max(0.0, scadenza - time.monotonic()))
         lettore_uscita.join(timeout=max(0.0, scadenza - time.monotonic()))
@@ -362,12 +350,12 @@ def esegui_comando(
             processo.stderr.close()
 
     def aspetta_finche_da_segni() -> int:
-        """Aspetta il figlio, e lo uccide solo se sta zitto da troppo.
+        """Wait for the child, killing it only after too long a silence.
 
-        Il tetto si riarma a ogni riga che arriva: un passo che lavora e lo
-        dice puo' durare quanto gli serve, un passo che non risponde piu' viene
-        chiuso dopo `timeout_secondi` di silenzio. Senza tetto — che e' il caso
-        delle prove — si aspetta e basta.
+        The timeout resets on every line that arrives: a step that's working
+        and saying so can run as long as it needs; one that stops responding
+        gets killed after `timeout_secondi` of silence. With no timeout (the
+        case in tests), this just waits.
         """
 
         if timeout_secondi is None:
@@ -377,8 +365,8 @@ def esegui_comando(
             if rimasto <= 0:
                 raise subprocess.TimeoutExpired(processo.args, timeout_secondi)
             try:
-                # Non piu' di un secondo per volta: e' il passo con cui si
-                # riguarda l'orologio, non un'attesa in piu'.
+                # At most one second per poll: this is how the clock gets
+                # re-checked, not extra waiting.
                 return processo.wait(timeout=min(rimasto, 1.0))
             except subprocess.TimeoutExpired:
                 continue
@@ -388,10 +376,9 @@ def esegui_comando(
             codice = aspetta_finche_da_segni()
         except subprocess.TimeoutExpired:
             processo.kill()
-            # ⚠ Col tetto anche qui: SIGKILL non si ignora, ma un figlio fermo
-            # in un'attesa di I/O non interrompibile pianterebbe la `wait`, e
-            # sarebbe di nuovo il programma inchiodato per non aver saputo
-            # aspettare.
+            # A timeout here too: SIGKILL itself can't be ignored, but a
+            # child stuck in uninterruptible I/O would hang this `wait`,
+            # which is the same stall all over again.
             try:
                 processo.wait(timeout=10)
             except subprocess.TimeoutExpired:
@@ -400,8 +387,8 @@ def esegui_comando(
                 secondi=float(timeout_secondi or 0.0), stderr="".join(pezzi_errore)[-4000:]
             ) from None
     finally:
-        # Nel `finally` e non nei due rami: qualunque cosa succeda qui dentro
-        # — anche un `KeyboardInterrupt` — i tubi e i fili si chiudono.
+        # In `finally`, not in either branch: whatever happens here — even a
+        # `KeyboardInterrupt` — the pipes and threads get closed.
         chiudi()
     return RisultatoComando(
         uscita=codice, stdout="".join(pezzi_uscita), stderr="".join(pezzi_errore)
@@ -409,12 +396,12 @@ def esegui_comando(
 
 
 # --------------------------------------------------------------------------
-# La configurazione
+# Configuration
 # --------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class ConfigurazionePipeline:
-    """Dove stanno le cose.  Nessun percorso è cablato dentro il codice."""
+    """Where things live. No path is hardcoded in the code."""
 
     data_dir: Path
     uploads_dir: Path
@@ -439,18 +426,17 @@ class ConfigurazionePipeline:
 
     @property
     def decisioni_manuali_path(self) -> Path:
-        """Le decisioni scritte a mano per gli schemi che il registro non conosce."""
+        """Manually written decisions for layouts the registry doesn't know."""
 
         return self.data_dir / NOME_DECISIONI_MANUALI
 
 
 def _frase_dell_errore(voce: Any) -> str:
-    """Una voce d'errore del manifest, detta a chi fa gli ordini.
+    """One manifest error entry, phrased for whoever places the orders.
 
-    ⚠ Qui c'era `str(voce)`, e `voce` e' un **dizionario Python**: in pagina
-    usciva «{'file': 'OFFERTE AGOSTO 4.xlsx', 'code': 'MAPPATURA_INCOMPLETA',
-    'message': '…', 'missing': [...]}», parentesi graffe e apostrofi compresi.
-    Il dizionario intero resta in `dettaglio`, che e' dove serve.
+    A naive `str(voce)` would print the raw Python dict — braces, quotes and
+    all — to a user in the UI. The full dict is kept in `dettaglio`, where
+    it belongs.
     """
 
     if not isinstance(voce, dict):
@@ -479,12 +465,12 @@ def json_sicuro(valore: Any) -> Any:
 
 
 def scrivi_json(percorso: Path, valore: Any) -> None:
-    """In binario e a fine riga LF, come tutto il resto del progetto.
+    """Written in binary with LF line endings, like the rest of the project.
 
-    Lo schema — temporaneo col nome di chi lo scrive, `fsync`, `os.replace` —
-    sta in `scrittura_sicura`: era in quattro copie, e le copie di una difesa
-    divergono. `json_sicuro` resta qui perche' e' l'unico chiamante che deve
-    scrivere anche oggetti che JSON non conosce.
+    The write pattern (temp file, `fsync`, `os.replace`) lives in
+    `scrittura_sicura`, the single shared implementation. `json_sicuro` stays
+    here because this is the one caller that also needs to serialize objects
+    JSON doesn't know about (e.g. `Path`).
     """
 
     scrittura_sicura.scrivi_json(percorso, json_sicuro(valore), a_capo_finale=True)
@@ -517,13 +503,13 @@ def _numero(valore: Any) -> float | None:
 
 
 def articolo_della_riga(prodotto: Any) -> str:
-    """Che cosa c'e' su questa riga dell'elenco, indipendentemente dal numero di riga.
+    """What item this row of the reorder list actually holds, row number aside.
 
-    L'identificativo di un prodotto e' il **numero di riga** del gestionale
-    (`product:3` e' la riga 3).  Con un elenco nuovo la riga 3 e' un altro
-    articolo, e una decisione presa sulla riga 3 di prima non parla di lui.
-    Questa e' la firma che dice se e' rimasto lo stesso: il codice a barre
-    quando c'e', altrimenti il nome ridotto all'osso.
+    A product's id is the row number in the management-software export
+    (`product:3` is row 3). With a new export, row 3 can be a different item,
+    and a decision made on the old row 3 doesn't apply to it. This returns
+    the fingerprint that says whether the item is still the same: the
+    barcode when there is one, otherwise the normalized name.
     """
 
     if not isinstance(prodotto, dict):
@@ -538,14 +524,14 @@ def articolo_della_riga(prodotto: Any) -> str:
 
 
 # --------------------------------------------------------------------------
-# L'orchestratore
+# Orchestrator
 # --------------------------------------------------------------------------
 
 class PipelineJobManager:
-    """Possiede una sola esecuzione della catena e ne espone lo stato in JSON.
+    """Owns a single pipeline run and exposes its status as JSON.
 
-    Non sa che cosa sia una rotta HTTP: `avvia()` e `stato()` sono due funzioni
-    che restituiscono dizionari, ed e' il server a metterle sotto un URL.
+    Doesn't know what an HTTP route is: `avvia()` and `stato()` are plain
+    functions returning dicts, and it's the server that puts them behind a URL.
     """
 
     def __init__(
@@ -562,38 +548,40 @@ class PipelineJobManager:
         self.configurazione = configurazione
         self.esecutore = esecutore
         self.su_confronto_attivato = su_confronto_attivato
-        # Chi sa quali codici a barre l'utente ha dichiarato uguali. E' una
-        # funzione e non un percorso perche' il magazzino delle conferme ha un
-        # padrone solo — il servizio — e due oggetti aperti sullo stesso file
-        # SQLite sono il modo classico di scoprire troppo tardi che uno dei due
-        # lo teneva bloccato. Qui la risposta si chiede e si scrive nella
-        # cartella della run, dove resta a dire quali dichiarazioni valevano.
+        # Who knows which barcodes the user has declared equivalent. A
+        # function rather than a path because the confirmations store has a
+        # single owner — the service — and two objects opening the same
+        # SQLite file is the classic way to discover too late that one of
+        # them had it locked. The answer is requested here and written into
+        # the run folder, where it stays as a record of which declarations
+        # applied.
         self.uguaglianze_dichiarate = uguaglianze_dichiarate
-        # Chi sa quali offerte l'utente ha rifiutato con «Non e' lo stesso
-        # articolo». Stessa forma delle uguaglianze, e per la stessa ragione:
-        # il magazzino delle conferme ha un padrone solo. ⚠ Serve **qui** e non
-        # solo in lettura: senza, `_ripulisci_stato` vede l'offerta rifiutata
-        # ancora utilizzabile, conclude «qualcuno lo serve» e azzera la
-        # quantita' — e il prodotto sparisce da «Prodotti da reperire», che e'
-        # esattamente il vicolo cieco che quel rifiuto doveva chiudere.
+        # Who knows which offers the user rejected with "not the same item".
+        # Same shape as the equivalences and for the same reason: the
+        # confirmations store has a single owner. This is needed here, not
+        # only for display: without it, `_ripulisci_stato` would see the
+        # rejected offer as still usable, conclude "someone can still supply
+        # this" and zero out the quantity — dropping the product out of
+        # "items to source", exactly the dead end that rejection was meant
+        # to close.
         self.rifiuti_dichiarati = rifiuti_dichiarati
-        # Il lucchetto dei lavori e' **uno solo** per tutti i job che toccano
-        # `review_data.json`: due che lo sostituiscono insieme lascerebbero un
-        # confronto meta' di uno e meta' dell'altro.
+        # One single lock for every job that touches `review_data.json`: two
+        # jobs replacing it at once would leave a comparison half one and
+        # half the other.
         self.lucchetto_lavori = lucchetto_lavori or threading.Lock()
-        # ⚠ E' il **medesimo** lucchetto delle rotte (`ReviewStore.lock`), non
-        # un secondo: serve a tenere fuori il salvataggio della pagina
-        # dall'unico istante in cui la catena tocca i dati che le rotte
-        # servono — lo stato ripulito e la sostituzione del confronto vivo.
-        # L'ordine e' sempre `lucchetto_lavori` prima e questo dopo, mai il
-        # contrario: nessuna rotta prende il lucchetto dei lavori, quindi
-        # l'abbraccio mortale non ha da dove nascere.  Un `RLock` perche' e'
-        # quello che il servizio usa, e la catena lo prende una volta sola.
+        # The same lock the HTTP routes use (`ReviewStore.lock`), not a
+        # second one: it keeps the page's own save-state calls out of the
+        # one moment the pipeline touches the data the routes serve — the
+        # cleaned-up state and the swap of the live comparison. The lock
+        # order is always `lucchetto_lavori` first and this one second,
+        # never reversed: no route ever takes the jobs lock, so a deadlock
+        # has no way to form. An `RLock` because that's what the service
+        # uses, and the pipeline only acquires it once.
         self.lucchetto_dati = lucchetto_dati or threading.RLock()
         self._lucchetto = threading.RLock()
         self._filo: threading.Thread | None = None
-        # Lo si dice una volta sola: lo stato si riscrive a ogni fase e a ogni
-        # avanzamento, e una console piena della stessa riga non la legge nessuno.
+        # Logged once: state gets rewritten on every phase change and every
+        # progress tick, and a console full of the same line helps no one.
         self._stato_non_si_scrive = False
         self._percorso_stato = configurazione.data_dir / NOME_STATO
         configurazione.esecuzioni_dir.mkdir(parents=True, exist_ok=True)
@@ -601,9 +589,9 @@ class PipelineJobManager:
         stato = leggi_json(self._percorso_stato, None)
         self._stato = stato if isinstance(stato, dict) else self._stato_in_attesa()
         if self._stato.get("stato") in STATI_IN_CORSO:
-            # Il server e' stato chiuso mentre la catena lavorava: quella run
-            # non riprende da sola, e dirlo e' meglio che lasciare in pagina una
-            # barra che non avanzera' mai piu'.
+            # The server was shut down while the pipeline was running: that
+            # run doesn't resume on its own, and saying so is better than
+            # leaving a progress bar on the page that will never move again.
             self._stato.update({
                 "ok": False,
                 "stato": INTERROTTO,
@@ -661,21 +649,21 @@ class PipelineJobManager:
         }
 
     def _salva_stato(self) -> None:
-        """Lo stato sul disco, e un guasto qui non ferma la catena.
+        """Write the state to disk; a failure here does not stop the pipeline.
 
-        ⚠ Prima sollevava, e il guasto peggiore era il piu' silenzioso: se
-        `pipeline_status.json` non si scrive — disco pieno, cartella in sola
-        lettura, antivirus sul temporaneo — l'eccezione partiva da dentro il
-        gestore d'errore di `_lavora`, che chiama `_segna_fase` e riprova la
-        stessa scrittura fallita. La seconda eccezione usciva **prima** che lo
-        stato diventasse `ERRORE`: il filo moriva, il lucchetto si liberava, e
-        in pagina restava una barra ferma su «in corso» che non sarebbe
-        avanzata mai piu', con il ricalcolo e i caricamenti spenti.
+        If `pipeline_status.json` can't be written (full disk, read-only
+        folder, antivirus locking the temp file), raising here would surface
+        the exception from inside `_lavora`'s own error handler, which calls
+        `_segna_fase` and retries the same failed write — the second
+        exception would escape before the state ever became `ERRORE`: the
+        thread dies, the lock is released, and the page is left with a
+        progress bar stuck on "in progress" forever, with recompute and
+        uploads both disabled.
 
-        Lo stato che conta per chi guarda la pagina e' quello in memoria —
-        `stato()` legge quello — e il file serve a due cose sole: sopravvivere
-        a un riavvio del servizio, e dire «interrotto» a chi riapre. Perderlo
-        e' un peggioramento, non un guasto: si dice una volta e si va avanti.
+        The state that matters to the page is the in-memory one — `stato()`
+        reads that — and the file serves only two purposes: surviving a
+        service restart, and telling a reopened page "interrupted". Losing it
+        is a degradation, not a failure: log it once and move on.
         """
 
         try:
@@ -697,17 +685,16 @@ class PipelineJobManager:
             self._salva_stato()
 
     def _segna_fase(self, nome: str, stato: str, dettaglio: str = "", durata: float | None = None) -> None:
-        """`durata` arriva da `time.monotonic()`, non dall'orologio di parete.
+        """`durata` comes from `time.monotonic()`, not the wall clock.
 
-        ⚠ Le nove fasi si misuravano con `datetime.now()`, che il PC del
-        negozio fa saltare: Windows Time lo corregge quando vuole, e due volte
-        l'anno cambia l'ora legale.  Una correzione presa in mezzo a un
-        ricalcolo scriveva qui — e nell'audit della cartella — un'ora di troppo
-        o una durata negativa, ed e' il numero che poi si usa per dire «era
-        lento».  `time.monotonic()` non torna indietro e non ha fuso: e' un
-        conta-secondi, non una data.  I timbri restano dove sono: `utc_ora()`
-        e' gia' in UTC esplicito, e il `datetime.now().astimezone()` che da'
-        il nome alla cartella della run deve restare l'ora locale.
+        A wall clock can jump underneath a long-running phase (an NTP
+        correction, a DST change), which would write a wrong or negative
+        duration here and in the run's audit trail — exactly the number used
+        later to judge whether a phase was slow. `time.monotonic()` never
+        goes backward and has no timezone: it's a second counter, not a
+        date. The other timestamps stay as they are: `utc_ora()` is already
+        explicit UTC, and the `datetime.now().astimezone()` that names the
+        run folder is meant to stay local time.
         """
 
         with self._lucchetto:
@@ -740,20 +727,20 @@ class PipelineJobManager:
             self._salva_stato()
 
     def _metti_da_parte_gli_adattatori_superati(self) -> None:
-        """Prima di riconoscere qualunque documento: vale lo spedito piu' recente.
+        """Before recognizing any document: the shipped adapter wins if newer.
 
-        E' la regola di `registro._motivo_del_superamento`, applicata al file
-        una volta per confronto, cosi' l'avviso esce una volta sola e non a
-        ogni lettura del registro.  Sta prima della profilazione perche' e'
-        li' — `inspect_sources` chiama `registro.riconosci` — che una voce
-        imparata vecchia si prenderebbe il documento al posto di quella
-        spedita.  Un registro che non si legge non ferma qui: lo dice gia' la
-        fase che ne ha bisogno.
+        Applies `registro._motivo_del_superamento` once per run, so the
+        warning fires once instead of on every registry read. Runs before
+        profiling because that's where `inspect_sources` calls
+        `registro.riconosci`, and an outdated learned entry would otherwise
+        claim the document ahead of the shipped one. A registry that can't be
+        read doesn't stop here — the phase that actually needs it will
+        report that.
         """
 
         try:
             messe = registro.metti_da_parte_le_superate(self.configurazione.adapters_path)
-        except Exception as exc:  # noqa: BLE001 - confine difensivo: si va avanti con il registro com'e'
+        except Exception as exc:  # noqa: BLE001 - defensive boundary: proceed with the registry as it is
             print(f"[AVVISO] adattatori superati non messi da parte — {type(exc).__name__}: {exc}")
             return
         for scheda in messe:
@@ -771,18 +758,18 @@ class PipelineJobManager:
 
     def _avvisa(self, codice: str, titolo: str, messaggio: str,
                 *, severita: str = "warning", **extra: Any) -> None:
-        """Un avviso non ferma niente: e' il contratto della fase 6c.
+        """A warning never blocks anything: warnings never halt the pipeline.
 
-        Finisce sia nello stato del job — che la pagina mostra mentre lavora —
-        sia, all'attivazione, dentro `review_data.json`, perche' due minuti dopo
-        nessuno guardera' piu' la barra di avanzamento.
+        Goes into both the job's live state — shown while it's running — and,
+        at activation, into `review_data.json`, since two minutes later
+        nobody is watching the progress bar anymore.
 
-        `severita` esiste per i pochi avvisi che non si possono leggere di
-        sfuggita: `"error"` li fa uscire in rosso in cima alla pagina e in
-        rosso nel documento, e `blocking` resta `False` — la compilazione non
-        si chiude, perche' «il controllo sui numeri avvisa e non ferma».  Non
-        c'e' nessun modo di spegnerli: un avviso che si puo' zittire, prima o
-        poi, viene zittito.
+        `severita` exists for the few warnings that must not be skimmed past:
+        `"error"` renders them in red at the top of the page and in the
+        document, while `blocking` stays `False` — order compilation isn't
+        stopped, per the rule that the numeric check warns and never blocks.
+        There's no way to mute them: a warning that can be silenced
+        eventually gets silenced.
         """
 
         with self._lucchetto:
@@ -809,26 +796,18 @@ class PipelineJobManager:
         documenti: list[str] | None = None,
         fornitori: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Scarta l'esito di una run che descrive documenti ormai diversi.
+        """Discard the outcome of a run whose documents have since changed.
 
-        Le cartelle delle run restano come audit, ma la pagina non deve tentare
-        di configurare un file che nel frattempo è stato eliminato o sostituito.
-        Una run viva conserva invece il proprio stato: se i file cambiano
-        durante il lavoro, saranno le sue verifiche a fermarla in sicurezza.
+        Run folders stay around as an audit trail, but the page must not try
+        to configure a file that has since been deleted or replaced. A run
+        still in progress keeps its own state instead: if files change while
+        it's working, its own checks will stop it safely.
 
-        ⚠ `cambiamento` è il campo che accende in pagina la fascia «Hai
-        caricato il listino LARICE dopo l'ultimo confronto: i prezzi che vedi
-        nelle pagine 2 e 3 sono ancora quelli di lunedì 10 agosto». La pagina
-        sa leggerlo dal 15 agosto 2026 e ha cinque prove che lo dimostrano, ma
-        **nessuno lo scriveva**: chi cancellava un listino e ne caricava un
-        altro si ritrovava i prezzi della settimana prima senza una parola.
-        Verificato sul `pipeline_status.json` vero del 22 agosto 2026: quel
-        campo non c'era. È la forma più insidiosa di prova verde — prova che
-        chi legge funziona, e nessuno prova che qualcuno lo alimenti.
-
-        Quello che qui non si dichiara resta com'era — lo stato torna in attesa
-        e basta — perché una fascia che non sa dire *che cosa* è cambiato non
-        aiuta nessuno.
+        `cambiamento` is the field that lights up the banner on the page
+        saying which supplier's price list changed since the last comparison
+        and that the prices currently shown are stale. What isn't declared
+        here is left as-is — the state just goes back to idle — because a
+        banner that can't say *what* changed helps no one.
         """
 
         with self._lucchetto:
@@ -848,7 +827,7 @@ class PipelineJobManager:
             return deepcopy(self._stato)
 
     def _contesto_mappatura(self) -> tuple[dict[str, Any], Path, list[dict[str, Any]], list[str]]:
-        """Restituisce soltanto la run fermata che la pagina può configurare."""
+        """Returns only the stopped run that the page can configure."""
 
         stato = deepcopy(self._stato)
         fermata = stato.get("fermata") or {}
@@ -879,25 +858,23 @@ class PipelineJobManager:
                 raise ValueError("Un documento dell'anteprima non appartiene ai caricamenti.") from None
         return stato, cartella, profili, nomi
 
-    # --- il selettore delle colonne aperto a mano --------------------------
+    # --- manual column selector --------------------------------------------
     #
-    # Il percorso della mappatura guidata apre il selettore soltanto quando la
-    # catena si ferma su uno schema che il registro non conosce.  Con i
-    # fornitori riconosciuti non si ferma mai, e non c'era nessun modo di
-    # rivedere le colonne di un listino gia' noto — a partire dalla colonna
-    # d'ordine, che e' quella che decide dove finiscono le quantita' nella copia
-    # da mandare.  Richiesta di Daniele, 15 agosto 2026: «vorrei un pulsante che
-    # mi permetta di selezionare la colonna di compilazione quantita' sui
-    # listini».
+    # The guided-mapping flow opens the selector only when the pipeline stops
+    # on a layout the registry doesn't recognize. Recognized suppliers never
+    # trigger it, so there was no way to review the columns of an
+    # already-known price list — starting with the order-quantity column,
+    # which decides where quantities land in the file sent back to the
+    # supplier.
     #
-    # Il macchinario e' lo stesso della mappatura guidata (`schema_mapping`):
-    # cambia soltanto da dove arrivano i profili — la cartella dei caricamenti
-    # invece della cartella di una run ferma — e che alla fine **non riparte
-    # niente**.  La mappatura confermata diventa una decisione scritta, e la usa
-    # il prossimo ricalcolo, che lo lancia l'utente quando vuole: dieci minuti
-    # non si prendono senza che li abbia chiesti.  Ma la pagina lo dice, con la
-    # stessa fascia di un documento cambiato, perche' e' la stessa cosa — i
-    # prezzi che si vedono adesso sono stati letti con le colonne di prima.
+    # Same machinery as guided mapping (`schema_mapping`): only the source of
+    # the profiles changes (the uploads folder instead of a stopped run's
+    # folder), and at the end nothing restarts automatically. The confirmed
+    # mapping becomes a stored decision used by the next recompute, which the
+    # user triggers themselves — a ten-minute run is never started without
+    # being asked for. The page shows the same banner as a changed document,
+    # because it is the same situation: the prices currently shown were read
+    # with the previous columns.
     CHIAVE_COLONNE_A_MANO = "colonne-a-mano"
 
     def _profili_dei_caricamenti(self) -> list[dict[str, Any]]:
@@ -908,15 +885,15 @@ class PipelineJobManager:
         return [voce for voce in profili if isinstance(voce, dict)]
 
     def _documento_caricato(self, nome: Any) -> str:
-        """Il nome, controllato contro la cartella dei caricamenti.
+        """The file name, checked against the uploads folder.
 
-        Il browser non sceglie percorsi: sceglie fra i nomi che il servizio gli
-        ha dato, e questo lo verifica sul disco prima di aprire qualsiasi cosa.
+        The browser never picks a path directly: it picks among names the
+        service has given it, and this checks the name against disk before
+        opening anything.
 
-        ⚠ Le due domande sono diverse e servono tutte e due. Il registro dei
-        profili ferma i nomi inventati; il **file tolto dalla cartella con
-        Esplora risorse**, che nel registro c'e' ancora, lo ferma soltanto il
-        controllo sul disco.
+        Two separate checks, both needed: the profiles registry rejects a
+        made-up name; a file removed from the folder with Explorer, which
+        still has an entry in that registry, is only caught by the disk check.
         """
 
         nome = str(nome or "").strip()
@@ -949,13 +926,13 @@ class PipelineJobManager:
         return esito
 
     def salva_colonne_del_documento(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Scrive la mappatura e dichiara che il confronto e' da rifare.
+        """Store the mapping and mark the comparison as stale.
 
-        Non lancia il ricalcolo: dieci minuti non si prendono senza che l'utente
-        li abbia chiesti.  Le colonne nuove le usa il prossimo confronto, e la
-        pagina lo dice con la stessa fascia di un documento cambiato — perche'
-        e' la stessa cosa: i prezzi che si vedono adesso sono stati letti con le
-        colonne di prima.
+        Doesn't trigger a recompute: a ten-minute run is never started
+        without the user asking for it. The next comparison uses the new
+        columns, and the page shows the same banner as for a changed
+        document — it's the same situation: the prices currently shown were
+        read with the previous columns.
         """
 
         nome, profili, adattatori = self._contesto_colonne(payload)
@@ -966,8 +943,8 @@ class PipelineJobManager:
             if self.in_corso():
                 raise ValueError("Il confronto è partito nel frattempo: riprova quando ha finito.")
             self._salva_decisioni_confermate(decisioni)
-        # Il fornitore, quando la mappatura lo dichiara: «BETULLA» dice piu' del
-        # nome del file, ed e' quello che la fascia mette in prima riga.
+        # The supplier name, when the mapping declares it: more informative
+        # than the file name, and what the banner leads with.
         fornitori = [
             schema_mapping.nome_dichiarato(str(voce.get("supplier_id") or ""), adattatori)
             for voce in decisioni
@@ -992,9 +969,9 @@ class PipelineJobManager:
     def schemi_pendenti(self) -> dict[str, Any]:
         with self._lucchetto:
             stato, _cartella, profili, nomi = self._contesto_mappatura()
-            # La ragione per documento la dichiara la fermata, non la si
-            # rideduce dal profilo: e' la stessa autorita' che ha deciso di
-            # fermarsi.
+            # The per-document reason comes from the stop itself, not
+            # re-derived from the profile: it's the same authority that
+            # decided to stop.
             motivi = (stato.get("fermata") or {}).get("motivi") or {}
             adattatori = schema_mapping.carica_adattatori(self.configurazione.adapters_path)
             return schema_mapping.prepara_pendenti(
@@ -1002,19 +979,20 @@ class PipelineJobManager:
             )
 
     def colonne_dei_documenti(self) -> dict[str, Any]:
-        """Quali colonne il confronto vivo ha usato, documento per documento.
+        """Which columns the live comparison used, document by document.
 
-        Non guarda lo stato della catena — guarda la **run che ha prodotto il
-        confronto che si sta usando**, che e' un'altra cosa: dopo un ricalcolo
-        andato male lo stato racconta l'ultimo tentativo, mentre i prezzi in
-        pagina vengono ancora dalla run di prima, ed e' di quella che bisogna
-        poter vedere le colonne.  L'identificativo lo dichiara il confronto
-        stesso (`run.pipelineRunId`), come fa la guardia della compilazione.
+        Doesn't look at the pipeline's own state — it looks at the run that
+        produced the comparison currently in use, which can differ: after a
+        failed recompute the state describes the last attempt, while the
+        prices on the page still come from the previous run, and it's that
+        run's columns that need to be shown. The run id comes from the
+        comparison itself (`run.pipelineRunId`), the same field the order
+        compilation guard uses.
 
-        Non solleva quando non c'e' niente da mostrare: un programma appena
-        installato, una cartella di run ripulita a mano e un confronto vecchio
-        di tre versioni sono tre modi normali di non avere la risposta, e in
-        pagina valgono tutti «di questo documento non so dirti le colonne».
+        Doesn't raise when there's nothing to show: a freshly installed
+        program, a manually cleaned-up run folder, or a comparison from an
+        older version are all normal ways to have no answer, and on the page
+        they all read as "columns unknown for this document".
         """
 
         run_id, motivo, voci = self._documenti_della_run()
@@ -1029,15 +1007,14 @@ class PipelineJobManager:
     def _documenti_della_run(
         self,
     ) -> tuple[str, str, list[tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any]]]]:
-        """I documenti della run che ha prodotto il confronto in uso.
+        """The documents of the run that produced the comparison in use.
 
-        Restituisce `(runId, motivo, voci)`: se `motivo` non e' vuoto le voci
-        sono zero e quella frase e' la ragione, che in pagina vale «di questo
-        documento non so dirti le colonne».  Ogni voce e' la terna
-        `(profilo, adattatore, decisione)`, cioe' i tre pezzi che servono a
-        chiunque debba dire qualcosa su un documento del confronto: il profilo
-        porta le righe, l'adattatore quello che il registro dichiara, la
-        decisione quello che l'utente ha confermato.
+        Returns `(runId, motivo, voci)`: when `motivo` is non-empty, `voci`
+        is empty and that message is the reason, read on the page as
+        "columns unknown for this document". Each entry is the triple
+        `(profile, adapter, decision)` — the three pieces anyone reporting on
+        a document needs: the profile carries the sample rows, the adapter is
+        what the registry declares, the decision is what the user confirmed.
         """
 
         review = leggi_json(self.configurazione.review_path, {})
@@ -1055,10 +1032,9 @@ class PipelineJobManager:
         voci = manifest.get("files") if isinstance(manifest, dict) else None
         if not isinstance(profili, list) or not isinstance(voci, list):
             return run_id, "I file di quel confronto non sono più leggibili.", []
-        # La decisione (fornitore, adattatore, mappatura confermata) sta nel
-        # manifest; il profilo porta le righe da mostrare come esempio. Si
-        # incrociano sul `profile_id`, che e' l'identificativo che entrambi
-        # dichiarano, e non sul nome del file.
+        # The decision (supplier, adapter, confirmed mapping) lives in the
+        # manifest; the profile carries the sample rows. They're joined on
+        # `profile_id`, the identifier both declare, not on the file name.
         per_profilo = {
             str(voce.get("profile_id") or ""): (voce.get("ai_preflight") or {})
             for voce in voci
@@ -1070,26 +1046,25 @@ class PipelineJobManager:
             if not isinstance(profilo, dict):
                 continue
             decisione = per_profilo.get(str(profilo.get("profile_id") or "")) or {}
-            # ⚠ `voce_in_uso` e non l'id cosi' com'e': questa decisione e' stata
-            # presa al ricalcolo, e da allora qualcuno puo' aver spostato la
-            # colonna d'ordine dalla pagina — mossa che scrive una voce
-            # `__locale`. Cercando `betulla_v1` si ritroverebbe quella spedita,
-            # con la colonna di prima, e la pagina mostrerebbe una colonna che
-            # non e' piu' quella che si usa.
+            # `voce_in_uso`, not the raw id: this decision was made at
+            # recompute time, and since then the order column may have been
+            # moved from the page — which writes a `__locale` entry. Looking
+            # up the shipped id directly would return the shipped column, and
+            # the page would show a column that's no longer the one in use.
             adattatore = registro.voce_in_uso(decisione.get("adapter_id"), adattatori) or None
             risultato.append((profilo, adattatore, decisione))
         return run_id, "", risultato
 
     def documento_del_fornitore(self, supplier_id: str) -> dict[str, Any]:
-        """Il documento di questo fornitore nel confronto in uso, e le sue colonne.
+        """This supplier's document in the current comparison, plus its columns.
 
-        Serve a chi deve **cambiare la colonna d'ordine**: sono gli stessi dati
-        che la scheda del documento mostra in pagina 1, piu' l'elenco completo
-        delle colonne del foglio, che li' non serve.
+        Used by the "change order column" flow: the same data the document
+        card shows on page 1, plus the full list of sheet columns, which
+        isn't needed there.
 
-        ⚠ Il fornitore lo dichiara la **decisione della run**, non il nome del
-        file: due settimane di fila lo stesso fornitore manda file con nomi
-        diversi, e legare la scelta al nome vorrebbe dire perderla ogni lunedi'.
+        The supplier is identified by the run's own decision, not by file
+        name: the same supplier can send files with different names week to
+        week, and tying the lookup to the name would lose it every time.
         """
 
         cercato = str(supplier_id or "").strip().casefold()
@@ -1111,11 +1086,11 @@ class PipelineJobManager:
                     effettiva.get("sheet"),
                     effettiva.get("headerRow"),
                     effettiva.get("dataStartRow"),
-                    # La colonna d'ordine di oggi puo' stare **oltre** l'ultima
-                    # colonna con qualcosa dentro: su CIPRESSO la G e' vuota su
-                    # tutte le righe e nel profilo non compare. Senza questo,
-                    # l'unica colonna nuova che si potrebbe scegliere sarebbe
-                    # quella accanto a quella in uso.
+                    # The current order column can sit past the last column
+                    # that has any data: a column empty on every row doesn't
+                    # show up in the profile at all. Without this, the only
+                    # new column choosable would be the one right next to the
+                    # one already in use.
                     fino_a=(effettiva.get("orderColumn") or {}).get("colonna"),
                 ),
             }
@@ -1124,8 +1099,8 @@ class PipelineJobManager:
         )
 
     def valida_schemi(self, payload: dict[str, Any]) -> dict[str, Any]:
-        # La prova puo' leggere migliaia di righe: non tiene bloccato lo stato.
-        # Si verifica di nuovo il runId prima di consegnare il risultato.
+        # This check can read thousands of rows: it doesn't hold the state
+        # lock while doing so. The run id is re-checked before returning.
         with self._lucchetto:
             stato, _cartella, profili, nomi = self._contesto_mappatura()
             run_id = str(stato.get("runId") or "")
@@ -1154,7 +1129,7 @@ class PipelineJobManager:
         return {"ok": True, "validation": esito, "pipeline": nuovo_stato}
 
     def _salva_decisioni_confermate(self, nuove: list[dict[str, Any]]) -> None:
-        """Sostituisce solo le decisioni dei documenti appena confermati."""
+        """Replaces only the decisions for the documents just confirmed."""
 
         percorso = self.configurazione.decisioni_manuali_path
         documento = leggi_json(percorso, {})
@@ -1177,32 +1152,30 @@ class PipelineJobManager:
     # -- l'avvio -----------------------------------------------------------
 
     def avvia(self) -> dict[str, Any]:
-        """Parte e torna subito: chi ha premuto il pulsante non aspetta la rete."""
+        """Starts and returns immediately: the caller doesn't wait on the run."""
 
         with self._lucchetto:
             if self.in_corso():
                 raise LavoroGiaInCorso("Un confronto è già in corso")
             if not self.lucchetto_lavori.acquire(blocking=False):
                 raise LavoroGiaInCorso("Un altro lavoro sta già aggiornando il confronto")
-            # ⚠ Da qui alla partenza del filo il lucchetto e' in mano a nessuno:
-            # se qualcosa va storto lo tiene per sempre.  Prima il ripiego
-            # copriva la sola creazione della cartella, e bastava un
-            # `pipeline_status.json` non scrivibile — disco pieno, cartella in
-            # sola lettura, antivirus sul temporaneo — per lasciarlo preso: da
-            # li' in poi ogni «Ricalcola» rispondeva 409 e `POST /api/spegni` si
-            # rifiutava di spegnere, cioe' il programma inchiodato senza niente
-            # da premere in pagina.  Adesso il `finally` lo restituisce a
-            # QUALUNQUE guasto, e lo lascia in mano al filo solo quando il filo
-            # esiste davvero: e' lui che lo rilascera' alla fine del lavoro.
+            # From here until the thread actually starts, the lock is held by
+            # no one in particular: anything going wrong in between would
+            # otherwise keep it held forever, making every subsequent
+            # "Ricalcola" fail and the shutdown route refuse to shut down —
+            # the program stuck with nothing left to press on the page.
+            # The `finally` below releases it on any failure in this
+            # block, and hands it off to the worker thread only once that
+            # thread actually exists — it's the thread that releases it when
+            # the run finishes.
             partito = False
             try:
                 momento = datetime.now().astimezone()
                 cartella = consegna.crea_cartella(self.configurazione.esecuzioni_dir, momento)
                 tolte = self._ripulisci_le_esecuzioni(cartella)
                 if tolte:
-                    # Detto e non taciuto: una pulizia silenziosa e' una pulizia
-                    # di cui nessuno si accorge finche' non cerca una cartella
-                    # che non c'e' piu'.
+                    # Logged, not silent: a silent cleanup is one nobody
+                    # notices until they go looking for a folder that's gone.
                     print(f"[PULIZIA] Cartelle di lavoro vecchie rimosse: {tolte} "
                           f"(se ne tengono {ESECUZIONI_DA_TENERE}).")
                 self._stato = {
@@ -1239,7 +1212,7 @@ class PipelineJobManager:
                         pass
 
     def attendi(self, timeout: float | None = None) -> dict[str, Any]:
-        """Comodità per le prove e per i lanciatori; la pagina interroga `stato()`."""
+        """Convenience for tests and launchers; the page polls `stato()` instead."""
 
         filo = self._filo
         if filo is not None:
@@ -1249,22 +1222,19 @@ class PipelineJobManager:
     # -- il lavoro ---------------------------------------------------------
 
     def _verifica_il_codice_in_memoria(self) -> None:
-        """Una run non parte se il programma non è più quello che sta girando.
+        """A run does not start if the code on disk isn't what's running.
 
-        Il 14 agosto 2026 il ricalcolo si è fermato a due terzi con
-        `AttributeError: module 'registro' has no attribute
-        'nome_del_fornitore'`: il server era acceso dalle 09:42 e il codice sul
-        disco era cambiato due volte nel pomeriggio. Python i moduli li carica
-        una volta sola, ma quelli importati **dentro una funzione** li legge dal
-        disco la prima volta che quella riga passa — e quel giorno è passata
-        alle 20:19. Vecchio e nuovo insieme, e all'utente una riga di Python in
-        inglese che dal browser non si poteva risolvere in nessun modo.
+        Python loads top-level modules once, but a module imported inside a
+        function is read from disk the first time that line executes — so a
+        long-running server process can end up running a mix of old and new
+        code after a deploy, and surface a raw Python traceback the user has
+        no way to act on from the browser.
 
-        Si **ferma**, non avvisa: una run mezza vecchia e mezza nuova può
-        arrivare in fondo e scrivere un confronto sbagliato in silenzio, che è
-        il modo peggiore di fallire per un programma che gira da solo. Fermarsi
-        non costa niente — il confronto attivo resta dov'è — e il rimedio ce
-        l'ha in mano l'utente: chiudere e riaprire.
+        This stops the run rather than warning: a run that's half old code
+        and half new code can reach the end and silently write a wrong
+        comparison, which is the worst way an unattended program can fail.
+        Stopping costs nothing — the active comparison stays where it is —
+        and the fix is in the user's hands: close and reopen.
         """
 
         avviso = versione_del_codice.avviso_del_codice_cambiato()
@@ -1304,11 +1274,11 @@ class PipelineJobManager:
                     "message": fermata.messaggio,
                     "documenti": fermata.documenti,
                     "dettaglio": fermata.dettaglio,
-                    # Perche' ognuno di quei documenti e' li'. Chi legge questo
-                    # stato — la pagina, e /api/schemas/pending — non ha altro
-                    # modo di saperlo: il profilo da solo non basta, perche' il
-                    # documento con il ruolo che non combacia col registro esce
-                    # SCHEMA_NOTO nel profilo e VARIATO qui.
+                    # Why each of those documents is listed. Readers of this
+                    # state — the page, and /api/schemas/pending — have no
+                    # other way to know: the profile alone isn't enough,
+                    # since a document whose role doesn't match the registry
+                    # reads as SCHEMA_NOTO in the profile but VARIATO here.
                     "motivi": fermata.motivi,
                 },
                 completatoIl=utc_ora(),
@@ -1316,11 +1286,11 @@ class PipelineJobManager:
         except Exception as exc:  # confine difensivo di un filo di sfondo
             dettaglio = f"{type(exc).__name__}: {exc}"
             self._segna_fase(self._stato.get("fase") or FASI[0], ERRORE, dettaglio)
-            # La stessa domanda della guardia d'ingresso, rifatta qui: il codice
-            # puo' essere cambiato **mentre** la run camminava, e in quel caso il
-            # guasto non e' un difetto del programma ma un processo da riavviare.
-            # Senza questo, chi aggiorna il codice a run avviata si ritrova
-            # ancora la riga di Python e nessuna cosa da fare.
+            # Same check as the entry guard, repeated here: the code can
+            # have changed while the run was in progress, in which case the
+            # failure isn't a bug but a process that needs restarting.
+            # Without this, a deploy that lands mid-run would surface a raw
+            # Python traceback with no actionable next step.
             cambiato = versione_del_codice.avviso_del_codice_cambiato()
             codice = CODICE_CAMBIATO_DOPO_L_AVVIO if cambiato else "GUASTO_INATTESO"
             frase = cambiato or (
@@ -1342,23 +1312,21 @@ class PipelineJobManager:
                 completatoIl=utc_ora(),
             )
         finally:
-            # ⚠ L'audit resta prima del rilascio — scritto col lucchetto in
-            # mano, altrimenti una run nuova potrebbe partire nel mezzo e
-            # `self.stato()` racconterebbe LEI dentro la cartella di questa —
-            # ma il rilascio adesso sta in un `finally` suo:
-            # `_scrivi_audit_esecuzione` intercetta il solo `OSError`, e
-            # qualunque altra eccezione lasciava il lucchetto in mano per
-            # sempre. 409 a ogni «Ricalcola», niente spegnimento, niente
-            # aggiornamento del codice: il rilascio non deve dipendere da
-            # nient'altro.
+            # The audit write happens before the lock is released — with the
+            # lock still held, otherwise a new run could start in the middle
+            # and `self.stato()` would describe it inside this run's folder —
+            # but the release itself sits in its own `finally`:
+            # `_scrivi_audit_esecuzione` only catches `OSError`, and any other
+            # exception there would otherwise keep the lock held forever, so
+            # the release must not depend on anything else succeeding.
             try:
                 self._scrivi_audit_esecuzione(cartella, registro_artefatti)
-            except Exception as errore:  # noqa: BLE001 - l'audit non uccide il filo
-                # Lo stato della run e' gia' definitivo qui sopra: l'audit che
-                # non riesce non cambia niente per chi guarda la pagina. Quello
-                # che cambia e' come lo si scopre — un traceback grezzo su
-                # `stderr` da un filo, in negozio, non lo legge nessuno, mentre
-                # una riga `[AVVISO]` sta accanto a tutte le altre.
+            except Exception as errore:  # noqa: BLE001 - the audit write must not kill the thread
+                # The run's own state is already final by this point: a
+                # failed audit write changes nothing for the page. What
+                # changes is how it's noticed — a raw traceback from a
+                # background thread goes unread, while an `[AVVISO]` line
+                # sits next to all the others.
                 print(f"[AVVISO] audit della run non scritto: {type(errore).__name__}: {errore}")
             finally:
                 try:
@@ -1369,11 +1337,11 @@ class PipelineJobManager:
     def _scrivi_audit_esecuzione(
         self, cartella: Path, registro_artefatti: dict[str, dict[str, Any]]
     ) -> None:
-        """L'audit della run, scritto **sempre**, anche quando la run fallisce.
+        """The run's audit trail, written unconditionally, even on failure.
 
-        E' quello che la run successiva confronta con i propri numeri, ed e'
-        l'unico posto in cui resta scritto quali artefatti sono stati prodotti
-        davvero e con quale impronta.
+        This is what the next run compares its own numbers against, and the
+        only place recording which artifacts were actually produced and with
+        which checksum.
         """
 
         try:
@@ -1381,10 +1349,10 @@ class PipelineJobManager:
                 **self.stato(),
                 "artefatti": registro_artefatti,
             })
-        except OSError:  # pragma: no cover - il disco pieno non e' un errore di catena
+        except OSError:  # pragma: no cover - a full disk is not a pipeline error
             pass
 
-    # -- gli attrezzi delle fasi -------------------------------------------
+    # -- phase helpers -------------------------------------------------------
 
     def _esegui(
         self,
@@ -1405,9 +1373,10 @@ class PipelineJobManager:
                 timeout_secondi=tetto,
             )
         except ComandoTroppoLungo as troppo:
-            # Il figlio e' gia' stato ucciso da chi ha misurato il tetto. Qui si
-            # da' un nome alla fermata, e il nome e' quello che l'utente legge in
-            # pagina: il canale c'e' gia' e la pagina sa mostrarlo.
+            # The child process was already killed by the timeout logic. This
+            # just names the stop, and that name is what the user reads on
+            # the page: the display channel already exists and knows how to
+            # show it.
             corsa.comandi.append({
                 "fase": fase,
                 "script": script,
@@ -1433,16 +1402,16 @@ class PipelineJobManager:
             "fase": fase,
             "script": script,
             "uscita": risultato.uscita,
-            # `stderr` si tiene tagliato: serve a spiegare un guasto, non a
-            # diventare un secondo file di log.
+            # `stderr` is truncated: it needs to explain a failure, not
+            # become a second log file.
             "stderr": risultato.stderr[-4000:],
         })
         if risultato.uscita not in uscite_ammesse:
-            # ⚠ La fermata piu' frequente, e quella che l'utente legge di piu'.
-            # Prima diceva «il passo "prepare_manifest_sources.py" si e' fermato
-            # con esito 1»: un nome di file sorgente e un codice di uscita a
-            # qualcuno che deve solo decidere cosa fare adesso.  Il nome dello
-            # script resta nel `dettaglio`, che sta nel pieghevole tecnico.
+            # The most common stop, and the one the user reads most often.
+            # The message stays free of the script's file name and raw exit
+            # code — neither helps someone who just needs to decide what to
+            # do next. The script name stays available in `dettaglio`, the
+            # technical detail panel.
             raise Fermata(
                 codice=f"{fase}_NON_RIUSCITA",
                 messaggio=(
@@ -1483,11 +1452,11 @@ class PipelineJobManager:
         return ascolta
 
     def _prima_del_passo(self, corsa: "_Corsa", attesi: Sequence[Path]) -> None:
-        """Nessuno degli artefatti che il passo deve produrre puo' esistere gia'.
+        """None of the artifacts a step is about to produce may already exist.
 
-        In una cartella nata vuota non ci puo' essere il file di ieri; questo
-        controllo vale per il caso che resta — un passo rilanciato a mano, o due
-        run che finiscono nella stessa cartella — e costa una `stat`.
+        A folder created empty can't contain yesterday's file; this check
+        covers the remaining case — a step rerun by hand, or two runs landing
+        in the same folder — for the cost of a `stat` call.
         """
 
         for percorso in attesi:
@@ -1502,11 +1471,11 @@ class PipelineJobManager:
                 )
 
     def _dopo_il_passo(self, corsa: "_Corsa", fase: str, attesi: Sequence[Path]) -> None:
-        """Ogni artefatto dichiarato dev'esserci, e la sua impronta si registra.
+        """Every declared artifact must exist now, and its checksum is recorded.
 
-        E' il modo con cui «l'ho scritto» smette di essere una promessa: chi
-        legge un artefatto piu' avanti ne ricontrolla l'impronta, quindi un file
-        sostituito nel frattempo si vede.
+        This is what turns "I wrote it" from a claim into a fact: any later
+        reader of an artifact re-checks its checksum, so a file replaced in
+        the meantime is caught.
         """
 
         for percorso in attesi:
@@ -1529,11 +1498,11 @@ class PipelineJobManager:
     def _chiave_artefatto(self, corsa: "_Corsa", percorso: Path) -> str:
         try:
             return percorso.relative_to(corsa.cartella).as_posix()
-        except ValueError:  # pragma: no cover - tutti gli artefatti stanno nella run
+        except ValueError:  # pragma: no cover - every artifact lives inside the run folder
             return percorso.name
 
     def _leggi_artefatto(self, corsa: "_Corsa", percorso: Path) -> Any:
-        """Rilegge un artefatto **dopo** aver ricontrollato la sua impronta."""
+        """Re-reads an artifact only after re-checking its checksum."""
 
         chiave = self._chiave_artefatto(corsa, percorso)
         registrato = corsa.registro_artefatti.get(chiave)
@@ -1580,10 +1549,10 @@ class PipelineJobManager:
             fase,
             [str(uploads), "--output", str(corsa.profili_path), "--recursive"],
             script="inspect_sources.py",
-            # L'esito 2 dell'inventario vuol dire «qualcuno di questi documenti
-            # non si e' lasciato leggere»: il file si scrive lo stesso, e la
-            # fermata la decide questa funzione dopo averlo letto, cosi' il
-            # messaggio puo' dire **quali**.
+            # Exit code 2 from the inventory means one or more documents
+            # failed to parse: the output file is still written, and this
+            # function decides whether to stop after reading it, so the
+            # message can name which documents.
             uscite_ammesse=(0, 2),
         )
         self._dopo_il_passo(corsa, fase, [corsa.profili_path])
@@ -1619,16 +1588,17 @@ class PipelineJobManager:
     # -- 2. RICONOSCIMENTO -------------------------------------------------
 
     def _fase_riconoscimento(self, corsa: "_Corsa") -> None:
-        """Il percorso veloce della Fase 4, e la prima delle tre fermate.
+        """The fast path, and the first of the three hard stops.
 
-        Nel caso normale — i listini di ogni settimana — il registro riconosce
-        tutto e qui non si chiama nessuno: la decisione che
-        `apply_preflight_decisions.py` pretende scritta a mano la genera
-        l'orchestratore, perche' il riconoscimento l'ha gia' presa.
+        In the normal case — this week's price lists — the adapter registry
+        recognizes everything and nothing else is called here: the decision
+        `apply_preflight_decisions.py` expects as manually written is
+        generated by the orchestrator itself, because recognition has
+        already happened.
 
-        Resta scritto a mano soltanto cio' che il registro **non** conosce, ed
-        e' esattamente la fermata dichiarata: un fornitore nuovo si impara una
-        volta, poi passa dal percorso veloce come gli altri.
+        What's left as genuinely manual is only what the registry doesn't
+        know — exactly the case this phase stops on. A new supplier is
+        learned once, then takes the fast path like everyone else.
         """
 
         fase = "RICONOSCIMENTO"
@@ -1638,16 +1608,14 @@ class PipelineJobManager:
         decisioni: list[dict[str, Any]] = []
         sconosciuti: list[str] = []
         variati: list[tuple[str, dict[str, Any]]] = []
-        # Il documento e' riconosciuto benissimo: e' stato caricato con il tipo
-        # sbagliato. Non e' un listino cambiato, e raccontarlo cosi' mandava a
-        # cercare una variazione che non c'era.
+        # The document is recognized fine: it was just uploaded under the
+        # wrong role. Not a changed price list, and reporting it as one would
+        # send the user looking for a layout change that isn't there.
         ruolo_sbagliato: list[tuple[str, str]] = []
-        # ⚠ E il terzo caso, che fino al 22 agosto 2026 finiva fra gli
-        # sconosciuti: un documento a cui manca **una** intestazione
-        # obbligatoria e ha tutte le altre al posto giusto. «Non riconosco
-        # ancora la disposizione delle colonne» manda a configurare un
-        # fornitore nuovo, e sul PC del negozio e' successo davvero — il
-        # listino BETULLA con la cella C1 svuotata in Excel.
+        # The third case: a document missing exactly one required header,
+        # with every other one in the right place. Reporting it as "layout
+        # not recognized" sends the user through the new-supplier flow for a
+        # near miss instead of the real cause.
         per_un_pelo: list[tuple[str, dict[str, Any]]] = []
         scelti, scartati = self._piu_recente_per_ruolo(corsa.profili, manuali)
 
@@ -1657,19 +1625,18 @@ class PipelineJobManager:
             if a_mano is not None:
                 decisione = dict(a_mano)
                 decisione.setdefault("file_name", nome)
-                # `validate_input_manifest.py` pretende una motivazione da ogni
-                # decisione, anche da quelle che dicono «questo file non
-                # c'entra»: senza, una decisione scritta a mano bloccherebbe la
-                # catena con `MOTIVAZIONE_AI_MANCANTE`, che non spiega niente.
+                # `validate_input_manifest.py` requires a rationale on every
+                # decision, even ones that say "this file doesn't apply":
+                # without one, a manual decision would block the pipeline
+                # with `MOTIVAZIONE_AI_MANCANTE`, which explains nothing.
                 if not str(decisione.get("rationale") or "").strip():
                     decisione["rationale"] = (
                         f"Decisione scritta a mano in «{NOME_DECISIONI_MANUALI}»."
                     )
-                # Una decisione manuale e' sovrana e copre anche un documento
-                # che il registro declasserebbe: e' il primo passo del rimedio.
-                # Ma spegnere le verifiche della firma senza dirlo lascerebbe
-                # il file delle decisioni attivo per sempre, con la difesa
-                # nuova che non partecipa piu' (revisione avversariale R4).
+                # A manual decision overrides even a document the registry
+                # would otherwise flag. Silently skipping the signature check
+                # would leave the manual override active forever, invisible
+                # to the user.
                 stato_a_mano = str((profilo.get("deterministic_hint") or {}).get("state") or "")
                 if stato_a_mano != "SCHEMA_NOTO":
                     self._avvisa(
@@ -1702,12 +1669,12 @@ class PipelineJobManager:
                     ruolo_sbagliato.append((nome, str(voce_registro.get("display_name") or adattatore_id)))
                     continue
             if stato_indizio == "SCHEMA_VARIATO":
-                # Un VARIATO non e' uno sconosciuto: il registro l'ha
-                # riconosciuto, e' il documento che non combacia piu' con la
-                # firma (una colonna in piu', due scambiate).  Dire «non
-                # riconosce» mandava a cercare un fornitore nuovo quando la
-                # notizia vera e' «il fornitore ha cambiato il listino»
-                # (minore della verifica del 12 agosto 2026, chiuso in R4).
+                # A VARIATO document isn't unknown: the registry recognizes
+                # the supplier, but the document no longer matches the stored
+                # signature (an extra column, two swapped). Reporting it as
+                # "not recognized" would send the user through the
+                # new-supplier flow when the real story is "this supplier's
+                # layout changed".
                 variati.append((nome, indizio))
                 continue
             if stato_indizio != "SCHEMA_NOTO":
@@ -1725,13 +1692,10 @@ class PipelineJobManager:
                 + [nome for nome, _chi in ruolo_sbagliato]
                 + [nome for nome, _indizio in per_un_pelo]
             )
-            # ⚠ Fin qui le due liste sono separate, e il commento qui sopra dice
-            # perche'. Fino al 21 agosto 2026 da questa riga in giu' la
-            # differenza spariva: un `+` e una frase sola, «Non riconosco ancora
-            # la disposizione delle colonne in ...», detta anche a un listino che
-            # il registro riconosce con confidenza 0,98 (misurato su
-            # «3listino_Cipresso.xlsx»: cambia il nome del foglio, che porta la
-            # data, non le colonne). La ragione adesso viaggia con la fermata.
+            # The reason travels with the stop: a document the registry
+            # recognizes with high confidence but whose layout changed must
+            # not be reported with the same generic "columns not
+            # recognized" wording used for a genuinely unknown supplier.
             motivi = {nome: "SCONOSCIUTO" for nome in sconosciuti}
             motivi.update({nome: "VARIATO" for nome, _indizio in variati})
             motivi.update({nome: "RUOLO_SBAGLIATO" for nome, _chi in ruolo_sbagliato})
@@ -1758,10 +1722,10 @@ class PipelineJobManager:
                     " voglio leggere i prezzi dal posto sbagliato."
                 )
             if per_un_pelo:
-                # La frase la scrive il registro, che e' l'unico posto che sa
-                # quale intestazione manca e in quale colonna stava: riscriverla
-                # qui vorrebbe dire due versioni della stessa notizia, e la
-                # settimana prossima ne direbbero due diverse.
+                # The message comes from the registry, the only place that
+                # knows which header is missing and where it used to be:
+                # rewriting it here would mean two versions of the same
+                # fact, free to drift apart later.
                 frasi.extend(
                     f"«{nome}»: " + str((indizio.get("evidence") or ["non si sa perché"])[0])
                     for nome, indizio in per_un_pelo
@@ -1787,13 +1751,12 @@ class PipelineJobManager:
             )
 
         for tenuto, lasciato_fuori in scartati:
-            # ⚠ Il messaggio dice tre cose e nessuna in piu': chi e' stato
-            # tenuto, chi e' rimasto fuori, e su che cosa e' stata fatta la
-            # scelta.  Prima diceva «il confronto usa il piu' recente» senza
-            # nominare il vincitore, e il lettore capiva «il listino piu'
-            # recente»: la scelta invece guarda la data del **file**, che con la
-            # validita' del listino non c'entra niente.  Un listino scaduto
-            # ricopiato oggi vince, e finche' non lo si dice nessuno lo sa.
+            # The message states exactly three things: which file was kept,
+            # which was dropped, and what the choice was based on. That last
+            # part matters because the choice is the file's modification
+            # date, not any validity date written inside the price list — an
+            # expired list re-saved today wins, and staying silent about that
+            # would hide it.
             messaggio = (
                 f"«{lasciato_fuori.get('file_name')}» resta fuori dal confronto: dello stesso "
                 f"fornitore c'è anche «{tenuto.get('file_name')}», ed è quello che viene usato. "
@@ -1803,9 +1766,10 @@ class PipelineJobManager:
                 "cartella e rifai il confronto."
             )
             if str(tenuto.get("modified_at") or "") == str(lasciato_fuori.get("modified_at") or ""):
-                # A parita' di data la data non ha deciso niente, e dirlo evita
-                # di attribuire la scelta a un criterio che non l'ha fatta: una
-                # cartella copiata con robocopy conserva i tempi, e capita.
+                # With identical dates, the date decided nothing, and saying
+                # so avoids crediting a criterion that didn't actually apply
+                # — a folder copied with timestamps preserved can produce
+                # exact ties.
                 messaggio += (
                     " I due file risultano modificati nello stesso momento: a parità di data "
                     "resta l'ultimo in ordine di elenco."
@@ -1822,12 +1786,12 @@ class PipelineJobManager:
         corsa.profili_usati_path = corsa.cartella / "input_profiles_usati.json"
         corsa.manifest_path = corsa.cartella / "input_manifest.json"
         self._prima_del_passo(corsa, [corsa.decisioni_path, corsa.profili_usati_path, corsa.manifest_path])
-        # L'inventario completo resta in `input_profiles.json`, che e' il
-        # verbale di quello che c'era.  Al manifest arrivano solo i documenti
-        # che entrano nel confronto: `apply_preflight_decisions` pretende una
-        # decisione per ogni profilo che gli si passa, e un listino superato da
-        # uno piu' recente comparirebbe in pagina come un documento «da
-        # correggere» — che non e'.
+        # The full inventory stays in `input_profiles.json`, the record of
+        # what was there. Only the documents entering the comparison go into
+        # the manifest: `apply_preflight_decisions` requires a decision for
+        # every profile it's given, and a price list superseded by a newer
+        # one would otherwise show up on the page as "needs attention" —
+        # which it isn't.
         scrivi_json(corsa.profili_usati_path, {"schema_version": 1, "profiles": scelti})
         scrivi_json(corsa.decisioni_path, {"decisions": decisioni})
         for percorso in (corsa.profili_usati_path, corsa.decisioni_path):
@@ -1867,16 +1831,15 @@ class PipelineJobManager:
         manuali: dict[str, dict[str, Any]],
         profili: Sequence[dict[str, Any]],
     ) -> dict[str, dict[str, Any]]:
-        """Tiene le decisioni che parlano dei documenti caricati adesso.
+        """Keeps only the decisions that describe the documents uploaded now.
 
-        Una decisione confermata era indicizzata per NOME del file, e
-        l'eliminazione di un listino non la toccava: si eliminava un listino
-        configurato male, si ricaricava il file giusto con lo stesso nome, e il
-        ricalcolo riapplicava la mappatura vecchia a un documento diverso —
-        cioè metteva le quantità leggendo le colonne sbagliate. Ora la decisione
-        porta l'impronta del documento su cui è stata data, e quando non
-        combacia si mette da parte **dicendolo**: uno scarto silenzioso qui
-        sarebbe la stessa malattia, dall'altro lato.
+        Indexing a confirmed decision purely by file name is unsafe: delete
+        a misconfigured price list, re-upload the right file under the same
+        name, and the recompute would reapply the old mapping to a different
+        document — reading quantities from the wrong columns. Each decision
+        also carries the checksum of the document it was made on; when it no
+        longer matches, the decision is set aside and the user is told —
+        a silent drop here would be the same failure mode from the other side.
         """
 
         if not manuali:
@@ -1903,21 +1866,22 @@ class PipelineJobManager:
         decisione: Mapping[str, Any],
         profilo: Mapping[str, Any],
     ) -> bool:
-        """La decisione confermata riguarda proprio questo file?
+        """Does this confirmed decision actually describe this file?
 
-        Il confronto è sull'impronta del contenuto, non sul nome: due settimane
-        di seguito il listino si chiama sempre «betulla.xlsx». Una decisione senza
-        impronta è quella scritta a mano in «decisioni_schemi.json» — la via
-        d'uscita documentata quando il riconoscimento non basta — e continua a
-        valere per nome: toglierle il permesso vorrebbe dire togliere il rimedio.
+        Compared by content checksum, not by name: the same supplier's price
+        list can keep the same file name every week. A decision with no
+        checksum is one written by hand in `decisioni_schemi.json` — the
+        documented fallback when automatic recognition isn't enough — and
+        that one still applies by name: taking that away would remove the
+        one remedy available.
         """
 
         confermata = str(decisione.get("file_sha256") or "").strip().casefold()
         if not confermata:
             return True
         adesso = str(profilo.get("sha256") or "").strip().casefold()
-        # Un profilo senza impronta non e' una prova che il documento sia
-        # cambiato: non lo si scarta per un dato che non c'e'.
+        # A profile with no checksum isn't proof the document changed: it's
+        # not dropped over missing data.
         return not adesso or adesso == confermata
 
     def _decisioni_manuali(self) -> dict[str, dict[str, Any]]:
@@ -1942,25 +1906,25 @@ class PipelineJobManager:
         profili: Sequence[dict[str, Any]],
         manuali: Mapping[str, dict[str, Any]] | None = None,
     ) -> tuple[list[dict[str, Any]], list[tuple[dict[str, Any], dict[str, Any]]]]:
-        """Un documento per fornitore: quello modificato per ultimo.
+        """One document per supplier: whichever was modified last.
 
-        La cartella dei documenti caricati si accumula settimana dopo settimana,
-        e due listini dello stesso fornitore farebbero fallire il parser con
-        «Fornitore duplicato» — cioe' con un messaggio che non dice a nessuno
-        che cosa fare.  Si tiene uno solo e **si dice** quale e' rimasto fuori:
-        uno scarto silenzioso e' peggio di un errore.
+        The uploads folder accumulates week over week, and two price lists
+        from the same supplier would otherwise fail the parser with a
+        duplicate-supplier error that doesn't tell the user what to do. Only
+        one is kept, and which one was dropped is reported — a silent drop
+        would be worse than an error.
 
-        ⚠ «Piu' recente» qui vuol dire `modified_at`, cioe' quando il file e'
-        stato messo nella cartella: non e' la validita' dichiarata dentro il
-        listino, e le due cose possono dire il contrario l'una dell'altra — un
-        listino scaduto ricopiato oggi vince su quello valido di ieri.  Il
-        criterio resta questo perche' e' l'unico segnale che c'e' su **tutti** i
-        fornitori; quello che cambia e' che adesso l'avviso lo dichiara, invece
-        di far credere che sia il listino piu' recente.  Per questo si tiene la
-        coppia (tenuto, scartato) e non il solo scartato.
+        "Most recent" here means `modified_at`, i.e. when the file landed in
+        the folder — not any validity date written inside the price list
+        itself, and the two can disagree: an expired list re-saved today
+        wins over yesterday's valid one. This stays the criterion because
+        it's the only signal available across every supplier; what changed
+        is that the warning now states it plainly instead of implying the
+        winner is simply the newer price list. That's also why the (kept,
+        dropped) pair is returned, not just the dropped one.
 
-        I documenti che il registro non riconosce non si toccano: la loro sorte
-        la decide la fermata, non questa regola.
+        Documents the registry doesn't recognize are left untouched here:
+        their fate is decided by the hard stop, not by this rule.
         """
 
         manuali = manuali or {}
@@ -2003,9 +1967,10 @@ class PipelineJobManager:
                 persi_per_chiave.setdefault(chiave, []).append(precedente)
             else:
                 persi_per_chiave.setdefault(chiave, []).append(profilo)
-        # Le coppie si formano solo alla fine: con tre documenti dello stesso
-        # fornitore, chi vinceva a meta' giro non e' detto che vinca, e un
-        # avviso che nomina un vincitore intermedio direbbe il falso.
+        # Pairs are formed only at the end: with three documents from the
+        # same supplier, whoever was leading halfway through isn't
+        # necessarily the final winner, and naming an intermediate winner
+        # would be wrong.
         scartati = sorted(
             ((per_chiave[chiave], perso) for chiave, persi in persi_per_chiave.items() for perso in persi),
             key=lambda coppia: str(coppia[1].get("file_name") or "").casefold(),
@@ -2018,12 +1983,12 @@ class PipelineJobManager:
 
     @staticmethod
     def _decisione_dal_registro(profilo: dict[str, Any], indizio: dict[str, Any]) -> dict[str, Any]:
-        """La decisione che l'utente avrebbe scritto a mano, presa dal registro.
+        """The decision the user would have written by hand, taken from the registry.
 
-        La `field_mapping` si porta dietro **sempre** quando il registro ce
-        l'ha: senza, il manifest non direbbe dov'e' la colonna d'ordine di
-        Cipresso, e la compilazione lo lascerebbe fuori dicendo «manca la
-        mappatura confermata» a chi non ha tolto niente.
+        `field_mapping` is always carried over when the registry has one:
+        without it, the manifest wouldn't say where the order column is, and
+        compilation would skip the supplier claiming a missing confirmed
+        mapping the user never actually removed.
         """
 
         adattatore_id = str(indizio.get("adapter_id") or "")
@@ -2052,11 +2017,11 @@ class PipelineJobManager:
     # -- 3. VALIDAZIONE ----------------------------------------------------
 
     def _fase_validazione(self, corsa: "_Corsa") -> None:
-        """`prepare_manifest_sources` non legge la validazione: la legge qui.
+        """`prepare_manifest_sources` doesn't read the validation output; this does.
 
-        Lo script del parser gira anche su un manifest bocciato, e senza questa
-        fermata un master mancante o due fornitori con lo stesso identificativo
-        diventerebbero un confronto sbagliato invece di un messaggio.
+        The parser script runs even on a rejected manifest, and without this
+        stop a missing management-export or two suppliers sharing an id
+        would turn into a wrong comparison instead of a clear message.
         """
 
         fase = "VALIDAZIONE"
@@ -2089,17 +2054,9 @@ class PipelineJobManager:
             )
         avvisi = (validazione or {}).get("warnings") or []
         for avviso in avvisi[:10]:
-            # ⚠ `str(avviso)` stampava il dizionario Python cosi' com'e' —
-            # «{'code': '...', 'message': '...'}» — in faccia a chi usa il
-            # programma. La frase in italiano e' gia' li' dentro:
-            # `validate_input_manifest.py` la scrive apposta. Il dizionario
-            # resta solo come ripiego, se un giorno un avviso arrivasse in
-            # un'altra forma.
-            #
-            # (`NESSUN_FORNITORE`, che era l'esempio di questo commento, dal 22
-            # agosto 2026 e' un errore e non un avviso: era l'unico avviso che
-            # la fase dopo trasformava in un guasto, e la frase che dice cosa
-            # fare la sapeva gia' questa fase.)
+            # The `message` field is a ready-to-read sentence that
+            # `validate_input_manifest.py` writes on purpose; the raw dict is
+            # only a fallback in case a future warning arrives without one.
             testo = avviso.get("message") if isinstance(avviso, dict) else None
             self._avvisa("MANIFEST_AVVISO", "Avviso sui documenti", str(testo or avviso))
         self._segna_fase(
@@ -2109,25 +2066,26 @@ class PipelineJobManager:
     # -- 4. PARSING --------------------------------------------------------
 
     def _scrivi_le_uguaglianze(self, corsa: "_Corsa") -> Path | None:
-        """Le uguaglianze fra codici in vigore, dentro la cartella della run.
+        """The active barcode equivalences, written into the run folder.
 
-        Restituisce il percorso del file, oppure `None` quando non ce n'e'
-        nessuna: chiedere il file al passo successivo e non avercelo sarebbe una
-        fermata, e una run senza dichiarazioni e' il caso normale.
+        Returns the file's path, or `None` when there are none: asking the
+        next step for the file and not having it would be a hard stop, and a
+        run with no declared equivalences is the normal case.
 
-        ⚠ **Si scrive anche quando il magazzino non si apre**, con la lista
-        vuota? No: in quel caso non si scrive niente e il passo lavora come
-        prima. La differenza fra «non ce ne sono» e «non riesco a leggerle» la
-        dice `self.uguaglianze_dichiarate`, che è del servizio; qui una
-        eccezione fermerebbe il ricalcolo per una memoria che è un di piu',
-        quindi si prosegue e si scrive nei numeri della run quante ne valevano.
+        Does this also write an empty file when the store can't be opened?
+        No — nothing is written in that case and the step runs as if there
+        were none. The distinction between "there are none" and "I can't
+        read them" is made by `self.uguaglianze_dichiarate`, owned by the
+        service; an exception here would stop a recompute over a cache that
+        is genuinely optional, so this proceeds and records how many
+        equivalences applied in the run's numbers instead.
         """
 
         if self.uguaglianze_dichiarate is None:
             return None
         try:
             classi = [list(gruppo) for gruppo in self.uguaglianze_dichiarate() or [] if len(gruppo) > 1]
-        except Exception as exc:  # noqa: BLE001 - una memoria in meno non ferma un ricalcolo
+        except Exception as exc:  # noqa: BLE001 - a missing cache must not stop a recompute
             self._numeri(uguaglianzeDichiarate=0, uguaglianzeNonLette=f"{type(exc).__name__}: {exc}")
             return None
         self._numeri(uguaglianzeDichiarate=len(classi))
@@ -2135,8 +2093,9 @@ class PipelineJobManager:
             return None
         corsa.dati_dir.mkdir(parents=True, exist_ok=True)
         percorso = corsa.dati_dir / "uguaglianze.json"
-        # `write_text` su Windows farebbe CRLF, e questo file lo rilegge un
-        # passo della catena: in binario e a fine riga LF come tutti gli altri.
+        # `write_text` would produce CRLF on Windows, and this file is read
+        # back by a later pipeline step: written in binary with LF endings
+        # like everything else.
         scrittura_sicura.scrivi_json(percorso, {"classi": classi})
         return percorso
 
@@ -2166,16 +2125,16 @@ class PipelineJobManager:
         corsa.audit = audit if isinstance(audit, dict) else {}
         fonti = corsa.audit.get("sources") or {}
         letti = {str(nome): int((valori or {}).get("rows") or 0) for nome, valori in fonti.items()}
-        # Un fornitore che il manifest dichiarava e che dal parser esce con zero
-        # righe non e' un dettaglio: e' un fornitore sparito dal confronto.
+        # A supplier the manifest declared, coming out of the parser with
+        # zero rows, isn't a minor detail: it's a supplier that vanished
+        # from the comparison.
         mancanti = [nome for nome in corsa.fornitori_attesi if letti.get(nome, 0) <= 0]
         if mancanti:
-            # E' la terza fermata, della stessa famiglia della seconda: un
-            # listino caricato apposta da cui non esce nemmeno una riga e' un
-            # documento che nella sostanza non si e' letto.  Un avviso non
-            # bloccante farebbe sparire il fornitore dal confronto e gli
-            # ordini si farebbero senza di lui (classificata il 13 agosto
-            # 2026 su delega di Daniele).
+            # The third hard stop, same family as the second: a price list
+            # deliberately loaded that yields not a single row is, in
+            # substance, a document that failed to parse. A non-blocking
+            # warning here would let the supplier silently drop out of the
+            # comparison, and orders would go out without them.
             raise Fermata(
                 codice="FORNITORE_SENZA_RIGHE",
                 messaggio=(
@@ -2195,10 +2154,8 @@ class PipelineJobManager:
         for voce in corsa.audit.get("inputs") or []:
             non_ordinabili = voce.get("rows_not_orderable") or {}
             lettura = voce.get("reading") or {}
-            # Il produttore scrive `rows_excluded` (`prepare_manifest_sources`);
-            # `excluded` resta come ripiego per gli audit piu' vecchi.  Con la
-            # sola chiave sbagliata le escluse non entravano mai nei numeri
-            # della run (rilievo preesistente, chiuso in R4).
+            # `prepare_manifest_sources` writes `rows_excluded`; `excluded`
+            # is kept as a fallback for audits produced by older versions.
             esclusi = lettura.get("rows_excluded") or lettura.get("excluded") or {}
             if non_ordinabili or esclusi:
                 scartati[str(voce.get("supplier_id") or voce.get("role") or "?")] = {
@@ -2217,43 +2174,35 @@ class PipelineJobManager:
         )
 
     def _controlla_i_prezzi(self, corsa: "_Corsa", letti: dict[str, int]) -> None:
-        """Un listino con righe e senza prezzi si dice subito, gia' alla prima run.
+        """A price list with rows but no usable prices is flagged even on the first run.
 
-        `_post_check` confronta con la volta prima: alla prima run non guarda
-        niente, e dalla seconda salta proprio il caso peggiore, perche' una
-        mediana assente — cioe' `usable: 0` nell'audit — usciva da
-        `if not prima or adesso is None: continue` senza una parola.
+        `_post_check` compares against the previous run, so on the first run
+        it has nothing to compare and would otherwise miss the worst case
+        entirely: a missing median (`usable: 0` in the audit) with no prior
+        run to compare against.
 
-        Misurato il 12 agosto 2026 sui listini veri: con il prezzo puntato
-        sulla colonna del totale di riga, 242 prodotti a 0,00 € con confidenza
-        CERTA e un piano d'ordine da 0,00 €, mentre `dati/audit.json` scriveva
-        gia' `usable: 0` per quel fornitore.  Il dato c'era: non lo guardava
-        nessuno.
+        Here the comparison is against zero, which needs no prior run: a
+        price list read in full where no row has a price above zero isn't a
+        great deal, it's a wrong column. And a supplier priced at zero
+        doesn't drop out of the comparison — it wins every row, and drags
+        the whole order with it.
 
-        Qui il paragone non e' con la settimana scorsa, e' con lo zero, che non
-        ha bisogno di un termine di paragone: un listino letto per intero in
-        cui nessuna riga ha un prezzo maggiore di zero non e' un listino
-        conveniente, e' una colonna sbagliata.  E un fornitore a zero non
-        sparisce dal confronto — **vince**, ogni riga, e trascina con se'
-        l'intero ordine.
-
-        Resta un avviso e non una fermata: le fermate sono quelle in cui il
-        programma non ha l'autorita' per decidere perche' l'ingresso non si
-        puo' usare (uno schema che il registro non conosce, un documento che
-        non si legge, un listino senza righe ordinabili).  Qui il
-        programma sa benissimo che cosa e' successo e lo puo' dire; il
-        controllo sui numeri avvisa e non ferma, per decisione del 12 agosto
-        2026.  Ma e' un avviso in rosso, che entra nel documento oltre che in
-        pagina, e che non si puo' spegnere.
+        Stays a warning, not a hard stop: the hard stops are reserved for
+        cases where the program has no authority to decide because the input
+        can't be used at all (an unrecognized layout, a document that fails
+        to parse, a price list with no orderable rows). Here the program
+        knows exactly what happened and can say so; the numeric check warns
+        and never blocks. But it's an error-level warning, shown in red on
+        the page and carried into the document, and there's no way to
+        silence it.
         """
 
         prezzi = corsa.audit.get("price_summary")
         if not isinstance(prezzi, dict):
-            # «Non misurato» non e' «misurato zero»: un audit senza il
-            # riepilogo dei prezzi (formato piu' vecchio di questa correzione)
-            # accendeva PREZZI_A_ZERO su ogni fornitore della run, e un avviso
-            # che parte sempre e' un avviso che nessuno legge piu' (revisione
-            # avversariale del 13 agosto 2026).
+            # "Not measured" isn't "measured as zero": an audit with no price
+            # summary (an older format) would otherwise fire PREZZI_A_ZERO
+            # on every supplier in the run, and a warning that always fires
+            # is a warning nobody reads anymore.
             self._avvisa(
                 "PREZZI_NON_MISURATI",
                 "Il controllo dei prezzi non si è potuto fare",
@@ -2275,8 +2224,9 @@ class PipelineJobManager:
             if mediana is not None and mediana > 0:
                 continue
             usabili = int(_numero(voce.get("usable")) or 0)
-            # La frase dice solo cio' che l'audit prova: «4660 prezzi maggiori
-            # di zero e mediana zero» erano due meta' che non stavano insieme.
+            # The message states only what the audit actually proves: a
+            # nonzero "usable" count and a missing median describe an
+            # inconsistent audit, not "no usable prices".
             if mediana is None and usabili <= 0:
                 diagnosi = "nessuna delle quali porta un prezzo al pezzo utilizzabile"
             elif mediana is None:
@@ -2336,21 +2286,20 @@ class PipelineJobManager:
     # -- 6. VALUTAZIONE_AI -------------------------------------------------
 
     def _fase_valutazione_ai(self, corsa: "_Corsa") -> None:
-        """Il passo che costa due minuti e 0,13 $.  Un degrado non ferma niente.
+        """The costliest step in wall-clock time. A degraded run never stops.
 
-        «Se OpenRouter non risponde il programma tira dritto» e' una decisione
-        presa: i casi che l'AI avrebbe interpretato restano `DA_VERIFICARE` e
-        arrivano al revisore, che li guarda con l'ordine davanti.
+        If the AI provider doesn't respond, the pipeline proceeds anyway: the
+        cases it would have interpreted stay `DA_VERIFICARE` and reach the
+        reviewer, who checks them with the order in front of them.
         """
 
         fase = "VALUTAZIONE_AI"
-        # ⚠ Il dettaglio si scrive QUI, all'inizio, e non solo alla fine come
-        # fanno le altre fasi.  È il passo che costa due minuti: la barra sale a
-        # scatti fino al 55,6 % e poi resta ferma per il tempo più lungo
-        # dell'intero ricalcolo.  Senza questo, in pagina la riga della fase
-        # diceva «in corso» e basta, e «fermo al 56 % da due minuti» per una
-        # persona non tecnica vuol dire «si è piantato» — con la reazione
-        # naturale di chiudere il programma proprio mentre la catena lavora.
+        # The detail is set here, at the start, unlike the other phases that
+        # only set it at the end. This is the phase that takes the longest,
+        # and without an upfront detail the progress line would just read
+        # "in progress" while it climbs in jumps and then sits still for the
+        # bulk of the recompute — which a non-technical user reads as
+        # "stuck", with the natural reaction of closing the program mid-run.
         quanti = corsa.numero_shortlist
         self._segna_fase(fase, IN_CORSO, f"{quanti} {'caso' if quanti == 1 else 'casi'} da valutare")
         inizio = time.monotonic()
@@ -2366,8 +2315,9 @@ class PipelineJobManager:
                 "--rapporto", str(corsa.rapporto_ai_path),
             ],
             script="valuta_shortlist.py",
-            # 5 e' il degrado dichiarato: i due file ci sono, una parte dei casi
-            # non e' stata valutata.  La catena prosegue e lo dice.
+            # Exit code 5 is a declared degradation: both files exist, but
+            # some cases weren't evaluated. The pipeline continues and
+            # reports it.
             uscite_ammesse=(0, 5),
         )
         self._dopo_il_passo(corsa, fase, [corsa.decisioni_ai_path, corsa.rapporto_ai_path])
@@ -2426,10 +2376,11 @@ class PipelineJobManager:
                 "--output", str(corsa.risolti_path),
             ],
             script="merge_match_decisions.py",
-            # 4 e 5 scrivono il file con le coppie guaste gia' degradate a
-            # `DA_VERIFICARE`: e' un artefatto onesto e la catena prosegue
-            # dicendolo.  2 e 3 no: li' gli artefatti non parlano dello stesso
-            # lavoro e il confronto sarebbe una bugia.
+            # Exit codes 4 and 5 write the output file with the broken pairs
+            # already downgraded to `DA_VERIFICARE`: an honest artifact, and
+            # the pipeline proceeds while reporting it. 2 and 3 don't: there
+            # the artifacts don't describe the same work, and the comparison
+            # would be a lie.
             uscite_ammesse=(0, 4, 5),
         )
         self._dopo_il_passo(corsa, fase, [corsa.risolti_path])
@@ -2450,8 +2401,7 @@ class PipelineJobManager:
         self._numeri(
             accettatiSenzaConferma=riepilogo.get("accettati_senza_conferma"),
             rifiutiConCandidatoForte=riepilogo.get("rifiuti_con_candidato_forte"),
-            # Quante righe sono entrate per la regola 7 del merge: viaggia nel
-            # diario del negozio con `pipeline_status.json`.
+            # How many rows matched purely on a shared product code.
             abbinamentiPerStessoCodice=riepilogo.get("abbinamenti_per_stesso_codice"),
         )
         self._segna_fase(
@@ -2461,19 +2411,20 @@ class PipelineJobManager:
         )
 
     def _giudica_provenienza(self, corsa: "_Corsa") -> None:
-        """La 6b scriveva la provenienza e non la giudicava: qui si giudica.
+        """Checks that every decision's declared AI configuration matches this run's.
 
-        Ogni decisione porta il modello e le due versioni di prompt con cui e'
-        stata presa; `merge_match_decisions.py` le legge e non le confronta con
-        niente, perche' la configurazione viva non ce l'ha.
+        Each decision carries the model and the two prompt versions it was
+        made with; `merge_match_decisions.py` reads them but has no live
+        configuration to compare them against.
 
-        ⚠ Che cosa questo controllo prova e che cosa no.  Dentro una run
-        orchestrata le decisioni le scrive la fase AI di questa stessa run, con
-        la configurazione di oggi: qui il confronto **non puo'** trovare
-        differenze, ed e' giusto che sia cosi'.  Serve per il caso che resta —
-        un `ai_decisions.json` che arriva da fuori, perche' `--decisions` accetta
-        qualunque percorso — e per il confronto con la volta prima, che sta
-        invece in `_post_check` ed e' quello che segnala davvero qualcosa.
+        What this actually proves, and what it doesn't: inside a normal
+        orchestrated run, the decisions are written by this same run's AI
+        phase, with today's configuration — so this check can never find a
+        mismatch here, and that's expected. It exists for the remaining
+        case, an `ai_decisions.json` supplied from outside the run (the
+        script accepts any path via `--decisions`). The comparison against
+        the previous run's configuration, which is where a real mismatch
+        would show up, lives in `_post_check`.
         """
 
         decisioni = self._leggi_artefatto(corsa, corsa.decisioni_ai_path)
@@ -2512,9 +2463,9 @@ class PipelineJobManager:
         inizio = time.monotonic()
         corsa.review_path = corsa.cartella / "review_data.json"
         self._prima_del_passo(corsa, [corsa.review_path])
-        # `--displays`, `--audit` e `--manifest` restano facoltativi nello
-        # script; qui non lo sono: la loro assenza toglierebbe prodotti dalla
-        # pagina senza che niente lo dica, e l'orchestratore li ha tutti e tre.
+        # `--displays`, `--audit` and `--manifest` are optional flags on the
+        # script itself; not here — omitting any of them would silently drop
+        # products from the page, and the orchestrator always has all three.
         self._esegui(
             corsa,
             fase,
@@ -2551,45 +2502,32 @@ class PipelineJobManager:
         )
 
     def _impara_schemi_confermati(self, corsa: "_Corsa", fase: str) -> None:
-        """Memorizza le mappature approvate e toglie il ponte temporaneo.
+        """Persists approved mappings to the registry and drops the temporary override.
 
-        Si arriva qui solo dopo che manifest, parser e confronto hanno usato
-        davvero le colonne scelte. Il registro non impara quindi da una
-        semplice anteprima, ma da una run che ha gia' superato tutti i
-        controlli precedenti all'attivazione.
+        Reached only after the manifest, parser and comparison build have
+        already used the chosen columns for real. The registry therefore
+        learns from a run that has passed every check before activation, not
+        from a bare preview.
 
-        ⚠ **Un apprendimento che non riesce non annulla il confronto.** Fino al
-        21 agosto 2026 lo annullava, e costava una giornata: su un listino
-        senza riga di intestazione la mappatura guidata dichiara le colonne per
-        NUMERO (`schema_mapping.specifica_colonna`), `impara_adattatore`
-        rifiuta di ricavarne un'impronta per intestazioni, e la fermata buttava
-        via un confronto gia' costruito e gia' buono. Riprovare non serviva a
-        niente — la decisione a mano resta al suo posto e la run rifa' la
-        stessa strada — e «riapri la configurazione» era un consiglio
-        impossibile: la pagina offre la mappatura guidata solo dopo
-        `SCHEMA_SCONOSCIUTO` (`app.js::schemaMappingRequired`). Quello che il
-        registro non impara riguarda la **prossima** settimana, non il
-        confronto di adesso: si dice e si va avanti.
+        A failed learning attempt must never discard the comparison: the
+        comparison is already built and already valid by this point, so a
+        failure here — a read-only data folder, a registry file locked by an
+        antivirus or a sync client — is reported and the pipeline moves on.
+        What the registry fails to learn affects next week, not this
+        comparison.
+
+        The one exception is `REGISTRO_ADATTATORI_ROVINATO`, which is about
+        the suppliers learned on this machine, not about this comparison,
+        and is allowed to propagate.
         """
 
         if not corsa.decisioni_da_imparare:
             return
-        # ⚠ Nessun guasto di questo passo puo' buttare via il confronto. Il
-        # rifiuto pulito — `impara_adattatore` che esce 2 dicendo perche' — era
-        # gia' un avviso; tutto il resto usciva 1 e faceva alzare a `_esegui`
-        # una Fermata, cioe' esattamente la cosa che questo commit toglie. Ed e'
-        # roba che capita su un PC vero: la cartella `app/data/` in sola
-        # lettura, il registro tenuto aperto da un antivirus o da OneDrive
-        # mentre lo si legge. Il confronto e' gia' costruito e gia' valido: se
-        # ne esce un guasto, si dice e si va avanti.
-        #
-        # L'unica eccezione e' `REGISTRO_ADATTATORI_ROVINATO`, che non riguarda
-        # il confronto ma i fornitori imparati su questo computer, e passa.
         try:
             self._prova_a_imparare(corsa, fase)
         except Fermata:
             raise
-        except Exception as exc:  # noqa: BLE001 - una memoria non annulla un confronto
+        except Exception as exc:  # noqa: BLE001 - a failed cache write must not discard a comparison
             motivo = registro.motivo_registro_illeggibile(self.configurazione.adapters_path)
             if motivo:
                 raise Fermata(
@@ -2616,15 +2554,15 @@ class PipelineJobManager:
             )
 
     def _prova_a_imparare(self, corsa: "_Corsa", fase: str) -> None:
-        """I due passi di `impara_adattatore`: la simulazione e la scrittura."""
+        """`impara_adattatore`'s two steps: dry run, then the real write."""
 
         prova = corsa.cartella / "adattatori_da_imparare.json"
         rapporto = corsa.cartella / "adattatori_imparati.json"
         self._prima_del_passo(corsa, [prova, rapporto])
-        # Il primo giro e' una simulazione, e non e' una formalita': scrive
-        # dentro una cartella temporanea sua e il registro vero non lo tocca
-        # nemmeno quando riesce. Fallire qui non puo' aver rovinato niente, ed
-        # e' per questo che qui non si ferma niente.
+        # The first pass is a dry run, not a formality: it writes to its own
+        # temp location and never touches the real registry, even on
+        # success. A failure here can't have damaged anything, which is why
+        # nothing stops the pipeline at this point.
         self._esegui(
             corsa,
             fase,
@@ -2649,13 +2587,13 @@ class PipelineJobManager:
                 self._motivi_del_rapporto(documento_prova, non_memorizzabili),
             )
         if not imparabili:
-            # Nessuno da scrivere: il passo vero non parte, e il registro non
-            # viene aperto in scrittura per niente.
+            # Nothing to write: the real step doesn't run, and the registry
+            # isn't opened for writing for no reason.
             return
 
-        # ⚠ Il secondo giro scrive davvero, e l'unica cosa che puo' lasciare
-        # peggio di prima e' il registro. Si guarda prima e dopo, invece di
-        # dedurlo dal codice d'uscita.
+        # The second pass writes for real, and the registry is the only
+        # thing that could end up worse off than before. Checked before and
+        # after, rather than inferred from the exit code.
         motivo_prima = registro.motivo_registro_illeggibile(self.configurazione.adapters_path)
         self._esegui(
             corsa,
@@ -2694,15 +2632,15 @@ class PipelineJobManager:
             self._avvisa_schemi_non_memorizzati(
                 corsa, rifiutati, self._motivi_del_rapporto(documento, rifiutati),
             )
-        # ⚠ Il ponte a mano si toglie **solo** per i documenti che il registro
-        # ha imparato davvero. Per gli altri quella decisione e' l'unica cosa
-        # che li rende ancora leggibili, e toglierla qui vorrebbe dire un
-        # listino che la settimana prossima non si apre piu'.
+        # The manual override is removed only for documents the registry
+        # actually learned. For the rest, that decision is the only thing
+        # still making them readable, and removing it here would mean next
+        # week's price list stops opening at all.
         self._rimuovi_decisioni_imparate(imparati)
 
     @staticmethod
     def _nomi_del_rapporto(documento: Mapping[str, Any], chiave: str) -> set[str]:
-        """I nomi di file elencati sotto una chiave del rapporto, ripiegati."""
+        """File names listed under one key of the report, case-folded."""
 
         return {
             str(voce.get("file") or "").casefold()
@@ -2712,10 +2650,10 @@ class PipelineJobManager:
 
     @staticmethod
     def _motivi_del_rapporto(documento: Mapping[str, Any], nomi: set[str]) -> dict[str, str]:
-        """Il motivo che `impara_adattatore` ha scritto, per nome di file.
+        """The reason `impara_adattatore` wrote, keyed by file name.
 
-        E' gia' una frase in italiano scritta per essere letta: qui non si
-        riscrive, si porta all'utente.
+        Already a ready-to-read sentence; not rewritten here, just passed on
+        to the user.
         """
 
         motivi: dict[str, str] = {}
@@ -2733,12 +2671,13 @@ class PipelineJobManager:
         nomi: set[str],
         motivi: Mapping[str, str],
     ) -> None:
-        """Un documento che il registro non ha imparato si dice, uno per uno.
+        """Reports each document the registry didn't learn, one warning per document.
 
-        Uno per documento e non un avviso solo con l'elenco dentro: il nome del
-        file e' l'unica cosa che lega la frase alla scheda che l'utente ha
-        appena configurato. E la prima cosa che dice e' che il confronto c'e',
-        perche' e' la domanda che si fa chi legge: «ho perso il lavoro?».
+        One per document rather than a single warning with a list inside:
+        the file name is the only thing tying the message to the document
+        card the user just configured. The message leads with the fact that
+        the comparison itself is intact, since that's the first question a
+        reader has: "did I lose my work?"
         """
 
         per_nome = {nome.casefold(): nome for nome in corsa.decisioni_da_imparare}
@@ -2747,13 +2686,13 @@ class PipelineJobManager:
             motivo = (motivi.get(chiave) or "").removeprefix("Rifiutato:").strip()
             altro = self._fornitore_che_se_lo_prende(motivo)
             if altro:
-                # ⚠ Questo rifiuto non vuol dire «non l'ho memorizzato». Vuol
-                # dire che con il registro di adesso quel documento **e' di un
-                # altro fornitore**: la settimana prossima il ricalcolo non si
-                # fermera' e non chiedera' niente, lo leggera' come listino di
-                # quell'altro. Dirgli «non c'e' niente da fare» era la frase
-                # peggiore possibile, perche' non c'e' niente da fare **oggi** e
-                # tutto da fare prima del prossimo lunedi'.
+                # This rejection doesn't mean "not learned". It means that
+                # with the current registry, this document now matches
+                # another supplier's signature: next week's recompute won't
+                # stop and won't ask anything, it will just read it as that
+                # other supplier's price list. "Nothing to do" would be the
+                # worst possible message here, since there's nothing to do
+                # today but everything to do before the next run.
                 self._avvisa(
                     "SCHEMA_NON_MEMORIZZATO",
                     f"«{nome}»: da adesso lo leggo come il listino di un altro fornitore",
@@ -2785,13 +2724,12 @@ class PipelineJobManager:
 
     @staticmethod
     def _fornitore_che_se_lo_prende(motivo: str) -> str:
-        """L'adattatore che si e' preso il documento, quando il rifiuto lo dice.
+        """The adapter that claimed the document, when the rejection message says so.
 
-        `impara_adattatore` rifiuta con «con l'adattatore appena scritto il
-        documento risulta SCHEMA_NOTO «X» invece di SCHEMA_NOTO «Y»» quando due
-        fornitori esportano con lo stesso modello. E' l'unico rifiuto che
-        cambia che cosa succede la **settimana prossima**, e va detto in un
-        altro modo.
+        `impara_adattatore` rejects with a message naming the adapter the
+        document now matches instead, when two suppliers export in the same
+        layout. It's the only rejection that changes what happens next
+        week, and needs a different message than the rest.
         """
 
         trovato = re.search(
@@ -2826,24 +2764,25 @@ class PipelineJobManager:
             pass
 
     def _avvisa_chi_non_si_compila(self, corsa: "_Corsa") -> None:
-        """Un fornitore del confronto per cui non nascera' nessuna copia si dice.
+        """Flags any supplier in the comparison for whom no order file will be written.
 
-        La compilabilita' e' dichiarata dal registro (`order_write`
-        nell'adattatore).  Un fornitore che non ce l'ha resta nel confronto,
-        puo' vincere e puo' prendersi meta' ordine — ma alla fine, dove ci si
-        aspetta il suo listino compilato, non c'e' niente.  Misurato il 12
-        agosto 2026: 102 prodotti assegnati a ACERO e avvertimenti vuoti.
+        Whether a supplier's order can be written back into their own file
+        format is declared by the registry (`order_write` on the adapter). A
+        supplier without it stays in the comparison and can still win rows
+        and take part of the order — but at the end, where its compiled
+        order file is expected, there's nothing.
 
-        L'avviso arriva qui e non alla compilazione perche' qui e' ancora
-        possibile cambiare idea: dopo, la merce e' gia' stata assegnata.
+        Reported here, not at compilation time, because it's still possible
+        to act on it now — by the time compilation runs, the merchandise has
+        already been assigned.
         """
 
         motivo = registro.motivo_registro_illeggibile(self.configurazione.adapters_path)
         if motivo:
-            # Con il registro rotto OGNI fornitore risulterebbe «non
-            # dichiarato», e l'avviso manderebbe a cercare una dichiarazione
-            # dentro un file che non si apre.  La causa e' una sola e si dice
-            # una volta (revisione avversariale del 13 agosto 2026).
+            # With a broken registry, every supplier would show up as "not
+            # declared", sending the user to look for a declaration inside a
+            # file that can't even be opened. There's exactly one cause, and
+            # it's reported once.
             self._avvisa(
                 "REGISTRO_ILLEGGIBILE",
                 "Il registro degli adattatori non si legge",
@@ -2871,23 +2810,23 @@ class PipelineJobManager:
                 "da ordinare a mano.",
                 fornitore=nome,
             )
-        # La seconda famiglia: fornitori DICHIARATI dal registro che il
-        # documento di questa settimana non attiva — un'intestazione cambiata,
-        # un foglio sparito, righe fuori dal documento.  La causa la sa il
-        # lanciatore; senza questo giro moriva dentro il messaggio di
-        # `prepare_writer_config`, che il server butta via quando la scrittura
-        # riesce, e la si scopriva alla compilazione con una frase che non
-        # diceva la causa (revisione avversariale del 13 agosto 2026).
-        # ⚠ Due funzioni, non una, e la seconda esiste per un buco misurato il
-        # 14 agosto 2026.  `fornitori_senza_copia` parte dall'elenco dei
-        # DOCUMENTI del confronto; `fornitori_ordinati_senza_copia` parte dai
-        # FORNITORI che il confronto usa davvero.  Le due liste divergono
-        # appena un listino viene eliminato o sostituito, e in quel caso la
-        # prima tace: i suoi avvisi nascono dentro il ciclo sui documenti
-        # risolti, quindi zero documenti risolti significa zero avvisi.  Chi
-        # deve dire «per questo fornitore non nascera' nessuna copia» deve
-        # guardare da tutte e due le parti.
-        from launcher import (  # import tardivo, come fa il server
+        # Second family: suppliers the registry declares compilable but
+        # whose write-back this week's document doesn't actually enable — a
+        # changed header, a missing sheet, rows outside the expected range.
+        # The launcher knows the specific cause; without this pass it would
+        # only surface inside a message the server discards once writing
+        # succeeds, and the user would discover it only at compilation time
+        # with no explanation.
+        #
+        # Two functions, not one, because they look at different sources:
+        # `fornitori_senza_copia` starts from the comparison's DOCUMENTS,
+        # `fornitori_ordinati_senza_copia` starts from the SUPPLIERS the
+        # comparison actually uses. The two lists diverge as soon as a price
+        # list is deleted or replaced — in that case the first stays silent,
+        # since its warnings come from the loop over resolved documents, and
+        # zero resolved documents means zero warnings. Reporting "no copy
+        # for this supplier" reliably needs both sources checked.
+        from launcher import (  # deferred import, matching the server's own pattern
             fornitori_del_confronto,
             fornitori_ordinati_senza_copia,
             fornitori_senza_copia,
@@ -2919,15 +2858,15 @@ class PipelineJobManager:
         if tutti:
             self._numeri(fornitoriSenzaCompilazione=tutti)
 
-    # -- il controllo che avvisa e non ferma -------------------------------
+    # -- the check that warns and never blocks -------------------------------
 
     def _post_check(self, corsa: "_Corsa") -> None:
-        """Il confronto con la run precedente.  La sua uscita e' un avviso.
+        """Compares against the previous run; anything it finds is a warning.
 
-        Deciso da Daniele il 12 agosto 2026: quando i conteggi di un listino
-        cambiano molto rispetto alla volta prima la run **va fino in fondo** e
-        lo dice.  Niente soglie che bloccano: una soglia sbagliata fermerebbe
-        ogni settimana una run buona, e questo programma gira da solo.
+        When a price list's row count or prices shift a lot compared to the
+        previous run, the run still completes and reports the difference.
+        No threshold blocks the run: a wrong threshold would stop a good run
+        every single week, and this program is meant to run unattended.
         """
 
         precedente = self._esecuzione_precedente(corsa.cartella)
@@ -2971,11 +2910,11 @@ class PipelineJobManager:
         for nome in sorted(set(vecchi_prezzi) & set(nuovi_prezzi)):
             prima = _numero((vecchi_prezzi.get(nome) or {}).get("median"))
             adesso = _numero((nuovi_prezzi.get(nome) or {}).get("median"))
-            # Il crollo a nulla — mediana assente o zero — non passa di qui:
-            # lo dice gia' `_controlla_i_prezzi`, che non ha bisogno della
-            # volta prima e vale anche alla prima run.  Questo confronto serve
-            # ai cambiamenti di scala fra due settimane, e per quelli uno zero
-            # come termine di paragone non direbbe niente.
+            # A collapse to nothing — a missing or zero median — isn't
+            # reported here: `_controlla_i_prezzi` already covers that, and
+            # doesn't need a previous run to compare against. This check is
+            # for scale changes between two runs, where a zero as the
+            # baseline wouldn't say anything meaningful.
             if not prima or not adesso:
                 continue
             if abs(adesso - prima) / prima > SCARTO_PREZZO_DA_SEGNALARE:
@@ -2987,11 +2926,11 @@ class PipelineJobManager:
                     "di mandare l'ordine.",
                 )
 
-        # Il modello e il prompt della volta prima: e' qui che il confronto
-        # sulla provenienza trova davvero qualcosa.  Un ordine costruito con un
-        # prompt diverso da quello di sette giorni fa non e' sbagliato, ma e'
-        # l'unica spiegazione possibile di un confronto che cambia senza che i
-        # listini siano cambiati — e senza questa riga la si cercherebbe altrove.
+        # The previous run's model and prompt versions: this is where a
+        # provenance mismatch actually means something. An order built with
+        # a different prompt than a week ago isn't wrong, but it's the only
+        # explanation for a comparison changing while the price lists
+        # themselves haven't.
         vecchio_rapporto = leggi_json(precedente / "dati" / "ai_rapporto.json", None)
         if isinstance(vecchio_rapporto, dict):
             cambiate = [
@@ -3014,19 +2953,19 @@ class PipelineJobManager:
         self._numeri(confrontoConLaVoltaPrima=precedente.name)
 
     def _ripulisci_le_esecuzioni(self, corsa: Path) -> int:
-        """Toglie le cartelle di lavoro piu' vecchie, e dice quante ne ha tolte.
+        """Deletes the oldest run folders and returns how many were removed.
 
-        ⚠ Due cartelle non si toccano mai, e non perche' sono recenti: quella
-        della run che sta partendo, e quella del **confronto vivo**.  La seconda
-        e' quella che `colonne_dei_documenti` riapre per dire quali colonne ha
-        letto in ogni documento, e che la mappatura guidata riapre quando la
-        catena si e' fermata: cancellarla lascerebbe la pagina a rispondere «la
-        cartella di quel confronto non c'e' piu'» su un confronto che si sta
-        guardando in quel momento.
+        Two folders are never touched, and not because they're recent: the
+        run about to start, and the one behind the live comparison. The
+        latter is what `colonne_dei_documenti` reopens to report which
+        columns it read per document, and what the guided-mapping flow
+        reopens when the pipeline has stopped; deleting it would leave the
+        page reporting "La cartella di quel confronto non c'è più." (that
+        comparison's folder is gone) for a comparison still being looked at.
 
-        ⚠ E non solleva mai.  Fare spazio e' una comodita': una cartella che non
-        si cancella — antivirus, file aperto, permessi — non deve poter fermare
-        il ricalcolo che l'utente ha appena chiesto.
+        Never raises: freeing disk space is a convenience, and a folder that
+        can't be deleted (antivirus, open handle, permissions) must not be
+        able to block the recompute the user just asked for.
         """
 
         radice = self.configurazione.esecuzioni_dir
@@ -3044,8 +2983,8 @@ class PipelineJobManager:
                 )
         except OSError:
             return 0
-        # I nomi portano la data, quindi l'ordine alfabetico e' gia' l'ordine
-        # del tempo: e' la stessa regola delle copie delle memorie.
+        # Folder names carry the date, so alphabetical order is already
+        # chronological order.
         da_tenere = set(nomi[-ESECUZIONI_DA_TENERE:]) | intoccabili
         tolte = 0
         for nome in nomi:
@@ -3062,31 +3001,31 @@ class PipelineJobManager:
         return tolte
 
     def _esecuzione_precedente(self, corsa_corrente: Path) -> Path | None:
-        """L'ultima run **completa** prima di questa, o `None`.
+        """The last fully completed run before this one, or `None`.
 
-        Si scandisce il disco invece di tenere un indice: un indice a parte e'
-        una cosa in piu' che puo' disallinearsi da quello che c'e' davvero.
+        Scans the disk rather than keeping an index: a separate index is one
+        more thing that can drift out of sync with what's actually there.
 
-        ⚠ «Completa» e' il punto.  `dati/audit.json` lo scrive la fase di
-        preparazione, a meta' catena; `esecuzione.json` lo scrive il `finally`
-        della run, alla fine.  Una run uccisa in mezzo — il computer si spegne,
-        il processo viene chiuso — lascia il primo e non il secondo, e prenderla
-        come termine di paragone significa confrontarsi con un confronto che non
-        e' mai stato attivato: misurato, bastava a spegnere `FORNITORE_SPARITO`
-        e a far uscire un fornitore intero dal confronto senza una parola.  Si
-        guarda quindi il verbale, e si pretende che dichiari una run arrivata in
-        fondo: una run ferma a meta' non ha aggiornato niente, e la volta prima
-        vera resta quella di prima ancora.
+        "Completed" is the key requirement. `dati/audit.json` is written
+        mid-pipeline by the parsing phase; the run's own audit record is
+        written by the `finally` block at the very end. A run killed in
+        between — the machine loses power, the process is killed — leaves
+        the first file but not the second, and using it as the comparison
+        baseline would compare against a comparison that was never actually
+        activated, silently muting warnings like a supplier disappearing.
+        So this looks at the run's own audit record and requires it to
+        declare a run that reached the end: a run stopped halfway updated
+        nothing, and the true previous run is the one before that.
 
-        ⚠ Ma prima del verbale parla il confronto vivo: `review_data.json`
-        dichiara chi l'ha attivato (`run.pipelineRunId`), e quella cartella E'
-        la volta prima per definizione — anche quando la run e' morta un attimo
-        dopo `os.replace`, senza fare in tempo a scrivere `COMPLETATO` nel
-        proprio verbale.  Pretendere il verbale anche da lei significava farla
-        sparire dal paragone e rispedire il confronto alla «prima esecuzione»,
-        con `FORNITORE_SPARITO` di nuovo muto (revisione avversariale del 13
-        agosto 2026).  La scansione del disco resta come ripiego, per i
-        confronti attivati prima che il campo esistesse.
+        Before scanning, the live comparison is checked first:
+        `review_data.json` declares which run activated it
+        (`run.pipelineRunId`), and that folder is the previous run by
+        definition — even if the run died moments after the atomic swap,
+        before it had time to mark its own record complete. Requiring the
+        completed-record check on the live comparison too would make it
+        disappear from the baseline and silently mute the same warnings.
+        Scanning the disk remains a fallback, for comparisons activated
+        before this field existed.
         """
 
         radice = self.configurazione.esecuzioni_dir
@@ -3114,11 +3053,11 @@ class PipelineJobManager:
             audit = leggi_json(cartella / NOME_AUDIT_ESECUZIONE, None)
             if not isinstance(audit, dict) or audit.get("stato") != COMPLETATO:
                 continue
-            # Il momento si prende dal verbale e da nessun'altra parte: l'ora
-            # del file e' l'ora dell'ultima scrittura, che una copia, un
-            # antivirus o un backup spostano in avanti quanto vogliono.  Un
-            # verbale che non sa dire quando e' cominciato non e' un termine di
-            # paragone: si salta, come le altre run che non si lasciano leggere.
+            # The timestamp comes from the run's own audit record and
+            # nowhere else: a file's mtime is its last-write time, which a
+            # copy, an antivirus scan or a backup can push forward at will.
+            # A record with no declared start time isn't a usable baseline
+            # and is skipped, like any other run that can't be read.
             if not isinstance(audit.get("iniziatoIl"), str):
                 continue
             try:
@@ -3126,10 +3065,10 @@ class PipelineJobManager:
             except ValueError:
                 continue
             if istante.tzinfo is None:
-                # `avvia()` scrive sempre l'ora con il fuso: un verbale senza
-                # e' stato scritto da qualcun altro, e `timestamp()` su un'ora
-                # nuda usa l'ora locale — due convenzioni mischiate possono
-                # invertire l'ordine delle run di ore intere.
+                # `avvia()` always writes the timestamp with a timezone; one
+                # without was written by something else, and `timestamp()`
+                # on a naive datetime assumes local time — mixing the two
+                # conventions can invert the ordering of runs by hours.
                 continue
             try:
                 quando = istante.timestamp()
@@ -3144,12 +3083,13 @@ class PipelineJobManager:
     # -- 9. ATTIVAZIONE ----------------------------------------------------
 
     def _fase_attivazione(self, corsa: "_Corsa") -> None:
-        """L'unico passo che tocca il confronto vivo, e ha delle precondizioni.
+        """The only step that touches the live comparison, and it has preconditions.
 
-        Sono numeri, non impressioni: un confronto senza prodotti o senza
-        fornitori non e' un confronto, ed e' esattamente la forma che prende un
-        guasto a monte quando nessuno lo guarda.  Una run che non le rispetta
-        non attiva niente e lo dice, e il confronto di prima resta intatto.
+        The checks are numeric, not impressionistic: a comparison with no
+        products or no suppliers isn't a comparison, and is exactly the
+        shape an unnoticed upstream failure would take. A run that fails
+        them activates nothing and says so, and the previous comparison
+        stays intact.
         """
 
         fase = "ATTIVAZIONE"
@@ -3182,26 +3122,26 @@ class PipelineJobManager:
                 ),
             )
 
-        # ⚠ Tutto quello che deve accompagnare il confronto nuovo si fa **prima**
-        # che il confronto nuovo diventi quello vivo.  Prima era il contrario, e
-        # quell'ordine aveva due conseguenze misurate: gli avvisi nati dopo la
-        # sostituzione non entravano mai nel documento (ci entra la fotografia
-        # scattata qui sotto), e un processo che moriva nella finestra fra
-        # `os.replace` e la riconfigurazione lasciava vivo il confronto di adesso
-        # con la configurazione di scrittura della settimana scorsa — cioe' con
-        # **il listino della settimana scorsa** e i numeri di riga di adesso.
-        # Nell'ordine giusto quella finestra si chiude dalla parte sicura: se si
-        # muore qui, il confronto vivo e' ancora quello di prima.
+        # Everything that must accompany the new comparison happens before
+        # the new comparison becomes the live one, not after. Doing it after
+        # had two measured consequences: warnings raised past that point
+        # never made it into the document (only the snapshot taken below
+        # does), and a process dying in the window between the atomic swap
+        # and reconfiguration would leave the new comparison live with last
+        # week's order-writing configuration — last week's price list
+        # against this week's row numbers. In this order that window closes
+        # on the safe side: dying here still leaves the previous comparison
+        # live.
         if self.su_confronto_attivato is not None:
             try:
                 self.su_confronto_attivato(deepcopy(confronto))
             except Exception as exc:
-                # La compilazione si riconfigura prima dell'attivazione: se non
-                # ci riesce il confronto e' buono lo stesso e viene attivato, ma
-                # va detto — altrimenti la compilazione userebbe in silenzio il
-                # listino della volta prima.  Non e' l'ultima difesa: alla
-                # compilazione il `run_id` della configurazione deve combaciare
-                # con quello del confronto attivo, e se non combacia si ferma.
+                # Order compilation is reconfigured before activation; if
+                # that fails the comparison is still good and gets activated
+                # anyway, but it has to be reported — otherwise compilation
+                # would silently keep using last week's price list. Not the
+                # only safeguard: at compile time the configuration's run id
+                # must match the active comparison's, and a mismatch stops it.
                 self._avvisa(
                     "COMPILAZIONE_DA_RICONFIGURARE",
                     "Le copie dei listini non sono state riconfigurate",
@@ -3209,39 +3149,39 @@ class PipelineJobManager:
                     f"creare le copie. Dettaglio: {type(exc).__name__}: {exc}",
                 )
 
-        # ⚠ Da qui alla sostituzione del confronto vivo si tiene il lucchetto
-        # delle rotte: e' l'unico tratto in cui la catena scrive dati che il
-        # servizio sta servendo.  Senza, un salvataggio della pagina arrivato
-        # in mezzo scriveva `state.json` mentre `_ripulisci_stato` lo stava
-        # riscrivendo — e la pagina si ritrovava con lo stato di prima e il
-        # confronto nuovo.  Il tratto e' breve di proposito: la
-        # riconfigurazione della scrittura, che chiama Node, resta fuori.
+        # From here to the swap of the live comparison, the routes lock is
+        # held: this is the only stretch where the pipeline writes data the
+        # HTTP service is actively serving. Without it, a page save landing
+        # in the middle would write `state.json` while `_ripulisci_stato`
+        # was rewriting it, leaving the page with the old state and the new
+        # comparison mismatched. The stretch is kept short on purpose: order
+        # compilation's own reconfiguration, which shells out to Node, stays
+        # outside it.
         with self.lucchetto_dati:
-            # ⚠ I byte dello stato **prima** della ripulitura.  Qui sotto
-            # `_ripulisci_stato` scrive `state.json` — azzera, scollega,
-            # riprende le quantita' dall'elenco — e il confronto nuovo diventa
-            # vivo solo in fondo: se quella sostituzione non riesce, restano in
-            # pagina il confronto di prima e le decisioni gia' tolte, cioe'
-            # quantita' azzerate che nulla di quel che si vede spiega.  Su
-            # Windows succede per davvero: `os.replace` fallisce mentre un
-            # antivirus, un backup o OneDrive tengono aperto `review_data.json`.
-            # O cambiano tutti e due, o non cambia nessuno dei due (6 settembre
-            # 2026).
+            # The state's raw bytes, saved before cleanup. `_ripulisci_stato`
+            # below rewrites `state.json` — clearing stale selections,
+            # unlinking decisions, refreshing quantities from the reorder
+            # list — and the new comparison only goes live at the very end;
+            # if that final swap fails, the page would be left with the old
+            # comparison but the already-cleared decisions, i.e. quantities
+            # reset to zero with nothing visible to explain why. This is a
+            # real failure mode on Windows, where `os.replace` can fail
+            # while an antivirus, a backup tool or a sync client holds
+            # `review_data.json` open. Either both files change or neither does.
             try:
                 stato_prima = self.configurazione.state_path.read_bytes()
             except OSError:
-                # Se non si riesce nemmeno a leggerlo non c'e' niente da
-                # rimettere: si prosegue come prima di questa difesa.
+                # If it can't even be read, there's nothing to restore:
+                # proceed as if this safeguard weren't here.
                 stato_prima = None
             try:
                 rimossi, conferme_scadute, riprese, scollegate = self._ripulisci_stato(confronto)
-                # ⚠ Le quantita' riprese dall'elenco NON producono un avviso, e non e'
-                # una dimenticanza: e' la regola normale del programma — la quantita'
-                # la decide il gestionale — e un avviso che compare a ogni ricalcolo
-                # per dire che il programma ha funzionato e' rumore.  Deciso il 15
-                # agosto 2026, con le sue parole: «non riempire tutto di notifiche,
-                # popup, e roba da paranoici logorroici».  Il numero resta nel
-                # riepilogo della run per chi lo cerca.
+                # Quantities refreshed from the reorder list do NOT raise a
+                # warning, deliberately: quantity is always driven by the
+                # management-software export, and a warning firing on every
+                # single recompute just to say the program worked would be
+                # noise. The count stays in the run's own numbers for anyone
+                # who wants it.
                 self._numeri(quantitaRiprese=riprese)
                 if scollegate:
                     plurale = scollegate != 1
@@ -3270,9 +3210,10 @@ class PipelineJobManager:
                         "l'articolo di prima. Rileggi nome e codice e riconferma nel passo 2.",
                     )
 
-                # Gli avvisi della run entrano nel documento: due minuti dopo nessuno
-                # guardera' piu' la barra di avanzamento, e un avviso che vive solo
-                # nello stato del job e' un avviso che nessuno legge.
+                # The run's warnings are carried into the document: two
+                # minutes later nobody is watching the progress bar anymore,
+                # and a warning that lives only in the job's state is a
+                # warning nobody reads.
                 avvisi_run = [dict(voce) for voce in (self.stato().get("avvisi") or [])]
                 if avvisi_run:
                     confronto.setdefault("warnings", [])
@@ -3287,12 +3228,11 @@ class PipelineJobManager:
                 }
 
                 vivo = self.configurazione.review_path
-                # ⚠ Anche questa passa da `scrittura_sicura`, e non era cosi': era
-                # l'unica sostituzione rimasta col temporaneo dal nome fisso e
-                # senza `fsync`, proprio sul file piu' grosso e piu' importante del
-                # programma — 2,4 MB sul confronto vero. Una mancanza di corrente
-                # subito dopo lo lasciava presente e troncato, cioe' alla lettera
-                # il difetto che `scrittura_sicura` esiste per chiudere.
+                # This swap also goes through `scrittura_sicura`, on the
+                # largest and most important file the program writes — a
+                # power loss right after a naive replace would leave it
+                # present but truncated, exactly the failure mode this
+                # helper exists to close off.
                 scrittura_sicura.scrivi_bytes(vivo, corsa.review_path.read_bytes())
             except Exception:
                 if stato_prima is not None:
@@ -3307,18 +3247,19 @@ class PipelineJobManager:
         )
 
     def _rifiuti_in_vigore(self) -> dict[tuple[str, str], dict[str, Any]]:
-        """I «no» dati dall'utente, o niente se non si riescono a leggere.
+        """The user's rejections ("not the same item"), or none if unreadable.
 
-        Non leggerli e' prudente per costruzione: l'offerta torna a contare come
-        disponibile, la quantita' torna a zero e la riga aspetta una scelta —
-        cioe' si torna a chiedere, non si ordina per conto proprio.
+        Failing to read them is safe by construction: the offer counts as
+        available again, the quantity resets to zero, and the row waits for
+        a choice — i.e. the user is asked again rather than an order being
+        placed on their behalf.
         """
 
         if self.rifiuti_dichiarati is None:
             return {}
         try:
             return self.rifiuti_dichiarati() or {}
-        except Exception as exc:  # noqa: BLE001 - una memoria non ferma un ricalcolo
+        except Exception as exc:  # noqa: BLE001 - a missing cache must not stop a recompute
             self._numeri(rifiutiNonLetti=f"{type(exc).__name__}: {exc}")
             return {}
 
@@ -3329,7 +3270,7 @@ class PipelineJobManager:
         fornitore: str,
         offerta: dict[str, Any],
     ) -> bool:
-        """Stessa regola di `ReviewStore.spegni_le_offerte_rifiutate`, riga per riga."""
+        """Same rule as `ReviewStore.spegni_le_offerte_rifiutate`, applied row by row."""
 
         if not rifiuti or not articolo:
             return False
@@ -3337,76 +3278,73 @@ class PipelineJobManager:
         return voce is not None and str(voce.get("offerta") or "") == impronta_articolo(offerta)
 
     def _ripulisci_stato(self, confronto: dict[str, Any]) -> tuple[int, int, int, int]:
-        """Le scelte che il confronto nuovo non regge piu' tornano a zero.
+        """Resets any saved selection the new comparison can no longer support.
 
-        Un prodotto sparito o un'offerta che non c'e' piu' lascerebbero nello
-        stato una quantita' su un fornitore che non puo' consegnarla: al
-        salvataggio successivo l'utente si vedrebbe rifiutare tutto con
-        `OFFERTA_NON_VALIDA` senza capire quale riga sia.
+        A product that no longer exists, or an offer that's gone, would
+        otherwise leave a quantity assigned to a supplier who can't deliver
+        it: on the next save the user would see everything rejected as
+        invalid, with no indication of which row.
 
-        ⚠ Dal 16 agosto 2026 quel rifiuto non copre piu' tutti i casi, e questa
-        funzione segue la stessa riga di confine. La domanda non e' «il
-        fornitore salvato c'e' ancora», e' «qualcuno puo' servirlo»:
+        The check isn't "is the saved supplier still there", it's "can
+        anyone still supply this":
 
-        * **almeno un fornitore ha ancora un'offerta utilizzabile** — su quale
-          metterci la quantita' e' una scelta, e il programma non la fa al posto
-          dell'utente: la quantita' torna a zero come sempre e la riga aspetta
-          che lui scelga;
-        * **nessun fornitore ce l'ha** — non c'e' niente da scegliere. Azzerare
-          qui cancellava l'unica cosa nota di quella riga, quanti ne servono, e
-          non evitava nessun errore: `validate_snapshot` accetta una quantita'
-          senza nessuna offerta utilizzabile da nessuno. La quantita' resta e il
-          fornitore si svuota: e' un prodotto da reperire, e alla compilazione
-          entra nell'elenco «Prodotti da reperire».
+        * at least one supplier still has a usable offer — deciding which
+          one gets the quantity is a choice the program doesn't make for the
+          user: the quantity resets to zero as always and the row waits for
+          them to choose;
+        * no supplier has one at all — there's nothing left to choose.
+          Zeroing the quantity here would erase the one thing known about
+          that row, how many are needed, and `validate_snapshot` accepts a
+          quantity with no usable offer from anyone. The quantity stays and
+          the supplier field is cleared: this is an item to source, and it
+          enters the "items to source" list at compilation.
 
-        Restituisce (quantita' azzerate, conferme scadute, quantita' riprese
-        dal gestionale, decisioni scollegate). ⚠ I prodotti da reperire non
-        stanno in questo conto e non producono nessun avviso: non e' stato
-        perso niente, e un avviso che dice che il programma ha funzionato e'
-        rumore. Ci finivano dentro prima, ed era il conteggio a mentire —
-        `SCELTE_NON_PIU_VALIDE` dice «la quantita' e' tornata a zero».
+        Returns (quantities reset, confirmations expired, quantities
+        refreshed from the management export, decisions unlinked). Items to
+        source aren't counted here and raise no warning: nothing was lost,
+        and a warning that fires just to say the program worked would be
+        noise.
 
-        Le conferme scadute erano il caso che mancava: il fornitore ha ancora
-        un'offerta — quindi niente veniva azzerato — ma quell'offerta e' una
-        RIGA DIVERSA del listino, con altro EAN e altra descrizione. La casella
-        «confermo che e' lo stesso articolo» restava spuntata sull'articolo
-        sbagliato, e la compilazione passava senza una parola (revisione del 14
-        agosto 2026).
+        Expired confirmations cover a separate case: the supplier still has
+        an offer, so nothing gets zeroed, but that offer is now a different
+        row of the price list — different barcode, different description.
+        The "confirm same item" checkbox would otherwise stay checked
+        against the wrong item, and compilation would proceed silently.
 
-        ⚠ Le altre due misure nascono dal difetto del 15 agosto 2026, con le
-        parole di chi lo ha subito: «ordine2 non veniva usato davvero: nonostante
-        alcuni prodotti avessero quantita' diverse, mostrava tutti 0».  Il
-        confronto nuovo era giusto — i colli del gestionale nuovo erano dentro
-        `review_data.json` — ma `ReviewStore.review()` copre ogni prodotto con la
-        decisione salvata, e la decisione salvata veniva dall'elenco di prima.
-        Due regole, e sono due perche' rispondono a due domande diverse:
+        The remaining two counters exist because the comparison's own
+        product identifiers can shift between runs. A newly built
+        comparison can be correct — the management export's new quantities
+        are already in `review_data.json` — while `ReviewStore.review()`
+        still overlays every product with its saved decision, and that
+        decision came from the previous product list. Two separate rules
+        answer two different questions:
 
-        * **una decisione vale per l'articolo su cui e' stata presa.**  Gli
-          identificativi sono numeri di riga del gestionale: con un elenco nuovo
-          la riga 3 e' un altro prodotto, e la scelta del fornitore, la conferma
-          e l'esclusione della riga 3 di prima non parlano di lui.  Se l'articolo
-          e' cambiato, la decisione si scollega e la riga riparte da quello che
-          dice il confronto nuovo;
-        * **una quantita' che viene dal gestionale non e' una decisione**: e' una
-          copia di quello che c'e' scritto nell'elenco, e a ogni ricalcolo si
-          rilegge da li'.  Senza condizioni — decisione di Daniele del 15 agosto
-          2026: «la quantita' deve prenderla dal gestionale e stop».  Le
-          quantita' scritte dall'utente (`quantitySource: "utente"`) restano
-          intatte: quelle sono sue — tranne lo zero che «utente» non era mai
-          stato, riconosciuto dall'elenco di allora (7 settembre 2026, nel
-          ciclo qui sotto).  ⚠ Conseguenza voluta: «Azzera le quantita'
-          predefinite» vale fino al ricalcolo successivo, perche' quello che
-          azzera non e' una scelta salvata ma una copia dell'elenco.
+        * a decision applies to the item it was made on. Identifiers are row
+          numbers from the management export: with a new export, row 3 can
+          be a different product, and the supplier choice, confirmation and
+          exclusion made on the old row 3 no longer apply to it. When the
+          item has changed, the decision is unlinked and the row starts
+          fresh from what the new comparison says;
+        * a quantity sourced from the management export is not a decision:
+          it's a copy of what the export says, re-read on every recompute
+          unconditionally. Quantities the user typed themselves
+          (`quantitySource: "utente"`) are left untouched — those are the
+          user's own — except for a zero that was never really user-entered
+          but is recognized as coming from that export (handled in the loop
+          below). One deliberate consequence: "reset default quantities"
+          only holds until the next recompute, because what it resets isn't
+          a saved choice but a copy of the export.
         """
 
         stato = leggi_json(self.configurazione.state_path, None)
         if not isinstance(stato, dict) or not isinstance(stato.get("products"), list):
             return 0, 0, 0, 0
-        # I prodotti aggiunti a mano non stanno nel confronto — ci arrivano
-        # dallo stato, a ogni lettura — ma le loro decisioni sono decisioni come
-        # tutte le altre. Senza questa riga sparivano a ogni ricalcolo, e la
-        # quantita' scritta su un prodotto aggiunto a mano tornava a zero con la
-        # spiegazione sbagliata («il listino nuovo non ha piu' l'offerta»).
+        # Manually added products aren't part of the comparison — they come
+        # from the state on every read — but their decisions are decisions
+        # like any other. Without this line they'd disappear on every
+        # recompute, and the quantity on a manually added product would
+        # reset to zero with the wrong explanation ("the new price list no
+        # longer has the offer").
         prodotti_del_confronto = [
             *(confronto.get("products") or []),
             *(voce for voce in stato.get("manualProducts") or [] if isinstance(voce, dict)),
@@ -3415,12 +3353,12 @@ class PipelineJobManager:
         offerte_per_fornitore: dict[tuple[str, str], dict[str, Any]] = {}
         quantita_del_confronto: dict[str, int] = {}
         articolo_adesso: dict[str, str] = {}
-        # ⚠ Le offerte che l'utente ha rifiutato non contano come «qualcuno lo
-        # serve ancora». Il confronto qui e' quello NUDO — la decorazione che
-        # spegne un'offerta rifiutata sta sulla porta di lettura del servizio, e
-        # di qui non passa — quindi la domanda si rifa' con la stessa regola:
-        # combacia il fornitore, combacia l'articolo del gestionale, e combacia
-        # l'impronta della riga su cui il no e' stato detto.
+        # Offers the user has rejected don't count as "someone can still
+        # supply this". The comparison read here is the raw one — the layer
+        # that hides a rejected offer lives on the service's own read path,
+        # not here — so the same check is repeated: matching supplier,
+        # matching item, matching fingerprint of the row the rejection was
+        # made on.
         rifiuti = self._rifiuti_in_vigore()
         for prodotto in prodotti_del_confronto:
             identificativo_prodotto = str(prodotto.get("id") or "")
@@ -3437,19 +3375,19 @@ class PipelineJobManager:
             quantita_del_confronto[identificativo_prodotto] = int(_numero(prodotto.get("quantity")) or 0)
             articolo_adesso[identificativo_prodotto] = articolo_della_riga(prodotto)
 
-        # Il confronto vivo sul disco e' ancora quello di prima: qui si guarda
-        # che cosa c'era su ogni sua riga. Vale solo se lo stato appartiene
-        # davvero a quella run: altrimenti di quelle righe non si sa niente, e
-        # una decisione non si scollega per un sospetto.
+        # The live comparison on disk is still the previous one: this looks
+        # at what each of its rows used to hold. It's only trusted when the
+        # state actually belongs to that run; otherwise nothing is known
+        # about those rows, and a decision is never unlinked on a mere guess.
         precedente = leggi_json(self.configurazione.review_path, None)
         if not isinstance(precedente, dict) or str(stato.get("runId") or "") != str(
             (precedente.get("run") or {}).get("id") or ""
         ):
             precedente = None
         articolo_prima: dict[str, str] = {}
-        # Quanti colli chiedeva l'elenco di allora su quella riga: 0 se il
-        # gestionale ha detto zero, `None` se la colonna era vuota. E' il solo
-        # posto in cui quella differenza e' ancora scritta, e serve qui sotto.
+        # How many units that row's export asked for at the time: 0 if the
+        # export said zero, `None` if the column was blank. This is the only
+        # place that distinction is still recorded, and it's needed below.
         suggerito_prima: dict[str, Any] = {}
         if precedente is not None:
             for prodotto in precedente.get("products") or []:
@@ -3462,12 +3400,13 @@ class PipelineJobManager:
         conferme_scadute = 0
         riprese_dal_gestionale = 0
         scollegate = 0
-        # Non esce di qui e non produce nessun avviso: serve solo a far
-        # riscrivere lo stato quando l'unica cosa cambiata e' il fornitore
-        # svuotato su un prodotto che nessuno ha piu'.
+        # Not returned, and never raises a warning on its own: only used to
+        # force a state rewrite when the only thing that changed is the
+        # supplier field being cleared on a product nobody carries anymore.
         da_reperire = 0
-        # Nemmeno questo esce di qui: fa riscrivere lo stato quando l'unica cosa
-        # cambiata e' il marchio della quantita' e il numero resta zero.
+        # Same purpose: forces a state rewrite when the only thing that
+        # changed is the quantity's source label, with the number itself
+        # staying zero.
         marchi_corretti = 0
         tenute: list[dict[str, Any]] = []
         for decisione in stato.get("products") or []:
@@ -3476,33 +3415,34 @@ class PipelineJobManager:
             identificativo = str(decisione.get("id") or "")
             disponibili = offerte_valide.get(identificativo)
             if disponibili is None:
-                # Il prodotto non c'e' piu': la sua decisione non ha piu' un
-                # posto dove attaccarsi e sparisce con lui.
+                # The product no longer exists: its decision has nowhere
+                # left to attach and is dropped with it.
                 if int(_numero(decisione.get("quantity")) or 0) > 0:
                     azzerati += 1
                 continue
             prima = articolo_prima.get(identificativo, "")
             adesso_articolo = articolo_adesso.get(identificativo, "")
             if prima and adesso_articolo and prima != adesso_articolo:
-                # Stessa riga, altro articolo: la decisione si scollega e la riga
-                # riparte da quello che dice il confronto nuovo.
+                # Same row id, different item: the decision is unlinked and
+                # the row starts fresh from what the new comparison says.
                 scollegate += 1
                 continue
-            # ⚠ 7 settembre 2026: le decisioni gia' sul disco con l'etichetta
-            # sbagliata.  Fino al 6 settembre uno zero dell'elenco nasceva
-            # «utente», e chi non riparte da «Inizia nuova comparazione» — che
-            # cancella `state.json` — se lo porta dietro: l'elenco nuovo ne
-            # chiede 4, la riga resta a 0 e nessuno lo dice.  Rietichettarli
-            # tutti sarebbe peggio del difetto: uno zero «utente» puo' anche
-            # essere il «non ordinarne» scritto a mano sopra un suggerimento, e
-            # rileggerlo dall'elenco ordinerebbe merce che l'utente aveva
-            # tolto.  A dirlo e' l'elenco di allora: se su quella riga il
-            # gestionale aveva detto **zero** — zero, non colonna vuota — quello
-            # zero e' suo, e torna a portare il suo marchio.  Da qui in poi lo
-            # tratta il ramo di sotto, che lo rilegge dall'elenco nuovo, e al
-            # primo ricalcolo lo stato si sana da se'.  L'articolo e' gia'
-            # stato verificato qui sopra: se la riga porta un altro prodotto,
-            # la decisione e' uscita prima.
+            # A zero already saved on disk can carry the wrong source label:
+            # an older `state.json` may hold a zero from the export labeled
+            # "utente", and the label persists until the user starts over
+            # from a clean slate (which wipes `state.json`): the new export
+            # asks for 4, the row stays at 0, and nothing reports it. Relabeling
+            # every such zero would be worse than the bug it fixes: a zero
+            # labeled "utente" can also be a deliberate "don't order this"
+            # written over a suggested quantity, and re-reading it from the
+            # export would order stock the user had intentionally removed.
+            # The safe signal is what that row's export actually said: if it
+            # asked for zero — zero, not a blank column — that zero really
+            # is the export's own, and gets its label corrected. From there
+            # the branch below re-reads it from the current export, and the
+            # state heals itself on the next recompute. The item identity
+            # was already checked above, so a row now carrying a different
+            # product has already been unlinked by this point.
             if (
                 str(decisione.get("quantitySource") or "") == "utente"
                 and int(_numero(decisione.get("quantity")) or 0) == 0
@@ -3519,29 +3459,32 @@ class PipelineJobManager:
             fornitore = str(decisione.get("selectedSupplierId") or "")
             if quantita > 0 and (not fornitore or fornitore not in disponibili):
                 if disponibili:
-                    # Qualcuno lo serve ancora, ma non quello scelto: la
-                    # quantita' torna a zero perche' su quale offerta metterla
-                    # e' una scelta, e non la fa il programma al posto suo.
+                    # Someone can still supply it, just not the one chosen:
+                    # the quantity resets to zero because deciding which
+                    # offer to use is a choice the program doesn't make for
+                    # the user.
                     decisione = {**decisione, "quantity": 0, "selectedSupplierId": "", "confirmed": False}
                     decisione.pop("confirmedArticle", None)
                     azzerati += 1
                 else:
-                    # Nessun fornitore lo ha: non c'e' niente da scegliere, e
-                    # azzerare cancellerebbe l'unica cosa che si sa di quella
-                    # riga — quanti ne servono. La quantita' resta, il fornitore
-                    # si svuota: e' un prodotto da reperire, non un errore.
+                    # No supplier has it: there's nothing left to choose,
+                    # and zeroing the quantity would erase the one thing
+                    # known about this row — how many are needed. The
+                    # quantity stays, the supplier field is cleared: this is
+                    # an item to source, not an error.
                     ripulita = {**decisione, "selectedSupplierId": "", "confirmed": False}
                     ripulita.pop("confirmedArticle", None)
                     if ripulita != decisione:
-                        # Senza questo conteggio lo stato non verrebbe riscritto
-                        # e il fornitore sparito resterebbe sul disco.
+                        # Without this counter the state wouldn't be
+                        # rewritten, and the vanished supplier would stay on
+                        # disk.
                         da_reperire += 1
                     decisione = ripulita
             elif decisione.get("confirmed"):
-                # La conferma vale per l'articolo che l'utente ha guardato. Se
-                # nello stato non c'e' scritto QUALE — stato salvato prima di
-                # questa regola — la si fa scadere lo stesso: non sapere che
-                # cosa si e' confermato non e' una conferma.
+                # The confirmation applies to the item the user actually
+                # looked at. If the state doesn't record which one — saved
+                # before this rule existed — it's still expired: not knowing
+                # what was confirmed is not a confirmation.
                 offerta = offerte_per_fornitore.get((identificativo, fornitore))
                 confermato = str(decisione.get("confirmedArticle") or "")
                 adesso = impronta_articolo(offerta) if offerta else ""
@@ -3564,8 +3507,8 @@ class PipelineJobManager:
             stato["updatedAt"] = utc_ora()
             scrivi_json(self.configurazione.state_path, stato)
         elif str(stato.get("runId") or "") != str((confronto.get("run") or {}).get("id") or ""):
-            # La run cambia identificativo a ogni ricalcolo, e lo stato deve
-            # seguirla: `PUT /api/state` rifiuta uno snapshot di un'altra run.
+            # The run id changes on every recompute, and the state has to
+            # follow it: `PUT /api/state` rejects a snapshot from another run.
             stato["runId"] = str((confronto.get("run") or {}).get("id") or "")
             stato["updatedAt"] = utc_ora()
             scrivi_json(self.configurazione.state_path, stato)
@@ -3574,7 +3517,7 @@ class PipelineJobManager:
 
 @dataclass
 class _Corsa:
-    """Lo scratchpad di una esecuzione: percorsi, numeri e riepiloghi."""
+    """Scratchpad for one run: paths, numbers and summaries."""
 
     cartella: Path
     registro_artefatti: dict[str, dict[str, Any]]

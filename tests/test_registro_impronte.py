@@ -1,15 +1,12 @@
-"""La memoria degli schemi: impronte, riconoscimento, scrittura versionata.
+"""Schema memory: fingerprints, recognition, versioned writes.
 
-Il programma finito gira da solo. Quando un fornitore cambia il listino non ci
-sarà nessuno a rimettere le mani nel codice: la regola deve stare nel registro
-e il codice deve limitarsi ad applicarla. Questi collaudi provano proprio
-questo — che il riconoscimento viene dal registro e non da condizioni scritte
-dentro una funzione — e che quello che il programma non riconosce lo dice,
-invece di far finta di niente.
+The engine runs unattended, so when a supplier's layout changes the rule must
+live in the adapter registry, not in a function's if-branches. These tests
+check that recognition comes from the registry and that an unrecognized file
+is reported as such instead of silently accepted.
 
-Le prove sui listini veri sono di **sola lettura**: profilare non riscrive
-niente. Le prove che scrivono lavorano su una copia del registro in una
-cartella temporanea.
+Tests against real price lists are read-only: profiling never rewrites them.
+Tests that write work on a copy of the registry in a temp directory.
 """
 
 from __future__ import annotations
@@ -34,14 +31,11 @@ from openpyxl import Workbook, load_workbook
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = SKILL_ROOT / "scripts"
 APP = SKILL_ROOT / "app"
-# ⚠ Il registro di queste prove e' una **copia congelata**, non
-# `references/adapters.json`.  Quel file il programma se lo riscrive da solo:
-# il 14 agosto 2026 la prima run vera ha imparato lo schema CIPRESSO della
-# settimana e ha riscritto `cipresso_v1` — comportamento voluto — e nove prove
-# appuntate ai suoi valori sono diventate rosse senza che niente fosse rotto.
-# Una suite che diventa rossa quando il programma fa il suo mestiere insegna a
-# non guardarla.  Qui si prova che gli adattatori NATIVI riconoscono i listini
-# storici: e' una proprieta' del registro consegnato, e va provata su quello.
+# These tests use a frozen copy of the registry, not `references/adapters.json`:
+# the engine rewrites the live one whenever it learns a schema, and pinning
+# tests to its exact values would make them fail on correct behavior. What's
+# tested here is a property of the shipped registry — that the native
+# adapters recognize the historical price lists — so it runs against that.
 ADAPTERS = SKILL_ROOT / "tests" / "fixtures" / "adapters_nativi.json"
 ADAPTERS_CONSEGNATO = SKILL_ROOT / "references" / "adapters.json"
 for cartella in (SCRIPTS, APP):
@@ -55,17 +49,17 @@ import prepare_sources  # noqa: E402
 
 _REGISTRO_VERO = registro.REGISTRO
 
-# Il file dei lettori dedicati, per provare che le intestazioni di un fornitore
-# non ci sono scritte dentro: la regola sta nel registro (regola 4).
+# The dedicated readers file, to check that a supplier's headers aren't
+# hardcoded in it: the rule belongs to the registry.
 PERCORSO_LETTORI = SCRIPTS / "prepare_sources.py"
 
 
 def setUpModule() -> None:
-    """Anche le chiamate senza percorso guardano la copia congelata.
+    """Point calls without an explicit path at the frozen copy too.
 
-    `registro.riconosci(profilo)` senza percorso legge il registro predefinito,
-    ed e' cosi' che tre prove si riprendevano `references/adapters.json` dopo
-    che le altre erano gia' state spostate sulla copia.
+    `registro.riconosci(profilo)` with no path argument reads the default
+    registry, so this also has to be repointed, or those calls would read the
+    live registry while everything else reads the frozen copy.
     """
 
     registro.REGISTRO = ADAPTERS
@@ -75,12 +69,12 @@ def tearDownModule() -> None:
     registro.REGISTRO = _REGISTRO_VERO
 
 
-# I listini veri stanno fuori dal progetto: si spostano con questa variabile
-# d'ambiente senza toccare il codice del collaudo.
+# Real price lists live outside the project; point at another folder with
+# this environment variable without touching the test code.
 LISTINI = Path(os.environ.get("LISTINI_STORICI", str(SKILL_ROOT / "listini-storici")))
 
-# Le intestazioni del listino Noce, nell'ordine in cui stanno nel file
-# vero: la colonna A e' vuota, l'EAN comincia dalla B.
+# Noce price-list headers, in the order they appear in the real file: column
+# A is empty, the EAN starts at B.
 INTESTAZIONI_NOCE = [
     None, "codice_a_barre", "codice", "descrizione_articolo", "pezzi_x_cartone",
     "cartoni_x_stra", "strati_x_pal", "prezzo", "quantita", "offerta",
@@ -91,11 +85,10 @@ INTESTAZIONI_NOCE = [
 INTESTAZIONI_BETULLA = ["EAN", "CodArt", "ORDINE", "Descr.Commerciale", "PzCt",
                       "Cessione", "Pedana", "Iva", "TOTALI"]
 
-# Gli adattatori scritti a mano nel progetto.  Non e' l'elenco del registro:
-# e' l'elenco di quelli che ci devono **essere**, e il registro puo' averne di
-# piu' — anzi deve poterne avere di piu', perche' impararne uno nuovo e' la
-# funzione per cui il registro esiste.  Un collaudo che fissa il contenuto del
-# registro diventa rosso il giorno in cui il programma fa il suo mestiere.
+# The adapters hand-written into the project. Not the full registry content:
+# the registry can (and should be able to) hold more, since learning a new
+# adapter is the point of it. A test pinning the registry's exact contents
+# would fail the moment the engine does its job.
 ADATTATORI_NATIVI = ("gestionale_v1", "betulla_v1", "cipresso_v1", "larice_v1",
                      "noce_xls_v1", "noce_csv_v1", "offerte_v1")
 
@@ -103,10 +96,10 @@ _PROFILI: dict[Path, dict[str, Any]] = {}
 
 
 def profilo_del_file(percorso: Path) -> dict[str, Any]:
-    """Il `details` che l'inspector produce oggi, calcolato una volta sola.
+    """Return the inspector's `details` for a file, computed once and cached.
 
-    E' quello che `riconosci` riceve in produzione: costruirne uno a mano
-    renderebbe il collaudo indipendente dal profilo vero, cioe' inutile.
+    This is what `riconosci` receives in production; building one by hand
+    would decouple the test from the real profile, making it pointless.
     """
 
     chiave = percorso.resolve()
@@ -129,7 +122,7 @@ def scrivi_foglio(percorso: Path, righe: list[list[Any]], nome: str = "Foglio1")
 def foglio_noce(percorso: Path, *, intestazioni: list[Any] | None = None,
                     riga_intestazione: int = 5, prezzi_testuali: bool = False,
                     nome_foglio: str = "Foglio1", righe_dati: int = 3) -> Path:
-    """Un foglio con la forma del listino Noce: nota in alto, dati in fondo."""
+    """Build a sheet shaped like the Noce price list: a note on top, data below."""
 
     intestazioni = list(intestazioni if intestazioni is not None else INTESTAZIONI_NOCE)
     righe: list[list[Any]] = [[None] for _ in range(riga_intestazione - 1)]
@@ -147,7 +140,7 @@ def foglio_noce(percorso: Path, *, intestazioni: list[Any] | None = None,
 
 
 def foglio_larice(percorso: Path, nome: str = "Canvass 99 01-05set", righe_dati: int = 120) -> Path:
-    """Un foglio con la forma del listino Larice: nessuna intestazione, 18 colonne."""
+    """Build a sheet shaped like the Larice price list: no header row, 18 columns."""
 
     righe = []
     for numero in range(righe_dati):
@@ -163,13 +156,13 @@ def foglio_larice(percorso: Path, nome: str = "Canvass 99 01-05set", righe_dati:
 
 
 def scrivi_valori_calcolati(percorso: Path, valori: dict[str, Any]) -> Path:
-    """Aggiunge a un .xlsx il risultato gia' calcolato delle sue formule.
+    """Add pre-computed formula results to an .xlsx file.
 
-    Un documento salvato da openpyxl porta la formula e basta: aprendolo con
-    `data_only=True` si trova `None`, che e' com'e' fatto un file mai aperto da
-    Excel.  Un listino vero invece arriva **calcolato**, e la cella porta anche
-    il suo valore (`<f>` e `<v>` insieme): e' la forma su cui il lettore del
-    programma lavora, ed e' quella che questi collaudi devono descrivere.
+    A workbook saved by openpyxl carries only the formula: opening it with
+    `data_only=True` yields `None`, the shape of a file Excel has never
+    opened. A real price list arrives already computed, with both the
+    formula and its cached value (`<f>` and `<v>` together) — that's the
+    shape the reader works on, and the one these tests need to reproduce.
     """
 
     import re as _re
@@ -188,25 +181,20 @@ def scrivi_valori_calcolati(percorso: Path, valori: dict[str, Any]) -> Path:
             return trovato.group(0)
         valore = valori[riferimento.group(1)]
         if isinstance(valore, str):
-            # `t="str"` e' come Excel dichiara il risultato testuale di una
-            # formula: senza, il valore verrebbe letto come un numero.
+            # `t="str"` is how Excel marks a formula's result as text; without
+            # it the value would be read back as a number.
             cella = cella.replace(">", ' t="str">', 1) if 't="' not in cella else cella
             return f"{cella}<f>{formula}</f><v>{valore}</v></c>"
         return f"{cella}<f>{formula}</f><v>{valore}</v></c>"
 
-    # openpyxl scrive la cella del valore vuota, perche' nessuno ha ancora
-    # fatto il conto — ma la scrive in DUE forme, e quale delle due dipende da
-    # una libreria che nessuno ha dichiarato:
+    # openpyxl writes the value cell empty, since nothing has computed it yet
+    # — but in one of two forms depending on whether lxml is installed:
     #
-    #     con lxml installato   <c r="E2"><f>…</f><v></v></c>
-    #     senza lxml            <c r="E2"><f>…</f><v /></c>
+    #     with lxml      <c r="E2"><f>…</f><v></v></c>
+    #     without lxml   <c r="E2"><f>…</f><v /></c>
     #
-    # openpyxl serializza con lxml quando c'e' (`openpyxl.xml.LXML`) e con
-    # `xml.etree` quando non c'e', e le due scrivono l'elemento vuoto in modo
-    # diverso. Non e' la versione di openpyxl: la 3.1.5 fa tutte e due le cose.
-    # Riconoscere solo la prima forma faceva fallire tre collaudi su qualunque
-    # Python con il solo openpyxl installato — cioe' proprio quello del PC del
-    # negozio, che e' il computer che conta.
+    # Both forms come from the same openpyxl version; matching only the first
+    # one silently breaks on a Python install with plain openpyxl and no lxml.
     xml = _re.sub(r"(<c [^>]*>)<f>(.*?)</f>(?:<v\s*/>|<v>[^<]*</v>)?</c>", con_valore, xml)
     contenuti[nome_foglio] = xml.encode("utf-8")
     with zipfile.ZipFile(percorso, "w", zipfile.ZIP_DEFLATED) as archivio:
@@ -223,15 +211,15 @@ def registro_di_prova(percorso: Path, voci: list[dict[str, Any]]) -> Path:
 
 
 class ImprontaTests(unittest.TestCase):
-    """L'impronta di uno schema: che cosa la compone e che cosa non la cambia."""
+    """A schema's fingerprint: what it's made of, and what leaves it unchanged."""
 
     maxDiff = None
 
     def test_normalizza_da_lo_stesso_risultato_dell_inspector(self) -> None:
-        """`inspect_sources.normalized` deve poter sparire a favore di questa.
+        """`inspect_sources.normalized` must be safely replaceable by this one.
 
-        Se le due divergessero, un listino riconosciuto dall'inspector non
-        verrebbe piu' ritrovato nel registro, e nessuno saprebbe perche'.
+        If the two diverged, a price list the inspector recognizes would no
+        longer be found in the registry, silently.
         """
 
         for valore in ["Cod.Art.", "COD ART", "Descrizione Articolo", "Quantità",
@@ -245,11 +233,11 @@ class ImprontaTests(unittest.TestCase):
         self.assertEqual(registro.normalizza("PERCHÉ"), "perche")
 
     def test_l_impronta_non_ha_vuoti_ne_doppioni_ed_e_ordinata(self) -> None:
-        """Una cella vuota nella riga di intestazione non e' un'intestazione.
+        """An empty cell in the header row is not a header.
 
-        Il listino Noce ha la colonna A vuota proprio nella riga 5: se il
-        vuoto entrasse nell'impronta, l'insieme osservato non combacerebbe mai
-        con quello dichiarato.
+        The Noce price list has an empty column A in row 5; if the empty
+        value entered the fingerprint, the observed set would never match
+        the declared one.
         """
 
         token = registro.impronta_intestazioni([None, "EAN", "  ", "ean", "CodArt", "", "Cod. Art."])
@@ -257,7 +245,7 @@ class ImprontaTests(unittest.TestCase):
         self.assertEqual(token, ["codart", "ean"])
 
     def test_l_ordine_delle_colonne_non_cambia_l_impronta(self) -> None:
-        """Un fornitore che sposta una colonna manda lo stesso listino."""
+        """A supplier reordering columns sends what's still the same price list."""
 
         prima = registro.impronta("Foglio1", 1, 2, ["EAN", "CodArt", "Cessione"])
         dopo = registro.impronta("Foglio1", 1, 2, ["Cessione", "EAN", "CodArt"])
@@ -277,7 +265,7 @@ class ImprontaTests(unittest.TestCase):
         self.assertEqual(len(risultato["hash"]), 64)
 
     def test_una_colonna_in_piu_cambia_l_hash_ma_non_l_identita(self) -> None:
-        """Per questo l'identita' non è l'hash: sarebbe un falso allarme a settimana."""
+        """This is why identity isn't the hash: that would false-alarm weekly."""
 
         prima = registro.impronta("Foglio1", 1, 2, ["EAN", "CodArt"])
         dopo = registro.impronta("Foglio1", 1, 2, ["EAN", "CodArt", "NOTE"])
@@ -287,7 +275,7 @@ class ImprontaTests(unittest.TestCase):
 
 
 class RegistroLetturaTests(unittest.TestCase):
-    """Leggere il registro, e dire quando non si è potuto."""
+    """Reading the registry, and reporting when that isn't possible."""
 
     maxDiff = None
 
@@ -296,19 +284,17 @@ class RegistroLetturaTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.radice, True)
 
     def test_gli_adattatori_dichiarano_tutti_un_impronta(self) -> None:
-        """Un adattatore senza impronta non verrebbe mai riconosciuto.
+        """An adapter without a fingerprint would never be recognized.
 
-        ⚠ Qui si controllano le **proprieta'** del registro, non il suo
-        contenuto.  Prima questo collaudo pretendeva sei voci esatte: bastava
-        imparare un adattatore — cioe' usare la funzione per cui il registro
-        esiste — perche' diventasse rosso, e la promessa «suite verde» valeva
-        solo finche' nessuno faceva lavorare il programma.
+        This checks properties of the registry, not its exact contents:
+        pinning it to an exact set of entries would fail the moment the
+        engine learns a new adapter.
         """
 
-        # ⚠ Questo, a differenza delle prove sui listini storici, guarda il
-        # registro **vivo**: sono le proprieta' che devono valere anche dopo
-        # che il programma ha imparato uno schema, ed e' l'unico posto che se
-        # ne accorgerebbe.
+        # Unlike the tests against historical price lists, this reads the
+        # live registry: these properties must hold even after the engine
+        # has learned a schema, and this is the only place that would notice
+        # if they didn't.
         voci = registro.adattatori(ADAPTERS_CONSEGNATO)
         identificativi = [voce.get("id") for voce in voci]
 
@@ -328,15 +314,10 @@ class RegistroLetturaTests(unittest.TestCase):
                                     "un adattatore fornitore senza «supplier_id» non lo cercherebbe nessuno")
 
     def test_chi_sapeva_compilare_un_ordine_continua_a_saperlo(self) -> None:
-        """Imparare uno schema non deve togliere `order_write` a un fornitore.
+        """Learning a schema must not drop `order_write` for a supplier.
 
-        E' la proprieta' che il 14 agosto 2026 e' saltata senza che niente lo
-        dicesse: imparando lo schema CIPRESSO della settimana il registro ha
-        riscritto `cipresso_v1`, e da li' in avanti la compilazione non ha piu'
-        prodotto **nessuna copia, per nessun fornitore**.  Il confronto e' con
-        la copia congelata, cioe' con quello che il programma sapeva fare
-        quando e' stato consegnato: un fornitore compilabile non torna
-        indietro.
+        Compared against the frozen copy, i.e. what the engine could do when
+        shipped: a supplier able to write its order file must not regress.
         """
 
         def sa_compilare(percorso) -> set[str]:
@@ -351,12 +332,12 @@ class RegistroLetturaTests(unittest.TestCase):
         self.assertEqual(perduti, [], "questi fornitori non sanno più scrivere il proprio ordine")
 
     def test_le_posizioni_dichiarate_sono_scritte_nella_forma_che_si_rilegge(self) -> None:
-        """Una firma posizionale scritta in un'altra forma non difende niente.
+        """A positional signature written in the wrong form defends nothing.
 
-        `_verifica_posizioni` cerca le intestazioni per token normalizzato: una
-        chiave scritta «Cod.Art.» invece di «codart» non verrebbe confrontata
-        con niente e la verifica passerebbe sempre — cioe' la difesa che ha
-        fermato la trappola BETULLA esisterebbe solo sulla carta.
+        `_verifica_posizioni` looks up headers by normalized token: a key
+        written "Cod.Art." instead of "codart" would never match anything,
+        and the check would always pass — a defense that exists only on
+        paper.
         """
 
         misurati = 0
@@ -378,7 +359,7 @@ class RegistroLetturaTests(unittest.TestCase):
         self.assertEqual(registro.adattatori(self.radice / "non_esiste.json"), [])
 
     def test_un_registro_illeggibile_non_somiglia_a_un_file_sconosciuto(self) -> None:
-        """Chi legge deve capire che il difetto è nell'installazione, non nel listino."""
+        """The message must point at the installation, not at the price list."""
 
         esito = registro.riconosci({"format": "xlsx", "sheets": []}, self.radice / "non_esiste.json")
 
@@ -397,7 +378,7 @@ class RegistroLetturaTests(unittest.TestCase):
 
 
 class RiconoscimentoTests(unittest.TestCase):
-    """Il riconoscimento su documenti costruiti apposta."""
+    """Recognition on documents built specifically for these cases."""
 
     maxDiff = None
 
@@ -425,11 +406,10 @@ class RiconoscimentoTests(unittest.TestCase):
         self.assertEqual(esito["missing_headers"], [])
 
     def test_il_nome_del_file_non_decide_mai(self) -> None:
-        """Noce manda «formattato_104233.xls»: il nome non e' mai una prova.
+        """A file name is never evidence, in either direction.
 
-        Al contrario, un nome che sembra dire tutto non deve poter dirottare
-        il riconoscimento: qui il documento si chiama come un listino BETULLA ed
-        e' un listino Larice.
+        Here the document is named like a BETULLA price list and is actually
+        a Larice one: a misleading name must not hijack recognition.
         """
 
         esito = self.riconosci_file(foglio_larice(self.radice / "LISTINO BETULLA VALIDO FINO AL 28-07-26.xlsx"))
@@ -439,8 +419,8 @@ class RiconoscimentoTests(unittest.TestCase):
         self.assertEqual(esito["confidence"], 0.97)
 
     def test_l_impronta_per_forma_riconosce_un_listino_senza_intestazioni(self) -> None:
-        """Larice non ha nessuna riga di intestazione: senza questa strada la
-        sua regola resterebbe scritta nel codice."""
+        """Larice has no header row at all: without shape-based matching its
+        rule would have to live in the code."""
 
         esito = self.riconosci_file(foglio_larice(self.radice / "canvass.xlsx"))
 
@@ -450,7 +430,7 @@ class RiconoscimentoTests(unittest.TestCase):
         self.assertIn("indicatore I in colonna B", esito["evidence"])
 
     def test_il_csv_passa_dallo_stesso_motore(self) -> None:
-        """Il profilo di un CSV è piatto, senza «sheets»: deve reggere lo stesso."""
+        """A CSV's profile is flat, with no "sheets": recognition must still work."""
 
         percorso = self.radice / "noce.csv"
         with percorso.open("w", encoding="utf-8-sig", newline="") as flusso:
@@ -466,8 +446,8 @@ class RiconoscimentoTests(unittest.TestCase):
         self.assertIsNone(esito["signature"]["sheet"])
 
     def test_un_profilo_xls_senza_formule_ne_celle_unite_non_rompe_niente(self) -> None:
-        """Di un .xls il lettore del progetto non sa quante formule ci siano:
-        `formula_count` e `merged_ranges_count` valgono None, non zero."""
+        """For a .xls file the reader can't count formulas or merged ranges:
+        `formula_count` and `merged_ranges_count` are None, not zero."""
 
         profilo = {
             "format": "xls", "sheet_count": 1,
@@ -490,11 +470,11 @@ class RiconoscimentoTests(unittest.TestCase):
         self.assertEqual(esito["state"], "SCHEMA_NOTO")
         self.assertEqual(esito["adapter_id"], "noce_xls_v1")
 
-    # -- quello che non deve declassare -------------------------------------
+    # -- what must not downgrade the schema ----------------------------------
 
     def test_una_colonna_in_piu_non_declassa_lo_schema(self) -> None:
-        """Un fornitore che aggiunge una colonna decorativa non deve costare
-        una chiamata AI ogni settimana: si dice e si va avanti."""
+        """A supplier adding a decorative column shouldn't cost an AI call
+        every week: it's reported and recognition proceeds."""
 
         intestazioni = list(INTESTAZIONI_NOCE) + ["NOTE PROMOZIONALI"]
         esito = self.riconosci_file(foglio_noce(self.radice / "noce.xlsx", intestazioni=intestazioni))
@@ -505,10 +485,9 @@ class RiconoscimentoTests(unittest.TestCase):
                       esito["evidence"])
 
     def test_il_totale_instabile_di_betulla_non_impedisce_il_riconoscimento(self) -> None:
-        """Il listino vero scrive TOTALE, il collaudo TOTALI: e' lo stesso schema.
+        """The real price list writes TOTALE, this fixture writes TOTALI: same schema.
 
-        E' la prova che l'identita' non puo' essere l'uguaglianza dell'insieme
-        completo delle intestazioni.
+        Proves that identity can't be equality of the full header set.
         """
 
         percorso = scrivi_foglio(self.radice / "betulla.xlsx", [
@@ -523,13 +502,13 @@ class RiconoscimentoTests(unittest.TestCase):
         self.assertIn("totali", esito["unknown_headers"])
 
     def test_un_adattatore_senza_mappatura_non_diventa_variato_a_vuoto(self) -> None:
-        """BETULLA, Larice e il gestionale hanno lettori dedicati: pretendere le
-        verifiche di una mappatura che non c'e' li declasserebbe sempre.
+        """BETULLA, Larice and the management export have dedicated readers, not
+        a `field_mapping`: requiring mapping-only checks for them would
+        always downgrade the schema.
 
-        Le verifiche che invece li riguardano girano eccome, e sono quelle che
-        contano: dove stanno i loro campi numerici e dove stanno le loro
-        colonne il registro lo dichiara lo stesso, con `header_aliases` e con
-        `header_signature.columns`."""
+        The checks that do apply to them still run, using
+        `header_aliases` and `header_signature.columns` to know where their
+        numeric fields and columns are."""
 
         percorso = scrivi_foglio(self.radice / "betulla.xlsx", [
             INTESTAZIONI_BETULLA,
@@ -543,27 +522,26 @@ class RiconoscimentoTests(unittest.TestCase):
         for nome in ("colonne_attese", "riga_intestazione", "foglio"):
             self.assertTrue(per_nome[nome]["ok"])
             self.assertEqual(per_nome[nome]["detail"], registro.NON_APPLICABILE)
-        # Un listino vuoto invece riguarda anche loro.
+        # An empty price list does affect them, though.
         self.assertTrue(per_nome["righe_dati"]["ok"])
-        # E cosi' i tipi e le posizioni, che per un lettore posizionale sono
-        # l'unica difesa che ha.
+        # Same for types and positions, the only defense a positional reader has.
         self.assertTrue(per_nome["tipi_plausibili"]["ok"])
         self.assertIn("unit_price_net (Cessione)", per_nome["tipi_plausibili"]["detail"])
         self.assertTrue(per_nome["posizioni_intestazioni"]["ok"])
         self.assertNotEqual(per_nome["posizioni_intestazioni"]["detail"], registro.NON_APPLICABILE)
 
-    # -- chi legge per posizione ---------------------------------------------
+    # -- readers that read by position ----------------------------------
     #
-    # BETULLA, il gestionale e Larice non hanno una mappatura: hanno un lettore
-    # dedicato che prende il prezzo da `row[5]`, non dalla colonna intitolata
-    # «Cessione».  Per loro l'insieme delle intestazioni non e' una difesa, e i
-    # due collaudi qui sotto sono la misura di quanto costava non averne una:
-    # sul listino vero il percorso veloce dichiarava SCHEMA_NOTO 0.99 e il
-    # lettore restituiva 12,00 euro al posto di 3,98.
+    # BETULLA, the management export and Larice have no `field_mapping`: a
+    # dedicated reader pulls the price from `row[5]`, not from the column
+    # titled "Cessione". The header set is no defense for them, and the two
+    # tests below measure the cost of not having positional checks either:
+    # on the real price list, the fast path declared SCHEMA_NOTO 0.99 while
+    # the reader returned 12.00 instead of 3.98.
 
     def test_una_colonna_in_piu_declassa_chi_legge_per_posizione(self) -> None:
-        """Una colonna in testa sposta tutte le altre di uno: per un lettore
-        posizionale non e' mai decorativa."""
+        """A leading extra column shifts every other one by one: never
+        decorative for a positional reader."""
 
         percorso = scrivi_foglio(self.radice / "betulla_colonna_in_piu.xlsx", [
             ["NOTE", *INTESTAZIONI_BETULLA],
@@ -580,10 +558,9 @@ class RiconoscimentoTests(unittest.TestCase):
                       per_nome["posizioni_intestazioni"]["detail"])
 
     def test_la_colonna_in_piu_in_testa_declassa_anche_noce(self) -> None:
-        """La colonna d'ordine di Noce (I) si compila IN POSIZIONE dentro
-        il loro `.xls`: una colonna in piu' in testa sposterebbe le quantita'
-        di una colonna senza cambiare nessun nome.  Le posizioni sono state
-        misurate su `formattato_104233.xls` il 13 agosto 2026 (cantiere R4).
+        """Noce's order column (I) is filled in BY POSITION in their `.xls`:
+        a leading extra column would shift order quantities by one column
+        without changing any header name.
         """
 
         percorso = foglio_noce(self.radice / "noce_colonna_in_piu.xlsx",
@@ -597,11 +574,9 @@ class RiconoscimentoTests(unittest.TestCase):
         self.assertFalse(per_nome["posizioni_intestazioni"]["ok"])
 
     def test_la_colonna_in_piu_in_testa_declassa_anche_cipresso(self) -> None:
-        """Era il minore dichiarato dalla verifica del 12 agosto: «Cipresso con
-        colonna in piu' resta SCHEMA_NOTO e lo ferma solo lo scrittore».  La
-        colonna d'ordine (G) e' posizionale: ora la firma dichiara le
-        posizioni (misurate su `3listino_Cipresso.xlsx`) e il documento
-        slittato si vede al riconoscimento, non alla compilazione.
+        """Cipresso's order column (G) is positional: the signature declares
+        column positions (measured on `3listino_Cipresso.xlsx`), so a
+        shifted document is caught at recognition, not at order-file writing.
         """
 
         intestazioni_cipresso = ["COD.ART.", "DES.ARTICOLO", "UM", "QT",
@@ -628,11 +603,11 @@ class RiconoscimentoTests(unittest.TestCase):
                       per_nome["posizioni_intestazioni"]["detail"])
 
     def test_due_colonne_scambiate_declassano_chi_legge_per_posizione(self) -> None:
-        """E' il caso che nessun controllo sui nomi puo' vedere: stesse
-        intestazioni, stesso numero di colonne, nessuna intestazione nuova.
+        """The case no name-based check can see: same headers, same column
+        count, nothing new — only two columns swapped.
 
-        Misurato: `read_betulla` restituiva 6,00 euro al posto di 1,25 e 1,25
-        pezzi per cartone al posto di 6, senza un avviso."""
+        Without the positional check, `read_betulla` silently returns
+        6.00 instead of 1.25, and 1.25 pieces per carton instead of 6."""
 
         scambiate = list(INTESTAZIONI_BETULLA)
         scambiate[4], scambiate[5] = scambiate[5], scambiate[4]
@@ -650,7 +625,7 @@ class RiconoscimentoTests(unittest.TestCase):
         per_nome = {verifica["name"]: verifica for verifica in esito["checks"]}
 
         self.assertEqual(esito["adapter_id"], "betulla_v1")
-        # I due documenti hanno esattamente le stesse intestazioni: e' il punto.
+        # Both documents have exactly the same headers — that's the point.
         self.assertEqual(esito["signature"]["headers"], intatto["signature"]["headers"])
         self.assertEqual(esito["unknown_headers"], intatto["unknown_headers"])
         self.assertEqual(intatto["state"], "SCHEMA_NOTO")
@@ -660,9 +635,9 @@ class RiconoscimentoTests(unittest.TestCase):
                       per_nome["posizioni_intestazioni"]["detail"])
 
     def test_il_prezzo_diventato_testo_declassa_anche_senza_mappatura(self) -> None:
-        """Dove sta il prezzo di BETULLA lo dice `header_aliases`, non una
-        mappatura: saltare la verifica dei tipi per chi ha un lettore dedicato
-        la toglieva ai tre fornitori piu' grossi del confronto."""
+        """`header_aliases`, not a mapping, says where BETULLA's price column
+        is: this type check must run for dedicated readers too, or the
+        largest suppliers in the comparison would lose it."""
 
         percorso = scrivi_foglio(self.radice / "betulla_prezzo_testo.xlsx", [
             INTESTAZIONI_BETULLA,
@@ -679,9 +654,9 @@ class RiconoscimentoTests(unittest.TestCase):
         self.assertIn("unit_price_net (Cessione) 0%", per_nome["tipi_plausibili"]["detail"])
 
     def test_un_listino_corto_non_e_un_listino_sbagliato(self) -> None:
-        """La cella dell'intestazione e' testo e sta nella colonna dei prezzi:
-        contarla fra i dati faceva scendere i numeri al 50% su un listino di
-        una riga, e un listino corto sarebbe diventato uno schema variato."""
+        """The header cell is text and sits in the price column: counting it
+        as data would drop the numeric ratio to 50% on a one-row price
+        list, wrongly flagging a short list as a variant schema."""
 
         percorso = scrivi_foglio(self.radice / "betulla_una_riga.xlsx", [
             INTESTAZIONI_BETULLA,
@@ -695,14 +670,14 @@ class RiconoscimentoTests(unittest.TestCase):
         self.assertTrue(per_nome["tipi_plausibili"]["ok"])
         self.assertIn("unit_price_net (Cessione) 100%", per_nome["tipi_plausibili"]["detail"])
 
-    # -- quello che deve declassare ----------------------------------------
+    # -- what must downgrade the schema -----------------------------------
 
     def test_un_foglio_di_copertina_davanti_declassa_lo_schema(self) -> None:
-        """`sheet: "FIRST"` non vuol dire «il primo che combacia»: chi legge
-        davvero il documento prende il foglio numero uno e basta.
+        """`sheet: "FIRST"` means "the first sheet", not "whichever one matches":
+        the real reader just opens sheet one.
 
-        Senza questa verifica il percorso veloce prometteva 0.99 su un
-        documento che il lettore non riesce nemmeno ad aprire."""
+        Without this check the fast path would score 0.99 on a document the
+        reader can't even open."""
 
         percorso = self.radice / "cipresso_con_copertina.xlsx"
         workbook = Workbook()
@@ -724,10 +699,10 @@ class RiconoscimentoTests(unittest.TestCase):
         self.assertIn("«Condizioni generali»", per_nome["foglio"]["detail"])
 
     def test_un_listino_senza_merce_non_entra_in_silenzio_nemmeno_senza_mappatura(self) -> None:
-        """BETULLA ha un lettore dedicato e nessuna `field_mapping`: senza il
-        ripiego su `header_signature.data_start_row` un listino con la sola
-        riga di intestazione sarebbe SCHEMA_NOTO, e il fornitore sparirebbe
-        dal confronto senza che niente sembri andato storto."""
+        """BETULLA has a dedicated reader and no `field_mapping`: without
+        falling back to `header_signature.data_start_row`, a price list with
+        only a header row would pass as SCHEMA_NOTO, and the supplier would
+        silently drop out of the comparison."""
 
         percorso = scrivi_foglio(self.radice / "betulla_vuoto.xlsx", [INTESTAZIONI_BETULLA], "Listino")
 
@@ -740,8 +715,8 @@ class RiconoscimentoTests(unittest.TestCase):
         self.assertIn("riga 2", per_nome["righe_dati"]["detail"])
 
     def test_una_colonna_mappata_che_sparisce_diventa_schema_variato(self) -> None:
-        """«Iva» non e' fra le obbligatorie ma la mappatura la usa: senza
-        questa verifica il lettore cercherebbe una colonna che non c'e'."""
+        """"Iva" isn't required, but the mapping uses it: without this check
+        the reader would look for a column that isn't there."""
 
         intestazioni = [valore for valore in INTESTAZIONI_NOCE if valore != "Iva"]
         esito = self.riconosci_file(foglio_noce(self.radice / "noce.xlsx", intestazioni=intestazioni))
@@ -756,8 +731,8 @@ class RiconoscimentoTests(unittest.TestCase):
                       esito["evidence"])
 
     def test_un_prezzo_diventato_testo_diventa_schema_variato(self) -> None:
-        """E' la variazione che fa piu' danno: il confronto fra fornitori si
-        svuoterebbe in silenzio."""
+        """The most damaging kind of variation: the comparison would empty
+        out silently."""
 
         percorso = foglio_noce(self.radice / "noce.xlsx", prezzi_testuali=True)
 
@@ -769,8 +744,8 @@ class RiconoscimentoTests(unittest.TestCase):
         self.assertIn("unit_price_net", per_nome["tipi_plausibili"]["detail"])
 
     def test_l_intestazione_spostata_di_riga_diventa_schema_variato(self) -> None:
-        """Il lettore parte dalla riga dichiarata: se sbaglia riga legge i
-        titoli come se fossero prodotti."""
+        """The reader starts from the declared row: a wrong row means it
+        reads header labels as if they were products."""
 
         percorso = foglio_noce(self.radice / "noce.xlsx", riga_intestazione=3)
 
@@ -799,14 +774,15 @@ class RiconoscimentoTests(unittest.TestCase):
         self.assertEqual(esito["state"], "SCHEMA_VARIATO")
         self.assertFalse(per_nome["righe_dati"]["ok"])
 
-    # -- le colonne dichiarate per numero -----------------------------------
+    # -- columns declared by number -----------------------------------------
 
     def _listino_con_due_colonne_uguali(self, prezzi: list[Any]) -> Path:
-        """Il caso ACERO: «COSTO IMPON.» in colonna 3 e in colonna 5.
+        """A price list with a duplicated header: "COSTO IMPON." in both
+        column 3 and column 5.
 
-        Con un'intestazione ripetuta il prezzo **non si puo'** dichiarare per
-        nome: chi legge si fermerebbe con «Intestazione duplicata». Si dichiara
-        per numero, ed e' l'unica strada.
+        With a repeated header the price can't be declared by name — the
+        reader would stop with "duplicate header". Declaring it by number is
+        the only option.
         """
 
         righe: list[list[Any]] = [["COD.EAN", "DESCRIZIONE", "COSTO IMPON.", "IVA", "COSTO IMPON."]]
@@ -829,7 +805,7 @@ class RiconoscimentoTests(unittest.TestCase):
         ])
 
     def test_una_colonna_dichiarata_per_numero_viene_verificata_lo_stesso(self) -> None:
-        """Con i prezzi al loro posto la verifica passa, e dice quale colonna ha guardato."""
+        """With prices in place the check passes, and names which column it read."""
 
         percorso = self._listino_con_due_colonne_uguali([1.25, 2.50, 3.75])
 
@@ -841,13 +817,13 @@ class RiconoscimentoTests(unittest.TestCase):
         self.assertIn("colonna 3", per_nome["tipi_plausibili"]["detail"])
 
     def test_il_prezzo_diventato_testo_declassa_anche_dichiarato_per_numero(self) -> None:
-        """Misurato su ACERO il 12 agosto 2026: SCHEMA_NOTO 0.99, 0 offerte,
-        fornitore sparito dal confronto, zero avvisi.
+        """A price turned to text must downgrade the schema even when the
+        column is declared by number, not by name.
 
-        `_indice_di_colonna` tornava `None` su una colonna dichiarata per
-        numero, `tipi_plausibili` si dichiarava «non applicabile» e la sola
-        verifica che si accorge di un prezzo diventato testo restava spenta —
-        proprio dove l'unico modo di dichiarare il prezzo e' il numero.
+        `_indice_di_colonna` must resolve a numeric column declaration too,
+        or `tipi_plausibili` reports "not applicable" and the one check that
+        catches a price turned to text stays off — exactly where number is
+        the only way to declare the column.
         """
 
         percorso = self._listino_con_due_colonne_uguali(["1,25", "2,50", "3,75"])
@@ -860,10 +836,9 @@ class RiconoscimentoTests(unittest.TestCase):
         self.assertIn("unit_price_net (colonna 3)", per_nome["tipi_plausibili"]["detail"])
 
     def test_una_posizione_booleana_nella_firma_non_passa_per_buona(self) -> None:
-        """In Python `True == 1`: una firma scritta a mano con una posizione
-        booleana passava la verifica come «tutto al suo posto», e una
-        posizione non intera veniva saltata come se non fosse dichiarata
-        (revisione avversariale del 13 agosto 2026).
+        """In Python `True == 1`: a hand-written signature with a boolean
+        position must not pass the check as "everything in place", and a
+        non-integer position must not be silently skipped as if undeclared.
         """
 
         percorso = scrivi_foglio(self.radice / "booleano.xlsx", [
@@ -891,7 +866,7 @@ class RiconoscimentoTests(unittest.TestCase):
         self.assertIn("non è un numero intero", per_nome["posizioni_intestazioni"]["detail"])
 
     def test_un_numero_di_colonna_non_si_confonde_con_una_lettera(self) -> None:
-        """«UM» è un'intestazione vera di CIPRESSO e insieme la colonna 559."""
+        """"UM" is both a real CIPRESSO header and (as a letter) column 559."""
 
         self.assertEqual(registro._indice_di_colonna(["EAN", "Prezzo", "Note"], 3), 3)
         self.assertEqual(registro._indice_di_colonna(["EAN", "Prezzo", "Note"], "Prezzo"), 2)
@@ -900,21 +875,18 @@ class RiconoscimentoTests(unittest.TestCase):
         self.assertIsNone(registro._indice_di_colonna(["EAN"], True))
 
     def test_una_stringa_di_cifre_e_un_nome_e_non_un_numero(self) -> None:
-        """Chi legge davvero (`column_number`) tratta «9» come un'intestazione.
-
-        Rispondere «colonna 9» a una domanda che il lettore rifiutera' vuol
-        dire dichiarare verificato un documento che non verra' mai letto: la
-        divergenza era stata introdotta proprio dal ramo che doveva allineare
-        le due parti (revisione avversariale del 13 agosto 2026).
+        """The real reader (`column_number`) treats "9" as a header name, not
+        a column number; the check must agree, or it could declare verified
+        a document the reader will actually refuse.
         """
 
         self.assertIsNone(registro._indice_di_colonna(["EAN", "Prezzo", "Note"], "3"))
         self.assertIsNone(registro._indice_di_colonna(["EAN", "Prezzo", "Note"], "09"))
         self.assertIsNone(registro._indice_di_colonna(["EAN", "Prezzo", "Note"], "  9  "))
-        # E se «3» e' davvero il nome di una colonna, vince come nome.
+        # And when "3" really is a column's name, the name wins.
         self.assertEqual(registro._indice_di_colonna(["EAN", "3", "Note"], "3"), 2)
 
-    # -- quello che non si riconosce ---------------------------------------
+    # -- what stays unrecognized --------------------------------------------
 
     def test_un_fornitore_sconosciuto_resta_ambiguo(self) -> None:
         percorso = scrivi_foglio(self.radice / "sconosciuto.xlsx", [
@@ -930,11 +902,11 @@ class RiconoscimentoTests(unittest.TestCase):
         self.assertEqual(esito["evidence"], ["Nessuna firma nota sufficiente"])
         self.assertIsNone(esito["signature"])
 
-    # -- le regole di scelta fra piu' candidati ----------------------------
+    # -- rules for choosing among several candidates -------------------------
 
     def test_fra_due_candidati_vince_quello_che_dichiara_piu_obbligatorie(self) -> None:
-        """A parita' di confidenza vince lo schema piu' specifico: e' quello
-        che descrive meglio il documento."""
+        """At equal confidence the more specific schema wins: it describes
+        the document better."""
 
         adapters = registro_di_prova(self.radice / "adapters.json", [
             {"id": "generico_v1", "supplier_id": "generico", "header_signature": {
@@ -955,9 +927,9 @@ class RiconoscimentoTests(unittest.TestCase):
         self.assertEqual(esito["adapter_id"], "specifico_v1")
 
     def test_la_soglia_dei_tipi_e_un_confronto_stretto(self) -> None:
-        """`min_exclusive` e' `>` e non `>=`: era cosi' prima che la regola
-        uscisse dal codice, e spostarla di nascosto cambierebbe il
-        riconoscimento di un listino gia' collaudato."""
+        """`min_exclusive` is `>`, not `>=`: this was the behavior before the
+        rule moved out of the code, and changing it silently would change
+        recognition on an already-verified price list."""
 
         righe = [[None, "I", f"C{numero}", None, None, None, f"DESCRIZIONE {numero}",
                   None, None, None, None, None, None, None,
@@ -977,7 +949,7 @@ class RiconoscimentoTests(unittest.TestCase):
                  "weight": 0.3, "evidence": "prezzi numerici in colonna O"},
             ]}}
 
-        # 70 numeri su 100: il rapporto vale esattamente 0.7 e non lo supera.
+        # 70 out of 100: the ratio is exactly 0.7 and doesn't exceed it.
         stretto = registro_di_prova(self.radice / "stretto.json", [voce])
         esito_stretto = self.riconosci_file(percorso, stretto)
 
@@ -990,9 +962,9 @@ class RiconoscimentoTests(unittest.TestCase):
         self.assertEqual(esito_largo["confidence"], 0.97)
 
     def test_un_foglio_troppo_stretto_non_e_un_candidato_per_forma(self) -> None:
-        """`min_columns` e' la prima difesa dell'impronta per forma: senza,
-        basterebbero quattro colonne popolate nel modo giusto perche' un
-        listino di un altro fornitore passasse per Larice."""
+        """`min_columns` is the shape fingerprint's first defense: without it,
+        four columns populated the right way would be enough for another
+        supplier's price list to pass as Larice."""
 
         percorso = foglio_larice(self.radice / "stretto.xlsx")
         largo = registro_di_prova(self.radice / "largo.json", [
@@ -1010,9 +982,8 @@ class RiconoscimentoTests(unittest.TestCase):
         self.assertEqual(self.riconosci_file(percorso, stretto)["state"], "AMBIGUO")
 
     def test_una_colonna_dichiarata_per_nome_non_diventa_una_lettera(self) -> None:
-        """«UM», «QT» e «P» sono intestazioni vere e insieme lettere di colonna
-        plausibili: cercare prima fra le intestazioni evita di misurare la
-        colonna sbagliata."""
+        """"UM", "QT" and "P" are real headers and also plausible column
+        letters: checking headers first avoids measuring the wrong column."""
 
         intestazioni = ["EAN", "DESCRIZIONE", "P"] + [None] * 12 + ["NOTE"]
         righe = [intestazioni] + [
@@ -1037,12 +1008,12 @@ class RiconoscimentoTests(unittest.TestCase):
         self.assertTrue(per_nome["tipi_plausibili"]["ok"])
 
     def test_una_colonna_dichiarata_per_numero_si_verifica_sul_documento(self) -> None:
-        """Una colonna senza intestazione si dichiara per numero: e' il caso di
-        quasi tutte le colonne d'ordine, che arrivano vuote.
+        """A column with no header is declared by number: the case for almost
+        every order column, which arrives empty.
 
-        Cercare «6» fra le intestazioni non la troverebbe mai, e il fornitore
-        resterebbe da interpretare per sempre: una chiamata AI ogni settimana
-        per una colonna che il lettore trova senza fatica."""
+        Looking for "6" among the headers would never find it, leaving the
+        supplier unrecognized forever — an AI call every week for a column
+        the reader finds trivially."""
 
         intestazioni = ["CODICE", "DESCRIZIONE", "PZ", "PREZZO", "BARCODE", None]
         righe = [intestazioni] + [
@@ -1071,8 +1042,8 @@ class RiconoscimentoTests(unittest.TestCase):
 
         self.assertEqual(esito["state"], "SCHEMA_NOTO")
         self.assertIn("di cui 1 per numero", per_nome["colonne_attese"]["detail"])
-        # Una colonna dichiarata oltre la larghezza del documento resta un
-        # errore: e' la differenza fra «non ha un nome» e «non c'e'».
+        # A column declared past the document's width is still an error:
+        # the difference between "has no name" and "doesn't exist".
         oltre_esito = self.riconosci_file(percorso, oltre)
         oltre_nome = {verifica["name"]: verifica for verifica in oltre_esito["checks"]}
         self.assertEqual(oltre_esito["state"], "SCHEMA_VARIATO")
@@ -1080,12 +1051,10 @@ class RiconoscimentoTests(unittest.TestCase):
         self.assertIn("99", oltre_nome["colonne_attese"]["detail"])
 
     def test_il_profilo_di_un_csv_distingue_i_numeri_dal_testo(self) -> None:
-        """In un CSV tutto e' testo, e il profilo dichiarava «testo» anche la
-        colonna dei prezzi: qualunque adattatore CSV con una mappatura sarebbe
-        stato condannato a SCHEMA_VARIATO per sempre.
-
-        I prezzi arrivano scritti all'italiana — «21,75» — e vanno riconosciuti
-        anche cosi'."""
+        """In a CSV everything is text, so the profiler must not report the
+        price column as "text" too, or any mapped CSV adapter would be stuck
+        at SCHEMA_VARIATO forever. Prices arrive Italian-formatted ("21,75")
+        and must be recognized as numeric in that form too."""
 
         percorso = self.radice / "fornitore.csv"
         with percorso.open("w", encoding="utf-8", newline="") as flusso:
@@ -1113,11 +1082,11 @@ class RiconoscimentoTests(unittest.TestCase):
         self.assertIn("unit_price_net (prezzo) 100%", per_nome["tipi_plausibili"]["detail"])
 
     def test_un_adattatore_per_forma_dice_quali_obbligatorie_mancano(self) -> None:
-        """`missing_headers` puo' essere non vuoto solo qui: un adattatore
-        agganciato per forma che dichiari anche un'impronta per intestazioni.
+        """`missing_headers` can be non-empty only here: a shape-matched
+        adapter that also declares a header fingerprint.
 
-        E' il giorno in cui Larice comincia a intitolare le colonne, ed e'
-        l'unica frase che dice all'utente che cosa cercare."""
+        Covers the day Larice starts titling its columns, and is the only
+        message telling the user what to look for."""
 
         larice = next(voce for voce in registro.adattatori() if voce["id"] == "larice_v1")
         adapters = registro_di_prova(self.radice / "larice_intitolato.json", [{
@@ -1137,31 +1106,29 @@ class RiconoscimentoTests(unittest.TestCase):
 
 
 class ScritturaVersionataTests(unittest.TestCase):
-    """Scrivere nel registro senza perdere quello che c'era prima."""
+    """Writing to the registry without losing what was there before."""
 
     maxDiff = None
 
     def setUp(self) -> None:
         self.radice = Path(tempfile.mkdtemp(prefix="collaudo_scrittura_"))
         self.addCleanup(shutil.rmtree, self.radice, True)
-        # Sempre su una copia: il registro vero lo legge una persona prima del
-        # commit, e un collaudo non deve poterlo toccare.
+        # Always on a copy: a test must never be able to touch the real registry.
         self.registro = self.radice / "adapters.json"
         shutil.copyfile(ADAPTERS, self.registro)
-        # ⚠ Dal 19 agosto 2026 i registri sono due: quello **spedito**, sotto
-        # git, che nessuna scrittura del programma tocca piu', e quello
-        # **imparato**, fuori da git, dove finisce tutto quello che il
-        # programma impara in negozio. `scrivi_adattatore` scrive solo nel
-        # secondo; chi legge li vede fusi.
+        # There are two registry files: the shipped one, under git, that no
+        # write ever touches, and the learned one, outside git, where
+        # everything the engine learns ends up. `scrivi_adattatore` writes
+        # only the second; a read sees them merged.
         self.imparato = registro.percorso_imparato(self.registro)
 
     def documento(self) -> dict[str, Any]:
-        """Il file dove le scritture finiscono davvero."""
+        """The file writes actually land in."""
 
         return json.loads(self.imparato.read_text(encoding="utf-8"))
 
     def voce(self, identificativo: str) -> dict[str, Any]:
-        """La voce come la vede il programma: spedito e imparato insieme."""
+        """The entry as the engine sees it: shipped and learned merged."""
 
         letta = registro.adattatore(identificativo, self.registro)
         if not letta:
@@ -1181,11 +1148,10 @@ class ScritturaVersionataTests(unittest.TestCase):
         self.assertNotIn("previous_versions", self.voce("acero_v1"))
 
     def test_dopo_due_scritture_la_prima_versione_e_ancora_leggibile(self) -> None:
-        """La prova che conta.
+        """The property that matters: past writes stay inspectable.
 
-        Se la settimana prossima il riconoscimento peggiora, l'unico modo per
-        capire che cosa e' cambiato e' avere ancora sotto gli occhi la versione
-        di partenza.
+        If recognition regresses later, the only way to tell what changed is
+        still having the starting version to compare against.
         """
 
         originale = self.voce("cipresso_v1")
@@ -1199,8 +1165,8 @@ class ScritturaVersionataTests(unittest.TestCase):
         self.assertEqual(viva["schema_version"], 3)
         self.assertEqual(esito["previous_versions"], 2)
         self.assertEqual(len(viva["previous_versions"]), 2)
-        # La prima versione, quella con cui il programma e' partito, e' ancora
-        # tutta li' — impronta compresa — e non porta a sua volta una storia.
+        # The first version, the one the engine started with, is still there
+        # in full — fingerprint included — and carries no history of its own.
         prima = viva["previous_versions"][0]
         self.assertEqual(prima["display_name"], "CIPRESSO")
         self.assertEqual(prima["schema_version"], 1)
@@ -1209,8 +1175,8 @@ class ScritturaVersionataTests(unittest.TestCase):
         self.assertEqual(viva["previous_versions"][1]["display_name"], "CIPRESSO seconda")
 
     def test_la_voce_viva_resta_al_livello_superiore(self) -> None:
-        """Chi legge `field_mapping` per id continua a trovare l'ultima
-        versione senza sapere niente delle precedenti."""
+        """Reading `field_mapping` by id must still return the latest version,
+        unaware of any earlier ones."""
 
         originale = self.voce("cipresso_v1")
         registro.scrivi_adattatore({**originale, "display_name": "CIPRESSO nuova"}, self.registro)
@@ -1226,9 +1192,9 @@ class ScritturaVersionataTests(unittest.TestCase):
         self.assertEqual(letta["field_mapping"], originale["field_mapping"])
 
     def test_il_registro_resta_a_fine_riga_lf_con_due_spazi(self) -> None:
-        """I due registri si leggono affiancati quando qualcosa non torna, e uno
-        scritto in CRLF li farebbe sembrare diversi riga per riga anche dove
-        dicono la stessa cosa."""
+        """The two registry files get diffed side by side when something's
+        off; CRLF line endings would make every line look different even
+        where the content is the same."""
 
         registro.scrivi_adattatore({"id": "nuovo_v1", "supplier_id": "nuovo"}, self.registro)
 
@@ -1246,9 +1212,8 @@ class ScritturaVersionataTests(unittest.TestCase):
         )
 
     def test_il_registro_spedito_non_cambia_di_un_byte(self) -> None:
-        """La ragione per cui i file sono due: quello sotto git l'avvio del PC
-        del negozio lo riporta indietro a ogni doppio clic, quindi tutto quello
-        che il programma impara e che finisse li' dentro sparirebbe."""
+        """Why the registry is two files: the one under git gets reset on
+        every launch, so anything learned that ended up there would be lost."""
 
         prima = self.registro.read_bytes()
         originale = self.voce("cipresso_v1")
@@ -1263,10 +1228,9 @@ class ScritturaVersionataTests(unittest.TestCase):
         )
 
     def test_a_parita_di_id_vince_l_imparato(self) -> None:
-        """Chi ha il documento davanti ha ragione su chi l'ha spedito la
-        settimana scorsa. Il prezzo: un adattatore imparato male non si corregge
-        spedendone uno nuovo — si corregge togliendo la sua voce
-        dall'imparato."""
+        """Whoever has the document in front of them outranks last week's
+        shipped entry. The cost: a badly learned adapter isn't fixed by
+        shipping a new one — it's fixed by removing its learned entry."""
 
         originale = self.voce("cipresso_v1")
         self.assertEqual(originale["display_name"], "CIPRESSO")
@@ -1277,23 +1241,22 @@ class ScritturaVersionataTests(unittest.TestCase):
         self.assertEqual(
             registro.nomi_dei_fornitori(self.registro)["cipresso"], "CIPRESSO del negozio",
         )
-        # E lo spedito e' ancora quello che era: la voce di prima non e' persa,
-        # e' coperta.
+        # The shipped entry is untouched: the earlier version isn't lost, only shadowed.
         spedite = json.loads(self.registro.read_text(encoding="utf-8"))["adapters"]
         originale_spedita = next(voce for voce in spedite if voce["id"] == "cipresso_v1")
         self.assertEqual(originale_spedita["display_name"], "CIPRESSO")
 
     def test_un_imparato_che_non_c_e_non_e_un_errore(self) -> None:
-        """Un'installazione nuova non ha imparato niente, e deve funzionare."""
+        """A fresh install has learned nothing, and must still work."""
 
         self.assertFalse(self.imparato.exists())
         self.assertIsNone(registro.motivo_registro_illeggibile(self.registro))
         self.assertIn("cipresso_v1", [voce["id"] for voce in registro.adattatori(self.registro)])
 
     def test_un_imparato_rotto_si_dice_ma_non_ferma_il_riconoscimento(self) -> None:
-        """Ferma tutto sarebbe peggio: gli adattatori spediti bastano a
-        lavorare, e l'imparato rotto e' una cosa da aggiustare, non da subire
-        in silenzio."""
+        """Stopping entirely would be worse: the shipped adapters are enough
+        to keep working, and a broken learned file needs fixing, not silent
+        failure."""
 
         self.imparato.write_bytes(b"{questo non e' JSON")
 
@@ -1304,13 +1267,9 @@ class ScritturaVersionataTests(unittest.TestCase):
         self.assertIn("cipresso_v1", [voce["id"] for voce in registro.adattatori(self.registro)])
 
     def test_una_scrittura_interrotta_non_rovina_il_registro(self) -> None:
-        """La scrittura passa da un file temporaneo e da `os.replace` perche' un
-        registro monco vuol dire zero adattatori: BETULLA, Larice, CIPRESSO e
-        Noce diventati «da interpretare» tutti insieme, e nessuno che sappia
-        perche'.
-
-        Il programma finito gira da solo: chi lo usa vedrebbe solo listini che
-        non si riconoscono piu', e cercherebbe il guasto nei listini."""
+        """A write goes through a temp file and `os.replace` because a
+        truncated registry means zero adapters: every supplier suddenly
+        unrecognized, with no clue why."""
 
         registro.scrivi_adattatore({"id": "nuovo_v1", "supplier_id": "nuovo"}, self.registro)
         prima = self.registro.read_bytes()
@@ -1331,13 +1290,13 @@ class ScritturaVersionataTests(unittest.TestCase):
 
         self.assertEqual(self.registro.read_bytes(), prima, "il registro non deve cambiare di un byte")
         self.assertEqual(self.imparato.read_bytes(), prima_imparato, "nemmeno l'imparato")
-        # La proprieta' e' «non si e' perso niente», non «erano sei»: il
-        # numero di adattatori cresce ogni volta che se ne impara uno.
+        # The property is "nothing was lost", not a fixed count: the number
+        # of adapters grows every time one is learned.
         dopo = [voce["id"] for voce in registro.adattatori(self.registro)]
         self.assertEqual(dopo, identificativi)
-        # Sulla lista di DOPO, non su quella catturata prima del tentativo:
-        # li' «acero_v1» non c'era per costruzione, e l'asserzione reggeva
-        # solo per transitivita' (revisione avversariale del 13 agosto 2026).
+        # Checked against the list taken AFTER the attempt, not before it:
+        # "acero_v1" wasn't in the earlier list by construction, so that
+        # comparison alone wouldn't prove anything.
         self.assertNotIn("acero_v1", dopo, "la voce interrotta non deve essere entrata")
         self.assertEqual(
             sorted(percorso.name for percorso in self.radice.iterdir()),
@@ -1345,7 +1304,7 @@ class ScritturaVersionataTests(unittest.TestCase):
         )
 
     def test_un_adattatore_di_un_altro_fornitore_viene_rifiutato(self) -> None:
-        """Sarebbe un fornitore che si mangia l'adattatore di un altro."""
+        """Would otherwise let one supplier overwrite another's adapter."""
 
         with self.assertRaises(ValueError) as errore:
             registro.scrivi_adattatore({"id": "cipresso_v1", "supplier_id": "acero"}, self.registro)
@@ -1361,7 +1320,7 @@ class ScritturaVersionataTests(unittest.TestCase):
             registro.scrivi_adattatore(["non", "un", "dizionario"], self.registro)  # type: ignore[arg-type]
 
     def test_un_imparato_illeggibile_non_viene_riscritto_da_zero(self) -> None:
-        """Meglio fermarsi che perdere tutti gli altri adattatori."""
+        """Better to stop than to lose every other adapter."""
 
         self.imparato.write_bytes(b"{questo non e' JSON")
 
@@ -1372,9 +1331,8 @@ class ScritturaVersionataTests(unittest.TestCase):
         self.assertEqual(self.imparato.read_bytes(), b"{questo non e' JSON")
 
     def test_uno_spedito_illeggibile_ferma_la_scrittura(self) -> None:
-        """Senza lo spedito non si sa da che versione si riparte: scrivere lo
-        stesso vorrebbe dire far ricominciare da uno un adattatore che ha una
-        storia, e buttarla via senza dirlo."""
+        """Without the shipped file there's no base version to write on top
+        of: writing anyway would silently reset a versioned adapter's history."""
 
         self.registro.write_bytes(b"{questo non e' JSON")
 
@@ -1394,8 +1352,8 @@ class ScritturaVersionataTests(unittest.TestCase):
         self.assertEqual(json.loads(scritto.read_text(encoding="utf-8"))["adapters"][0]["id"], "nuovo_v1")
 
     def test_una_voce_scritta_si_riconosce_subito(self) -> None:
-        """La scrittura e il riconoscimento devono parlare la stessa lingua:
-        altrimenti un adattatore imparato oggi resterebbe sconosciuto domani."""
+        """Writing and recognition must agree on the fingerprint format, or
+        an adapter learned today would stay unrecognized tomorrow."""
 
         cartella = self.radice / "listini"
         cartella.mkdir()
@@ -1426,10 +1384,10 @@ class ScritturaVersionataTests(unittest.TestCase):
     "Si può indicare un'altra cartella con la variabile d'ambiente LISTINI_STORICI.",
 )
 class ListiniVeriTests(unittest.TestCase):
-    """Il riconoscimento sui listini veri, in sola lettura.
+    """Recognition against real price lists, read-only.
 
-    Sono le misure che contano: un motore che funziona solo sui documenti
-    costruiti dal collaudo non serve a niente.
+    These are the measurements that matter: an engine that only works on
+    fixtures built by the tests is useless.
     """
 
     maxDiff = None
@@ -1451,20 +1409,15 @@ class ListiniVeriTests(unittest.TestCase):
         self.assertEqual(esito["adapter_id"], "betulla_v1")
         self.assertEqual(esito["signature"]["sheet"], "Sheet1")
         self.assertEqual(esito["signature"]["header_row"], 1)
-        # Il listino vero scrive TOTALE: e' dichiarato, quindi non e' una novita'.
+        # The real price list writes TOTALE: it's declared, so it's not unknown.
         self.assertEqual(esito["unknown_headers"], [])
 
     def test_il_betulla_risalvato_in_excel_si_riconosce_lo_stesso_per_dirlo(self) -> None:
-        """Il guasto vero del 22 agosto 2026, riprodotto sul listino vero.
+        """A BETULLA file resaved in Excel with the ORDINE header cell cleared.
 
-        Qualcuno ha aperto il listino BETULLA in Excel e l'ha risalvato con la
-        cella C1 svuotata: la parola ORDINE non c'era piu'. Il programma ha
-        detto «Nessuna firma nota sufficiente» — e chi l'ha letto ha
-        configurato BETULLA come se fosse un fornitore nuovo, scrivendo un
-        adattatore imparato sopra quello spedito.
-
-        Lo stato resta AMBIGUO: il listino non si legge, e non deve. Quello che
-        cambia e' la frase, che adesso dice dove guardare.
+        The document stays AMBIGUO — a missing required column must not be
+        read — but the message should say what's missing and where, instead
+        of the generic "no known signature is sufficient".
         """
 
         percorso = LISTINI / "LISTINO BETULLA VALIDO FINO AL 01-09-26.xlsx"
@@ -1473,7 +1426,7 @@ class ListiniVeriTests(unittest.TestCase):
         if not percorso.is_file():
             self.skipTest(f"Manca il listino BETULLA sotto {LISTINI}")
 
-        # ⚠ Si copia e si modifica la copia: l'originale e' un file d'ingresso.
+        # Copy first, modify the copy: the original is an input fixture.
         guasto = self.radice / "betulla risalvato.xlsx"
         shutil.copy(percorso, guasto)
         libro = load_workbook(guasto)
@@ -1493,12 +1446,12 @@ class ListiniVeriTests(unittest.TestCase):
         self.assertIn("colonna C", esito["evidence"][0])
 
     def test_i_listini_di_nessuno_restano_di_nessuno(self) -> None:
-        """La controprova del «per un pelo»: i documenti che il registro
-        davvero non conosce non devono diventare «sembra il listino di…».
+        """Counter-check for "close but not quite": a document the registry
+        truly doesn't know must not become "looks like...".
 
-        Sono i tre di sempre — ACERO, QUERCIA e GINEPRO — e nessuno dei tre ha un
-        adattatore. Se uno di loro cominciasse a somigliare a qualcuno, la
-        frase nuova starebbe indovinando invece di riconoscere.
+        ACERO, QUERCIA and GINEPRO have no adapter at all. If one of them
+        started to resemble a known supplier, the "close match" message
+        would be guessing instead of recognizing.
         """
 
         for nome in ("ACERO LISTINO SETTIMANA 26.xlsx",
@@ -1525,14 +1478,13 @@ class ListiniVeriTests(unittest.TestCase):
         self.assertIn("riga 6", " ".join(esito["evidence"]))
 
     def test_le_offerte_sono_riconosciute_per_forma(self) -> None:
-        """Il foglio delle offerte non ha nessuna intestazione da leggere.
+        """The offers sheet has no header row to read.
 
-        Sopra i prodotti ci sono righe vuote e la sola parola ORDINE in
-        colonna H: un'impronta per intestazioni non ha niente da ritrovare, ed
-        e' il motivo per cui questo adattatore si riconosce dalla forma delle
-        colonne come Larice. La riga da cui partono i prodotti non e' un
-        numero congelato: la trova il marcatore, che si ricalcola a ogni
-        lettura, perche' il blocco vuoto in testa cambia di mese in mese.
+        Above the products there are blank rows and only the word ORDINE in
+        column H: a header fingerprint has nothing to match, which is why
+        this adapter, like Larice, is recognized by column shape instead.
+        Where the products start isn't a fixed row number — a marker finds
+        it fresh on every read, since the blank block on top varies in size.
         """
 
         esito = self.riconosci_listino("OFFERTE AGOSTO 4.xlsx")
@@ -1542,12 +1494,12 @@ class ListiniVeriTests(unittest.TestCase):
         self.assertEqual(esito["confidence"], 0.96)
 
     def test_nessun_altro_listino_vero_finisce_nelle_offerte(self) -> None:
-        """La forma delle colonne e' generica: va provato che non peschi altrove.
+        """Column shape is a generic fingerprint: it must not match elsewhere.
 
-        Un'impronta per forma non ha nomi che la ancorino, quindi il rischio
-        vero non e' che non riconosca il suo documento: e' che si prenda
-        quello di un altro. Qui ci sono tutti i listini veri che il progetto
-        conserva, compresi i tre che nessuno ha ancora imparato.
+        With no header names anchoring it, the real risk isn't that a shape
+        fingerprint fails to match its own document — it's that it claims
+        someone else's. This runs against every real price list the project
+        keeps, including the three no adapter has learned yet.
         """
 
         for nome in ("LISTINO BETULLA VALIDO FINO AL 28-07-26.xlsx",
@@ -1564,15 +1516,12 @@ class ListiniVeriTests(unittest.TestCase):
                 self.assertNotEqual(self.riconosci_listino(nome)["adapter_id"], "offerte_v1")
 
     def test_l_impronta_delle_offerte_non_si_prende_il_listino_di_un_altro(self) -> None:
-        """Il rischio vero di un'impronta per forma, misurato il 21 agosto 2026.
-
-        «Ci sono prezzi, pezzi per collo e codici a barre nelle prime sei
-        colonne» lo dicono quasi tutti i listini del mondo. Con quattro
-        controlli su cinque bastavano 0,84 su una soglia di 0,75, e due fogli
-        costruiti apposta — un listino qualunque con l'IVA in G, e lo stesso con
-        l'intestazione alla riga 3 e ORDINE in H — diventavano «OFFERTE»: letti
-        per intero, compilabili, e senza nessuna strada per correggerli dalla
-        pagina, perche' uno SCHEMA_NOTO la mappatura guidata non la apre.
+        """The real risk of a shape fingerprint: nearly any price list has
+        prices, units per package and barcodes in its first six columns.
+        With only four checks out of five, a generic price list could score
+        0.84 against a 0.75 threshold and match the "offers" adapter — read
+        whole, compiled into an order, with no way to correct it from the
+        page, since a SCHEMA_NOTO document never opens the guided mapping.
         """
 
         prodotti = [
@@ -1581,9 +1530,9 @@ class ListiniVeriTests(unittest.TestCase):
             for indice in range(120)
         ]
 
-        # ⚠ Un nome per caso: `profilo_del_file` tiene i profili in cache per
-        # percorso, e due fogli diversi con lo stesso nome sarebbero lo stesso
-        # profilo — cioe' una prova che si dimostra da sola.
+        # Unique file names matter here: `profilo_del_file` caches profiles by
+        # path, so two different sheets sharing a name would return the same
+        # cached profile, making the test prove nothing.
         contatore = itertools.count(1)
 
         def foglio(testa: list[list[Any]], coda: list[Any] | None = None) -> dict[str, Any]:
@@ -1620,7 +1569,7 @@ class ListiniVeriTests(unittest.TestCase):
             self.assertEqual(esito["state"], "SCHEMA_NOTO")
 
     def test_le_offerte_si_riconoscono_anche_quando_sono_poche(self) -> None:
-        """Una promo normale ha trenta articoli; quella di agosto, con 621, era il caso grosso."""
+        """A regular promo has around thirty items; this covers a much larger one."""
 
         libro = Workbook()
         ws = libro.active
@@ -1647,15 +1596,14 @@ class ListiniVeriTests(unittest.TestCase):
                 self.assertEqual(esito["confidence"], 0.97)
 
     def test_nessun_adattatore_nativo_si_prende_un_listino_che_non_e_suo(self) -> None:
-        """ACERO, QUERCIA, GINEPRO e il secondo schema CIPRESSO non sono nessuno dei sei.
+        """ACERO, QUERCIA, GINEPRO and the second CIPRESSO schema must never be
+        claimed by one of the six native adapters.
 
-        ⚠ La proprieta' non e' «restano AMBIGUI»: il giorno in cui l'utente ne
-        impara uno — che e' la funzione per cui il registro esiste — quel
-        listino diventa legittimamente noto, e un collaudo che pretendeva
-        AMBIGUO diventava rosso proprio quando il programma faceva il suo
-        mestiere.  Quello che non deve succedere mai e' che uno dei sei
-        adattatori scritti a mano se lo prenda: sarebbe un listino letto con le
-        regole commerciali di un altro fornitore, e nessuno se ne accorgerebbe.
+        The property isn't "stays AMBIGUO" — once a user learns one of these,
+        which is what the registry is for, that price list legitimately
+        becomes known, and a test pinned to AMBIGUO would fail on correct
+        behavior. What must never happen is a native adapter claiming it: a
+        price list read with another supplier's commercial rules, silently.
         """
 
         for nome in ("ACERO LISTINO SETTIMANA 26.xlsx",
@@ -1666,13 +1614,13 @@ class ListiniVeriTests(unittest.TestCase):
                 esito = self.riconosci_listino(nome)
                 self.assertNotIn(esito["adapter_id"], ADATTATORI_NATIVI)
                 if esito["adapter_id"] is None:
-                    # Finche' nessuno l'ha imparato: resta da interpretare, e
-                    # lo dice senza scegliere a caso.
+                    # Until someone learns it, it stays unrecognized, and says
+                    # so instead of guessing.
                     self.assertEqual(esito["state"], "AMBIGUO")
                     self.assertEqual(esito["confidence"], 0.0)
 
     def test_profilare_un_listino_vero_non_lo_tocca(self) -> None:
-        """È già successo di riscrivere il listino vero durante una prova."""
+        """Profiling has rewritten a real price list during a test before."""
 
         percorso = LISTINI / "LISTINO BETULLA VALIDO FINO AL 28-07-26.xlsx"
         if not percorso.is_file():
@@ -1686,26 +1634,17 @@ class ListiniVeriTests(unittest.TestCase):
 
 
 class IListiniVeriControIlRegistroCheVaAlNegozio(unittest.TestCase):
-    """Gli stessi listini, letti col registro **consegnato**.
+    """The same price lists, read with the shipped registry.
 
-    ⚠ Le prove qui sopra girano sulla copia congelata
-    (`tests/fixtures/adapters_nativi.json`), e c'e' una ragione scritta: una
-    suite che diventa rossa quando il programma impara uno schema insegna a non
-    guardarla. Ma da quella scelta e' nato un buco che e' costato una conferma
-    a mano ogni settimana per otto giorni: **i due registri divergono**, e
-    nessuno se ne accorgeva.
+    The tests above run against the frozen copy
+    (`tests/fixtures/adapters_nativi.json`) precisely so they don't fail when
+    the engine learns a schema, but that leaves a gap: the frozen copy and
+    the shipped registry can diverge, and nothing else here would notice.
 
-    Su `cipresso_v1` la copia congelata dichiara «FIRST» e riga 1; quella
-    consegnata, dal 14 agosto 2026, dichiara «Listino» e riga 2. Il listino
-    CIPRESSO che arriva ogni settimana ha il foglio intitolato «Listino al
-    <data>» e le intestazioni alla riga 1: con la copia congelata e' SCHEMA_NOTO
-    — e la suite era verde — con quello che il negozio ha davvero non si
-    apriva nemmeno il foglio.
-
-    Questa classe guarda il registro che il negozio riceve. Il registro spedito
-    non se lo riscrive piu' nessuno dal 19 agosto 2026 — quello che si impara
-    va in `app/data/adattatori_imparati.json` — quindi non e' una prova che
-    diventa rossa quando il programma fa il suo mestiere.
+    This class reads the registry the store actually receives. The shipped
+    registry file is never rewritten by the engine — learned adapters go into
+    `app/data/adattatori_imparati.json` instead — so this doesn't fail when
+    the engine does its job.
     """
 
     maxDiff = None
@@ -1717,13 +1656,9 @@ class IListiniVeriControIlRegistroCheVaAlNegozio(unittest.TestCase):
         return registro.riconosci(profilo_del_file(percorso), ADAPTERS_CONSEGNATO)
 
     def test_i_due_listini_di_cipresso_si_leggono_tutti_e_due(self) -> None:
-        """CIPRESSO manda due schemi diversi, non uno con il nome del foglio
-        che cambia: cambia anche la riga delle intestazioni, e uno dei due ha
-        la colonna ORDINE che l'altro non ha.
-
-        Misurato il 22 agosto 2026 leggendo davvero il listino datato con la
-        mappatura delle due voci: quella con «FIRST» e riga 1 legge 3.564
-        righe, quella con «Listino» e riga 2 si ferma su «Foglio non trovato».
+        """CIPRESSO sends two genuinely different schemas, not just a sheet
+        name that varies: the header row differs too, and only one of the
+        two has an ORDINE column.
         """
 
         datato = self.riconosci_consegnato("3listino_Cipresso.xlsx")
@@ -1736,7 +1671,7 @@ class IListiniVeriControIlRegistroCheVaAlNegozio(unittest.TestCase):
         self.assertEqual(senza_ordine["adapter_id"], "cipresso_v1")
 
     def test_gli_altri_listini_veri_restano_dove_erano(self) -> None:
-        """La voce in più non deve prendersi il documento di nessun altro."""
+        """The extra entry must not claim any other supplier's document."""
 
         atteso = {
             "28.1 06-10lug.xlsx": "larice_v1",
@@ -1753,14 +1688,15 @@ class IListiniVeriControIlRegistroCheVaAlNegozio(unittest.TestCase):
                 self.assertEqual(esito["adapter_id"], adattatore)
 
     def test_i_due_canvass_di_larice_non_si_prendono_il_documento_dell_altro(self) -> None:
-        """LARICE manda due canvass con schemi diversi, e devono restare due.
+        """LARICE sends two canvass formats with different schemas, and they
+        must stay two distinct adapters.
 
-        Dal 4 settembre 2026 arriva «New Larice N°37(v.0)»: intestazioni vere
-        alla riga 11, EAN in B, netto in K, 16 colonne. Quello di prima non ha
-        nessuna intestazione, tiene l'EAN in R e ha almeno 18 colonne. Le due
-        firme si escludono a vicenda apposta — una pretende le sue intestazioni,
-        l'altra un numero di colonne che il nuovo non raggiunge — perche' il
-        fornitore puo' tornare al formato di prima da una settimana all'altra.
+        "New Larice N°37(v.0)" has real headers at row 11, EAN in column B,
+        net price in K, 16 columns; the older canvass has no headers, keeps
+        the EAN in column R and has at least 18 columns. The two signatures
+        deliberately exclude each other — one requires its own headers, the
+        other a column count the new format doesn't reach — since the
+        supplier can revert to the older format from one week to the next.
         """
 
         nuovo = self.riconosci_consegnato("New Larice N°37(v.0).xls")
@@ -1772,11 +1708,11 @@ class IListiniVeriControIlRegistroCheVaAlNegozio(unittest.TestCase):
         self.assertEqual(vecchio["adapter_id"], "larice_v1")
 
     def test_i_due_canvass_di_larice_sono_dello_stesso_fornitore(self) -> None:
-        """Due voci, un fornitore solo: a valle LARICE resta LARICE.
+        """Two entries, one supplier: downstream, LARICE stays LARICE.
 
-        Con due `supplier_id` diversi il confronto vedrebbe due fornitori dove
-        ce n'e' uno, e chi ha ordinato sul canvass vecchio si ritroverebbe le
-        quantita' divise fra due ordini.
+        With two different `supplier_id` values the comparison would see two
+        suppliers where there's one, splitting order quantities across two
+        separate order files.
         """
 
         voci = {voce["id"]: voce for voce in registro.adattatori(ADAPTERS_CONSEGNATO)}
@@ -1785,13 +1721,14 @@ class IListiniVeriControIlRegistroCheVaAlNegozio(unittest.TestCase):
         self.assertEqual(voci["larice_canvass_v1"]["supplier_id"], "larice")
 
     def test_il_canvass_nuovo_dichiara_dove_tiene_le_sue_offerte(self) -> None:
-        """Le soglie con omaggio del formato nuovo non si leggono da sole.
+        """Threshold-with-reward promotions in the new canvass don't parse
+        themselves.
 
-        Il canvass nuovo scrive l'intestazione della soglia e la riga
-        dell'omaggio nella **stessa** colonna E, e la mappatura guidata non sa
-        dichiararlo: pretende quattro colonne distinte per la forma «blocchi».
-        Se questa dichiarazione sparisce dal registro, le offerte di LARICE
-        smettono di esistere senza che niente lo dica.
+        The new canvass writes the threshold text and the reward row in the
+        same column E, and the guided mapping page can't declare that — it
+        expects four separate columns for the "blocks" layout. If this
+        declaration ever disappeared from the registry, LARICE's promotions
+        would silently stop being detected.
         """
 
         voci = {voce["id"]: voce for voce in registro.adattatori(ADAPTERS_CONSEGNATO)}
@@ -1804,11 +1741,10 @@ class IListiniVeriControIlRegistroCheVaAlNegozio(unittest.TestCase):
         self.assertEqual(righe_premio["row_type"], "OMAGGIO")
 
     def test_i_due_schemi_di_cipresso_sono_dello_stesso_fornitore(self) -> None:
-        """Due voci, un fornitore solo: a valle CIPRESSO resta CIPRESSO.
+        """Two entries, one supplier: downstream, CIPRESSO stays CIPRESSO.
 
-        Se le due dichiarassero `supplier_id` diversi, il confronto vedrebbe
-        due fornitori dove ce n'e' uno, e le quantita' finirebbero divise fra
-        due colonne di due ordini.
+        Different `supplier_id` values would split one supplier's quantities
+        across two order files.
         """
 
         voci = {voce["id"]: voce for voce in registro.adattatori(ADAPTERS_CONSEGNATO)}
@@ -1819,8 +1755,8 @@ class IListiniVeriControIlRegistroCheVaAlNegozio(unittest.TestCase):
         )
 
     def test_tutti_e_due_gli_schemi_sanno_scrivere_l_ordine(self) -> None:
-        """Uno schema che si riconosce ma non si compila lascerebbe CIPRESSO
-        fuori dalla compilazione a settimane alterne, senza dire perche'."""
+        """A schema that's recognized but can't write its order file would
+        leave CIPRESSO out of order compilation every other week, silently."""
 
         voci = {voce["id"]: voce for voce in registro.adattatori(ADAPTERS_CONSEGNATO)}
         for identificativo in ("cipresso_v1", "cipresso_con_ordine_v1"):
@@ -1831,12 +1767,10 @@ class IListiniVeriControIlRegistroCheVaAlNegozio(unittest.TestCase):
 
 
 class IlNomeDelFornitoreInOgniFrase(unittest.TestCase):
-    """La stessa regola sui nomi, ovunque, e in un posto solo.
+    """One rule for turning a supplier id into a display name, defined once.
 
-    ⚠ Il nome leggibile e' stato scritto a mano in punti diversi del programma
-    per tre cantieri di fila. R8 ha tolto le tabelle cablate; la revisione di
-    regressione del 14 agosto 2026 ha trovato che restavano cinque frasi nel
-    lanciatore e una nella mappatura guidata a fare `supplier_id.upper()`.
+    The launcher and the guided mapping page must both read the name the
+    registry declares, instead of each formatting `supplier_id` on its own.
     """
 
     ADATTATORI = [
@@ -1854,7 +1788,7 @@ class IlNomeDelFornitoreInOgniFrase(unittest.TestCase):
         )
 
     def test_a_parita_di_fornitore_vince_il_nome_piu_corto(self) -> None:
-        """Il più lungo descrive il documento, non il fornitore."""
+        """The longer name describes the document, not the supplier."""
 
         self.assertEqual(registro.nome_del_fornitore_fra("noce", self.ADATTATORI), "NOCE")
 
@@ -1880,14 +1814,13 @@ class IlNomeDelFornitoreInOgniFrase(unittest.TestCase):
 
 
 class UnPrezzoCalcolatoEUnPrezzoTests(unittest.TestCase):
-    """Una colonna scritta con una formula e' leggibile come tutte le altre.
+    """A column written as a formula must read like any other numeric column.
 
-    GINEPRO scrive il prezzo scontato come `=SUM(E4*(1-5%))`: il lettore apre il
-    documento con `data_only=True` e ci trova 1,52, il profilo lo apriva con
-    `data_only=False` e ci trovava il testo della formula.  Risultato
-    misurato: `tipi_plausibili` dichiarava **0% numerica** una colonna di 4132
-    prezzi, il documento usciva SCHEMA_VARIATO 0,98 e quel fornitore avrebbe
-    chiesto la mappatura a mano ogni settimana, per sempre.
+    GINEPRO writes its discounted price as `=SUM(E4*(1-5%))`: the reader
+    opens the file with `data_only=True` and finds 1.52. The profiler must
+    read the same cached value instead of the formula's text, or
+    `tipi_plausibili` reports a formula column of 4132 prices as 0%
+    numeric, downgrading the schema and forcing manual mapping every week.
     """
 
     maxDiff = None
@@ -1898,12 +1831,11 @@ class UnPrezzoCalcolatoEUnPrezzoTests(unittest.TestCase):
         self.radice = Path(self.temporanea.name)
 
     def listino(self, nome: str, prezzo: Any, *, righe: int = 12) -> Path:
-        """Un listino minimo dove il prezzo netto e' quello che si dichiara.
+        """Build a minimal price list where the net price is whatever is declared.
 
-        `prezzo` restituisce la cella: un numero, un testo, oppure la coppia
-        (formula, valore gia' calcolato) — quest'ultima e' l'unica forma che
-        descrive un documento uscito da Excel, e openpyxl da sola non la sa
-        scrivere.
+        `prezzo` returns the cell value: a number, text, or a
+        (formula, cached_value) pair — the only form that matches a document
+        that has actually gone through Excel, which openpyxl alone can't write.
         """
 
         intestazioni = ["CODICE", "Conf.", "DESCRIZIONE", "PREZZO NETTO", "PREZZO sc,5%", "EAN"]
@@ -1954,8 +1886,8 @@ class UnPrezzoCalcolatoEUnPrezzoTests(unittest.TestCase):
         self.assertEqual(esito["state"], "SCHEMA_NOTO")
 
     def test_una_colonna_di_testo_continua_a_essere_bocciata(self) -> None:
-        """⚠ La verifica non si allenta: esiste perche' un prezzo diventato
-        testo passava come SCHEMA_NOTO 0.99 con zero offerte."""
+        """The check must stay strict: without it, a price turned to text
+        would pass as SCHEMA_NOTO 0.99 with zero offers read."""
 
         percorso = self.listino("testuale.xlsx", lambda numero: f"1,{numero:02d}")
         esito = self.riconoscimento(percorso)
@@ -1966,12 +1898,12 @@ class UnPrezzoCalcolatoEUnPrezzoTests(unittest.TestCase):
         self.assertEqual(esito["state"], "SCHEMA_VARIATO")
 
     def test_una_formula_che_restituisce_testo_resta_testo(self) -> None:
-        """Il conto guarda che cosa **vale** la formula, non che sia una formula."""
+        """The check looks at what the formula evaluates to, not that it's a formula."""
 
         percorso = self.listino(
             "formula-testo.xlsx", lambda numero: (f'=CONCATENATE("1,",{numero})', f"1,{numero}"))
-        # La colonna e' fatta di formule, e il censimento le ha lette: e' il
-        # loro risultato a essere testo, non il fatto che siano formule.
+        # The column is all formulas, and the profiler read them: it's their
+        # result that's text, not the fact that they're formulas.
         colonna = next(voce for voce in inspect_sources.profile_file(percorso)["details"]["sheets"][0]["columns"]
                        if voce["index"] == 5)
         self.assertEqual(colonna["formula_values"], {"text": 12})
@@ -1983,10 +1915,10 @@ class UnPrezzoCalcolatoEUnPrezzoTests(unittest.TestCase):
         self.assertEqual(esito["state"], "SCHEMA_VARIATO")
 
     def test_una_formula_mai_calcolata_non_e_un_prezzo(self) -> None:
-        """Un file che Excel non ha mai aperto non porta nessun valore.
+        """A file Excel has never opened carries no cached formula value.
 
-        Li' la colonna e' davvero illeggibile — il lettore ci trova `None` — e
-        dichiararla numerica sarebbe la bugia peggiore delle due.
+        There the column is genuinely unreadable — the reader finds `None` —
+        and declaring it numeric would be the worse of the two possible lies.
         """
 
         percorso = self.listino("mai-calcolato.xlsx", lambda numero: f"=D{numero + 2}*0.95")
@@ -2011,19 +1943,19 @@ class UnPrezzoCalcolatoEUnPrezzoTests(unittest.TestCase):
         colonna = next(voce for voce in primo["columns"] if voce["index"] == 5)
         self.assertEqual(colonna["types"].get("number"), None)
         self.assertEqual(colonna["formula_values"], {"number": 12})
-        # Un documento senza formule non paga la seconda lettura, e non
-        # dichiara di averla fatta.
+        # A document with no formulas skips the second read, and doesn't
+        # claim to have done it.
         self.assertNotIn("formula_values_read", secondo)
         self.assertFalse(any("formula_values" in voce for voce in secondo["columns"]))
 
     def test_l_impronta_per_forma_continua_a_distinguere_le_formule(self) -> None:
-        """⚠ Chi e' un documento e che cosa ci si legge sono due domande diverse.
+        """"What document is this" and "what does this column read as" are
+        different questions.
 
-        Contando le formule per il loro risultato anche nelle impronte per
-        forma delle colonne, il listino ACERO vero — 18.644 formule — prende
-        0,76 sull'impronta di LARICE, che di formule non ne ha nemmeno una, e
-        si presenta come una sua variazione: un fornitore vero scambiato per un
-        altro fornitore vero.
+        If shape fingerprints also counted formulas by their result, the real
+        ACERO price list (18,644 formulas) would score 0.76 against LARICE's
+        fingerprint, which has no formulas at all — one real supplier
+        mistaken for another.
         """
 
         colonna = {"index": 15, "nonempty": 100, "types": {"formula": 100},
@@ -2034,7 +1966,7 @@ class UnPrezzoCalcolatoEUnPrezzoTests(unittest.TestCase):
 
 
 class DoveCominciaIlListinoTests(unittest.TestCase):
-    """Il separatore che dichiara l'inizio dei dati, visto dal profilo."""
+    """The marker declaring where data starts, as seen by the profiler."""
 
     maxDiff = None
 
@@ -2062,19 +1994,19 @@ class DoveCominciaIlListinoTests(unittest.TestCase):
         self.assertEqual(separatori[0]["data_from"], 7)
 
     def test_il_profilo_porta_le_righe_attorno_al_taglio(self) -> None:
-        """Senza, chi mappa vede il blocco promozionale e non il listino."""
+        """Without this, whoever maps the file sees the promo block, not the list."""
 
         percorso = self.listino_con_blocco(promozionali=25)
         foglio = inspect_sources.profile_file(percorso)["details"]["sheets"][0]
 
         numeri = {voce["row"] for voce in foglio["section_rows"]}
-        # Il separatore sta alla riga 27, oltre le prime venti che il profilo
-        # manda comunque: senza queste righe l'anteprima non lo vedrebbe.
+        # The marker sits at row 27, past the first twenty rows the profile
+        # sends anyway: without these extra rows the preview wouldn't see it.
         self.assertEqual([voce["row"] for voce in foglio["section_breaks"]], [27])
         self.assertLessEqual({25, 26, 27, 28, 29, 30}, numeri)
 
     def test_un_etichetta_in_mezzo_ai_dati_non_gonfia_il_profilo(self) -> None:
-        """Il listino LARICE vero ha 625 righe strette: sono gruppi, non inizi."""
+        """A repeated label mid-document (a group heading) is not a data-start marker."""
 
         righe: list[list[Any]] = []
         for numero in range(400):
@@ -2125,7 +2057,7 @@ class DoveCominciaIlListinoTests(unittest.TestCase):
         self.assertIn("2, 9", esito["detail"])
 
     def test_un_separatore_fuori_dalle_righe_profilate_non_si_dichiara_verificato(self) -> None:
-        """Il profilo non porta tutto il documento: dirlo è meglio che fingere."""
+        """The profile doesn't carry the whole document: saying so beats pretending."""
 
         esito = registro._verifica_marcatore_dei_dati(
             {"column": "A", "equals": "LISTINO", "offset": 1},
@@ -2136,11 +2068,10 @@ class DoveCominciaIlListinoTests(unittest.TestCase):
 
 
 class ITreListiniSenzaAdattatoreTests(unittest.TestCase):
-    """Le due misure sui listini veri che dicono se il lavoro e' finito.
+    """Two measurements against real price lists with no native adapter yet.
 
-    Un motore che funziona solo sui documenti costruiti dal collaudo non serve
-    a niente: QUERCIA e GINEPRO sono i due file su cui i due difetti sono stati
-    misurati, e sono quelli che devono cambiare esito.
+    QUERCIA and GINEPRO are the two files these checks were measured against;
+    an engine that only works on fixtures built by the tests proves nothing.
     """
 
     maxDiff = None
@@ -2152,7 +2083,7 @@ class ITreListiniSenzaAdattatoreTests(unittest.TestCase):
         return percorso
 
     def test_il_prezzo_calcolato_di_ginepro_e_una_colonna_numerica(self) -> None:
-        """Misurato: 4132 celle `=SUM(E4*(1-5%))` dichiarate 0% numeriche."""
+        """4132 formula cells `=SUM(E4*(1-5%))` must read as numeric, not 0%."""
 
         percorso = self.listino("ListinoGINEPRO 5 aggiornato al 25-02-2026.xlsx")
         foglio = profilo_del_file(percorso)["sheets"][0]
@@ -2161,15 +2092,15 @@ class ITreListiniSenzaAdattatoreTests(unittest.TestCase):
         self.assertGreater(colonna["types"].get("formula", 0), 4000)
         self.assertEqual(set(colonna["formula_values"]), {"number"})
         self.assertGreater(registro._quota_leggibile(colonna, "number"), 0.99)
-        # E la colonna E, che il fornitore scrive come testo all'italiana
-        # («1,6»), resta testo: il censimento non trasforma niente in numero, e
-        # chi la dichiarasse come prezzo verrebbe fermato come prima.
+        # Column E, which the supplier writes as Italian-formatted text
+        # ("1,6"), stays text: the profiler doesn't convert anything, so
+        # declaring it as a price would still be caught as before.
         prezzo_testuale = next(voce for voce in foglio["columns"] if voce["letter"] == "E")
         self.assertNotIn("formula_values", prezzo_testuale)
         self.assertLess(registro._quota_leggibile(prezzo_testuale, "number", 1), 0.5)
 
     def test_il_separatore_di_quercia_e_nel_profilo_con_le_righe_attorno(self) -> None:
-        """`A68 = 'LISTINO'`: l'unico separatore di tutto il file."""
+        """`A68 = 'LISTINO'`: the only data-start marker in the whole file."""
 
         percorso = self.listino("LISTINO QUERCIA AGGIORNATO DEL 06-08-2026.xlsx")
         foglio = profilo_del_file(percorso)["sheets"][0]
@@ -2180,25 +2111,23 @@ class ITreListiniSenzaAdattatoreTests(unittest.TestCase):
         self.assertEqual(separatori[68]["letter"], "A")
         self.assertEqual(separatori[68]["data_from"], 69)
         numeri = {voce["row"] for voce in foglio["section_rows"]}
-        # Le righe 66-74 non erano nel profilo: mandava 1-20, 2094-2098 e
-        # 4180-4190, cioe' tutto tranne il punto in cui il listino comincia.
+        # Rows 66-74 must be in the profile: sending only 1-20, 2094-2098 and
+        # 4180-4190 would cover everything except where the list actually starts.
         self.assertLessEqual({66, 67, 68, 69, 70, 71}, numeri)
 
 
 class DueScrittureInsiemeNonSiCancellanoAVicenda(unittest.TestCase):
-    """⚠ Il registro si scriveva leggendo, modificando e riscrivendo, e quel
-    giro non era protetto da niente.
+    """Two writes racing on the same registry must not erase each other.
 
-    La scrittura del **file** e' atomica da sempre (temporaneo con `os.replace`),
-    quindi nessuno ha mai letto un registro monco. Ma due scritture che si
-    accavallano leggevano lo stesso documento di partenza, e la seconda a
-    riscrivere cancellava la voce della prima: misurato il 22 agosto 2026, dieci
-    scritture insieme e nel registro ne restava **una**.
+    The file write itself is atomic (temp file plus `os.replace`), so no read
+    ever sees a truncated registry. But two writes starting from the same
+    document, without a lock around the read-modify-write cycle, would have
+    the second overwrite erase the first write's entry.
 
-    Non e' un caso di laboratorio: il servizio e' un `ThreadingHTTPServer`,
-    `impara_adattatore` gira come processo a se' durante il ricalcolo, e ogni
-    comparatore avviato dalla stessa cartella scrive lo stesso registro imparato
-    — il percorso dei dati si sceglie all'avvio, quello del registro no.
+    This isn't a lab-only scenario: the service is a `ThreadingHTTPServer`,
+    `impara_adattatore` runs as its own process during the pipeline, and
+    every comparator started from the same folder writes the same learned
+    registry file.
     """
 
     def setUp(self) -> None:
@@ -2228,7 +2157,7 @@ class DueScrittureInsiemeNonSiCancellanoAVicenda(unittest.TestCase):
             try:
                 barriera.wait(timeout=10)
                 registro.scrivi_adattatore(self.voce(numero), self.spedito)
-            except Exception as errore:  # noqa: BLE001 - qualunque, va detto
+            except Exception as errore:  # noqa: BLE001 - any exception must be reported
                 guasti.append(f"{type(errore).__name__}: {errore}")
 
         fili = [threading.Thread(target=scrivi, args=(numero,)) for numero in range(quante)]
@@ -2241,17 +2170,16 @@ class DueScrittureInsiemeNonSiCancellanoAVicenda(unittest.TestCase):
         self.assertEqual(sorted(self.imparate()), sorted(f"forn{n}_v1" for n in range(quante)))
 
     def test_un_turno_abbandonato_non_blocca_il_registro_per_sempre(self) -> None:
-        """⚠ E' il rischio che un lucchetto porta con se', ed e' peggio del
-        difetto che chiude: un processo ucciso a meta' — l'antivirus, il PC
-        spento — lascerebbe il registro chiuso, e un programma che non impara
-        piu' e non lo dice non lo scopre nessuno.
+        """A stale lock must be reclaimed, or a killed process (antivirus,
+        power loss) would leave the registry permanently locked with no
+        visible symptom other than learning silently stopping.
         """
 
         documento = registro.percorso_imparato(self.spedito)
         documento.parent.mkdir(parents=True, exist_ok=True)
         lucchetto = documento.with_name(documento.name + ".lock")
         lucchetto.write_text("99999 0\n", encoding="utf-8")
-        # Vecchio piu' della soglia: chi lo teneva non c'e' piu'.
+        # Older than the timeout: whoever held it is gone.
         vecchio = time.time() - registro.TURNO_ABBANDONATO - 5
         os.utime(lucchetto, (vecchio, vecchio))
 
@@ -2261,20 +2189,20 @@ class DueScrittureInsiemeNonSiCancellanoAVicenda(unittest.TestCase):
         self.assertFalse(lucchetto.exists(), "il turno preso va restituito")
 
     def test_un_turno_di_un_altro_non_fa_perdere_la_voce(self) -> None:
-        """Se il turno non si ottiene entro l'attesa si scrive lo stesso: il
-        caso peggiore torna a essere quello di prima, non uno peggiore. Un
-        adattatore appena confermato dall'utente non va perso perche' un altro
-        processo e' lento."""
+        """If the lock isn't acquired within the timeout, the write proceeds
+        anyway: the worst case reverts to the pre-lock behavior, not
+        something worse. A just-confirmed adapter must not be lost because
+        another process is slow."""
 
         documento = registro.percorso_imparato(self.spedito)
         documento.parent.mkdir(parents=True, exist_ok=True)
         lucchetto = documento.with_name(documento.name + ".lock")
-        lucchetto.write_text("1 0\n", encoding="utf-8")  # fresco: non e' abbandonato
+        lucchetto.write_text("1 0\n", encoding="utf-8")  # fresh: not stale
 
         registro.scrivi_adattatore(self.voce(2), self.spedito)
 
         self.assertEqual(self.imparate(), ["forn2_v1"])
-        # E il turno di quell'altro resta suo: non lo si toglie a nessuno.
+        # The other process's lock stays theirs: nothing takes it away.
         self.assertTrue(lucchetto.exists())
 
     def test_il_lucchetto_non_resta_in_giro_dopo_una_scrittura_riuscita(self) -> None:
@@ -2284,8 +2212,9 @@ class DueScrittureInsiemeNonSiCancellanoAVicenda(unittest.TestCase):
         self.assertFalse(documento.with_name(documento.name + ".lock").exists())
 
     def test_e_nemmeno_dopo_una_scrittura_rifiutata(self) -> None:
-        """Una voce senza «id» non si scrive: il turno va restituito lo stesso,
-        altrimenti il primo rifiuto chiuderebbe il registro per venti secondi."""
+        """An entry without an "id" is rejected, but the lock must still be
+        released, or the first rejection would lock the registry for the
+        full timeout."""
 
         registro.scrivi_adattatore(self.voce(4), self.spedito)
         with self.assertRaises(ValueError):
@@ -2298,17 +2227,13 @@ class DueScrittureInsiemeNonSiCancellanoAVicenda(unittest.TestCase):
 
 
 class IlCandidatoMancatoPerUnPelo(unittest.TestCase):
-    """«Non e' nessuno» contro «e' il suo, meno questa cosa qui».
+    """"Unrecognized" versus "this supplier's, missing just this one thing".
 
-    ⚠ Il 22 agosto 2026 il listino BETULLA e' uscito AMBIGUO sul PC del negozio:
-    qualcuno l'aveva aperto in Excel e risalvato con la cella C1 svuotata, e la
-    parola ORDINE non c'era piu'. Le altre quattro obbligatorie c'erano tutte e
-    tutte al loro posto. Il programma ha detto «Nessuna firma nota
-    sufficiente», e chi l'ha letto ha confermato a mano la mappatura guidata,
-    portandosi a casa un adattatore imparato sopra quello spedito.
-
-    Lo stato resta AMBIGUO in tutti i casi: qui si prova quello che il
-    programma **dice**, non che legga un listino a cui manca un pezzo.
+    A document missing one required header, with the rest present and in
+    place, should be reported as a near-miss on a specific adapter instead of
+    the generic "no known signature is sufficient" — without ever reading it
+    as that supplier's file. The state stays AMBIGUO in every case here;
+    only the message changes.
     """
 
     maxDiff = None
@@ -2342,15 +2267,15 @@ class IlCandidatoMancatoPerUnPelo(unittest.TestCase):
 
     def test_una_intestazione_svuotata_non_e_un_documento_sconosciuto(self) -> None:
         intestazioni = list(self.INTESTAZIONI)
-        intestazioni[2] = None                      # la cella C1, «ORDINE»
+        intestazioni[2] = None                      # cell C1, "ORDINE"
         esito = registro.riconosci(
             profilo_del_file(self.listino(intestazioni)), self.registro_con_cinque_obbligatorie(),
         )
 
-        # Lo stato non cambia: non si legge un listino a cui manca una colonna.
+        # The state doesn't change: a document missing a column isn't read.
         self.assertEqual(esito["state"], "AMBIGUO")
         self.assertIsNone(esito["adapter_id"])
-        # Cambia quello che il programma dice di sapere.
+        # What changes is what the message reports.
         self.assertEqual(esito["quasi_adapter_id"], "tizio_v1")
         self.assertEqual(esito["quasi_missing"], [{"header": "ORDINE", "column": "C"}])
         self.assertEqual(esito["quasi_present"], 4)
@@ -2361,8 +2286,8 @@ class IlCandidatoMancatoPerUnPelo(unittest.TestCase):
         self.assertIn("Excel", frase)
 
     def test_tre_intestazioni_mancanti_non_sono_un_pelo(self) -> None:
-        """Dire «e' il listino di TIZIO» avendone viste due su cinque sarebbe
-        una bugia detta con sicurezza, che e' peggio di «non lo riconosco»."""
+        """Claiming "this is TIZIO's" from two matching headers out of five
+        would be a confident lie, worse than "unrecognized"."""
 
         intestazioni = [None, None, None, "DESCRIZIONE", "PREZZO"]
         esito = registro.riconosci(
@@ -2374,14 +2299,14 @@ class IlCandidatoMancatoPerUnPelo(unittest.TestCase):
         self.assertNotIn("quasi_adapter_id", esito)
 
     def test_le_intestazioni_che_restano_devono_stare_dove_il_registro_dice(self) -> None:
-        """La difesa contro il falso riconoscimento.
+        """The defense against false positives.
 
-        Un documento di un altro fornitore che per caso condivide quattro nomi
-        di colonna non li ha quasi mai anche negli stessi posti: senza questa
-        verifica, «sembra il listino di TIZIO» finirebbe addosso a chiunque.
+        Another supplier's document that happens to share four column names
+        almost never has them in the same positions too: without this check,
+        "looks like TIZIO's" would match nearly anyone.
         """
 
-        # Le stesse intestazioni, meno una, ma tutte spostate di una colonna.
+        # Same headers minus one, but all shifted by one column.
         intestazioni = [None, "EAN", "CODART", "DESCRIZIONE", "PREZZO"]
         esito = registro.riconosci(
             profilo_del_file(self.listino(intestazioni)), self.registro_con_cinque_obbligatorie(),
@@ -2390,8 +2315,8 @@ class IlCandidatoMancatoPerUnPelo(unittest.TestCase):
         self.assertEqual(esito["evidence"], ["Nessuna firma nota sufficiente"])
 
     def test_il_listino_che_si_legge_non_passa_di_qui(self) -> None:
-        """Un documento completo resta SCHEMA_NOTO: la frase nuova non deve
-        comparire dove non c'e' niente che manca."""
+        """A complete document stays SCHEMA_NOTO: the near-miss message must
+        not appear where nothing is missing."""
 
         esito = registro.riconosci(
             profilo_del_file(self.listino(self.INTESTAZIONI)), self.registro_con_cinque_obbligatorie(),
@@ -2402,13 +2327,11 @@ class IlCandidatoMancatoPerUnPelo(unittest.TestCase):
 
 
 class QuelloCheSImparaNonCancellaQuelloCheSiSpedisce(unittest.TestCase):
-    """Gli adattatori `__locale`, e chi vince quando i candidati sono due.
+    """`__locale` adapters, and who wins when there are two candidates.
 
-    ⚠ Fino al 22 agosto 2026 una mappatura confermata su un fornitore spedito
-    si scriveva con lo stesso `id`, e a parita' di `id` vince l'imparato: la
-    voce spedita spariva sotto con tutto quello che porta e che la mappatura
-    guidata non chiede. Sul PC del negozio e' successo su tre fornitori in un
-    colpo solo, il 21 agosto alle 17:16.
+    A mapping confirmed for a shipped supplier must be written under a
+    distinct id, not the shipped one, or it would silently shadow everything
+    the shipped entry declares that the guided mapping page doesn't ask for.
     """
 
     maxDiff = None
@@ -2423,15 +2346,14 @@ class QuelloCheSImparaNonCancellaQuelloCheSiSpedisce(unittest.TestCase):
         self.assertEqual(registro.adattatore_base("betulla_v1__locale"), "betulla_v1")
 
     def test_un_fornitore_imparato_da_zero_resta_se_stesso(self) -> None:
-        """`adattatore_base` non deve inventare una derivazione dove non c'è."""
+        """`adattatore_base` must not invent a derivation where there is none."""
 
         self.assertEqual(registro.adattatore_base("quercia_v1"), "quercia_v1")
         self.assertEqual(registro.adattatore_base(""), "")
         self.assertEqual(registro.adattatore_base(None), "")
 
     def test_gli_id_spediti_si_leggono_senza_l_imparato(self) -> None:
-        """E' la domanda che serve per sapere se si sta per scrivere sopra
-        qualcosa che il programma porta con se'."""
+        """Needed to know whether a write would shadow a shipped entry."""
 
         spedito = registro_di_prova(self.radice / "adapters.json", [
             {"id": "tizio_v1", "supplier_id": "tizio"},
@@ -2441,8 +2363,8 @@ class QuelloCheSImparaNonCancellaQuelloCheSiSpedisce(unittest.TestCase):
         ])
 
         self.assertEqual(registro.identificativi_spediti(spedito), {"tizio_v1"})
-        # Il registro effettivo invece li ha tutti e due: sono due domande
-        # diverse, e confonderle rimetterebbe il difetto dov'era.
+        # The effective registry has both: two different questions, and
+        # conflating them would reintroduce the shadowing bug.
         voci, motivo = registro.adattatori_effettivi(spedito)
         self.assertIsNone(motivo)
         self.assertEqual({voce["id"] for voce in voci}, {"tizio_v1", "caio_v1"})
@@ -2462,12 +2384,12 @@ class QuelloCheSImparaNonCancellaQuelloCheSiSpedisce(unittest.TestCase):
         }
 
     def test_fra_due_candidati_prende_il_documento_quello_che_lo_legge_davvero(self) -> None:
-        """La regola che rende innocua la convivenza.
+        """The rule that makes shipped and learned adapters coexist safely.
 
-        Lo stesso documento somiglia a due adattatori: quello spedito, che pero'
-        dichiara un foglio che qui non c'e' piu', e quello imparato sopra di lui,
-        che dichiara quello giusto. A vincere non deve essere chi viene prima
-        nell'elenco — sarebbe lo spedito — ma chi passa le verifiche.
+        The same document resembles two adapters: the shipped one, declaring
+        a sheet name that this document doesn't have, and the learned one on
+        top of it, declaring the right one. The winner must be whichever one
+        actually passes the checks, not whichever comes first in the list.
         """
 
         listino = scrivi_foglio(self.radice / "listino.xlsx", [
@@ -2491,15 +2413,14 @@ class QuelloCheSImparaNonCancellaQuelloCheSiSpedisce(unittest.TestCase):
         self.assertEqual(esito["state"], "SCHEMA_NOTO")
 
     def test_a_parita_piena_vince_quello_imparato_qui(self) -> None:
-        """Quando tutti e due leggono il documento senza un guasto vince
-        l'imparato: e' la risposta piu' recente, e l'ha data qualcuno che aveva
-        il documento davanti.
+        """When both candidates read the document cleanly, the learned one
+        wins: it's the most recent answer, given by someone who had the
+        document in front of them.
 
-        ⚠ Fino al 22 agosto 2026 vinceva lo spedito, cioe' chi veniva prima
-        nell'elenco, e quella riga teneva chiusa la strada della colonna
-        d'ordine: la voce che nasce spostandola legge il documento esattamente
-        come la spedita — cambia solo dove si scrive l'ordine — quindi le due
-        pareggiano e la voce nuova restava inerte.
+        This matters specifically for a learned entry that changes only
+        where the order column is written: it reads the document exactly
+        like the shipped one, so the two tie on every other check, and the
+        tie-breaker must still favor the learned entry.
         """
 
         listino = scrivi_foglio(self.radice / "listino.xlsx", [
@@ -2523,13 +2444,14 @@ class QuelloCheSImparaNonCancellaQuelloCheSiSpedisce(unittest.TestCase):
         self.assertEqual(esito["state"], "SCHEMA_NOTO")
 
     def test_fra_famiglie_diverse_a_parita_resta_l_ordine_del_registro(self) -> None:
-        """La regola nuova vale fra le due versioni della STESSA cosa.
+        """The "learned wins ties" rule applies only between two versions of
+        the SAME adapter.
 
-        Fra un adattatore spedito e l'imparato di un altro fornitore non c'e'
-        un piu' recente e un meno recente: c'e' solo l'ordine del registro, e
-        quello non cambia. Allargare qui la regola vorrebbe dire far vincere un
-        `caio_v1__locale` sopra un `tizio_v1` spedito che legge il documento
-        altrettanto bene, per il solo fatto di essere stato imparato dopo.
+        Between a shipped adapter and another supplier's learned one there's
+        no older-or-newer relationship — only the registry's own order, which
+        doesn't change. Extending the rule here would let a `caio_v1__locale`
+        outrank a `tizio_v1` shipped entry that reads the document just as
+        well, purely for having been learned more recently.
         """
 
         listino = scrivi_foglio(self.radice / "listino.xlsx", [
@@ -2556,7 +2478,7 @@ class QuelloCheSImparaNonCancellaQuelloCheSiSpedisce(unittest.TestCase):
         self.assertEqual(esito["adapter_id"], "tizio_v1")
 
     def test_la_voce_locale_e_la_seconda_versione_della_spedita(self) -> None:
-        """Chi rilegge fra un mese deve trovarci dentro da dove si era partiti."""
+        """Rereading a month later must still find the starting version."""
 
         spedito = registro_di_prova(self.radice / "adapters.json", [
             {"id": "tizio_v1", "supplier_id": "tizio", "kind": "supplier",
@@ -2576,21 +2498,20 @@ class QuelloCheSImparaNonCancellaQuelloCheSiSpedisce(unittest.TestCase):
         voce = imparati["adapters"][0]
         self.assertEqual(len(voce["previous_versions"]), 1)
         self.assertEqual(voce["previous_versions"][0]["id"], "tizio_v1")
-        # E la spedita non e' stata toccata.
+        # The shipped entry stays untouched.
         spedite = json.loads(spedito.read_text(encoding="utf-8"))["adapters"]
         self.assertEqual([voce["id"] for voce in spedite], ["tizio_v1"])
 
 
 class IntestazioniDeiLettoriDedicati(unittest.TestCase):
-    """I lettori a schema noto pretendono quello che il REGISTRO dichiara.
+    """Dedicated readers must expect what the REGISTRY declares, not a
+    separate hardcoded header list.
 
-    Il 4 settembre 2026 BETULLA ha scritto «Ordine» invece di «ORDINE». Il
-    registro l'ha riconosciuto lo stesso — `normalizza` la cassa non la guarda —
-    e `read_betulla`, che confrontava cinque nomi scritti nel codice lettera per
-    lettera, ha messo il veto su un listino sano da 6.430 prodotti: cinque
-    confronti fermi di fila con «Schema BETULLA non riconosciuto», e in negozio
-    nessun ordine. Erano due definizioni della stessa cosa, e queste prove
-    servono a tenerne una sola.
+    `normalizza` ignores case and punctuation, so the registry recognizes a
+    header like "Ordine" written instead of "ORDINE". A dedicated reader
+    comparing hardcoded names letter-for-letter would reject the same file
+    the registry accepted — two definitions of the same thing, and these
+    tests keep it to one.
     """
 
     def setUp(self) -> None:
@@ -2611,8 +2532,8 @@ class IntestazioniDeiLettoriDedicati(unittest.TestCase):
         )
 
     def test_betulla_letto_con_la_punteggiatura_cambiata(self) -> None:
-        """«Cod.Art.», «COD ART», «Cod. Art.»: il docstring di `normalizza` lo
-        promette da sempre, e adesso vale anche per il lettore."""
+        """"Cod.Art.", "COD ART", "Cod. Art.": `normalizza`'s contract applies
+        to the dedicated reader too."""
 
         percorso = scrivi_foglio(self.radice / "betulla_punti.xlsx", [
             ["EAN", "Cod. Art.", "ORDINE", "Descr.Commerciale", "PzCt",
@@ -2623,10 +2544,10 @@ class IntestazioniDeiLettoriDedicati(unittest.TestCase):
         self.assertEqual(len(prepare_sources.read_betulla(percorso)), 1)
 
     def test_a_betulla_manca_una_colonna_e_il_motivo_si_legge(self) -> None:
-        """Il rifiuto resta, e adesso dice quale colonna manca.
+        """The rejection stays, but now names which column is missing.
 
-        «Schema BETULLA non riconosciuto» da solo non ha detto a nessuno che il
-        problema era una parola in minuscolo.
+        "Schema BETULLA non riconosciuto" alone never told anyone the actual
+        problem was a lowercase header.
         """
 
         percorso = scrivi_foglio(self.radice / "betulla_monco.xlsx", [
@@ -2642,7 +2563,7 @@ class IntestazioniDeiLettoriDedicati(unittest.TestCase):
         self.assertIn("CodArt", str(errore.exception))
 
     def test_le_obbligatorie_di_betulla_le_dichiara_il_registro(self) -> None:
-        """Nessun elenco di intestazioni scritto nel codice del lettore."""
+        """No header list hardcoded in the reader's own code."""
 
         self.assertEqual(
             sorted(prepare_sources.intestazioni_obbligatorie("betulla_v1")),
@@ -2651,11 +2572,11 @@ class IntestazioniDeiLettoriDedicati(unittest.TestCase):
         self.assertNotIn('"CodArt"', PERCORSO_LETTORI.read_text(encoding="utf-8"))
 
     def test_noce_csv_letto_con_la_cassa_cambiata(self) -> None:
-        """E le righe si leggono davvero, non solo la riga d'intestazione.
+        """Data rows must actually be read, not just the header row checked.
 
-        Rendere tollerante il solo controllo sarebbe stato peggio del difetto:
-        il CSV legge per nome, e ogni campo sarebbe uscito vuoto — un fornitore
-        letto con zero righe utilizzabili e nessuno che lo dice.
+        The CSV reads columns by name; if only the header check tolerated
+        case changes while the row reader didn't, every field would come
+        back empty — a supplier read with zero usable rows and no warning.
         """
 
         corpo = "12,8000000000002,Prodotto Beta,Cartone,Disponibile,\"1,50\",x 6,\n"
@@ -2692,14 +2613,12 @@ if __name__ == "__main__":
 
 
 class LoSpeditoPiuRecenteVince(unittest.TestCase):
-    """Dal 5 settembre 2026: una voce imparata sopra una spedita vale finche'
-    la spedita e' quella su cui e' nata.
+    """A learned entry on top of a shipped one stays valid only as long as
+    the shipped entry it was learned against hasn't changed since.
 
-    ⚠ Il caso vero, tre volte in due settimane: il titolare conferma una mappatura
-    a mano (BETULLA e le offerte CIPRESSO il 21 agosto, il canvass nuovo di
-    LARICE il 4 settembre), Daniele spedisce la voce fatta bene, e quella
-    imparata le resta sopra finche' qualcuno non apre il file sul PC del
-    negozio e la cancella. Da qui in poi lo fa il programma.
+    Without this, a manually confirmed mapping would keep shadowing an
+    improved shipped adapter until someone finds and deletes the learned
+    entry by hand. The engine must retire it automatically instead.
     """
 
     maxDiff = None
@@ -2741,8 +2660,8 @@ class LoSpeditoPiuRecenteVince(unittest.TestCase):
         self.assertEqual(self.ids_effettivi(), ["tizio_v1", "caio_v1"])
 
     def test_se_la_spedita_cambia_dopo_vince_la_spedita(self) -> None:
-        """E' la correzione che finalmente arriva: Daniele cambia la voce,
-        l'aggiornamento la porta al negozio, e l'imparata smette di coprirla."""
+        """The fix finally lands: the shipped entry changes, and the learned
+        one on top of the old version stops shadowing it."""
 
         registro.scrivi_adattatore(
             {"id": "tizio_v1__locale", "supplier_id": "tizio", "kind": "supplier"}, self.spedito,
@@ -2759,9 +2678,9 @@ class LoSpeditoPiuRecenteVince(unittest.TestCase):
         self.assertIn("è cambiato dopo", superate[0]["motivo"])
 
     def test_una_voce_senza_timbro_sopra_una_spedita_e_superata(self) -> None:
-        """Sono tutte quelle imparate prima del 5 settembre 2026, cioe' quelle
-        che `PROMPT_PC_NEGOZIO_ADATTATORI.md` faceva cancellare a mano — anche
-        quando portano ancora l'id spedito, come le tre del 21 agosto."""
+        """Covers learned entries with no stamp linking them to a shipped
+        version — including ones that still carry the shipped adapter's own
+        id, which otherwise would need deleting by hand."""
 
         registro_di_prova(registro.percorso_imparato(self.spedito), [
             {"id": "tizio_v1__locale", "supplier_id": "tizio", "derivato_da": "tizio_v1"},
@@ -2770,7 +2689,7 @@ class LoSpeditoPiuRecenteVince(unittest.TestCase):
         ])
 
         self.assertEqual(self.ids_effettivi(), ["tizio_v1", "caio_v1"])
-        # E la spedita e' proprio la spedita, non la fotocopia imparata.
+        # And the shipped entry served is the actual shipped one, not the learned copy.
         self.assertEqual(registro.adattatore("tizio_v1", self.spedito)["order_write"]["order_column"], "C")
         self.assertEqual(
             sorted(voce["id"] for voce in registro.adattatori_superati(self.spedito)),
@@ -2793,15 +2712,15 @@ class LoSpeditoPiuRecenteVince(unittest.TestCase):
         self.assertEqual([voce["id"] for voce in da_parte], ["tizio_v1__locale"])
         self.assertEqual(da_parte[0]["messo_da_parte_il"], "2026-09-05T10:00:00+00:00")
         self.assertTrue(da_parte[0]["messo_da_parte_perche"])
-        # La seconda volta non c'e' piu' niente da spostare, e il file non si tocca.
+        # The second time there's nothing left to move, and the file is untouched.
         prima = registro.percorso_imparato(self.spedito).read_bytes()
         self.assertEqual(registro.metti_da_parte_le_superate(self.spedito), [])
         self.assertEqual(registro.percorso_imparato(self.spedito).read_bytes(), prima)
 
     def test_riconfermare_dalla_mappatura_rimette_in_gioco_la_voce(self) -> None:
-        """Il giro completo: spedita cambiata, imparata superata, l'utente
-        conferma di nuovo, e la voce nuova porta il timbro della spedita di
-        adesso."""
+        """The full cycle: shipped entry changes, the learned one is
+        retired, the user confirms again, and the new learned entry carries
+        the current shipped version's stamp."""
 
         registro.scrivi_adattatore({"id": "tizio_v1__locale", "supplier_id": "tizio"}, self.spedito)
         corretta = {**self.spedita, "display_name": "TIZIO S.R.L."}

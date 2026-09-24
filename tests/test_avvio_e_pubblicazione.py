@@ -1,21 +1,14 @@
-"""Gli script che avviano il programma.
+"""The scripts that launch the program.
 
-Sono la parte del progetto che **nessun collaudo guardava**: il lanciatore di
-Windows e l'avvio per macOS.  Vivono fuori da `app/` e da `scripts/`, e
-proprio per questo l'unica prova che avevano era qualcuno che li lanciava a
-mano.  Il 20 agosto 2026 quelle prove a mano sono state fatte davvero — e
-sono servite, perche' una guardia scritta nel modo ovvio si era rivelata
-quella sbagliata — ma una prova fatta a mano non sopravvive alla sessione in
-cui e' stata fatta.
+Covers the launcher scripts that live outside `app/` and `scripts/`: the
+Windows launcher and the macOS startup script. `AVVIA_COMPARATORE.ps1` isn't
+tested here — it requires PowerShell, which isn't available on the
+development machine; CI covers it on Windows and at least parses it. This
+file covers the testable half: the `sh`/`bash` script.
 
-Che cosa NON c'e' qui, e perche'.  `AVVIA_COMPARATORE.ps1` non si prova:
-richiede PowerShell, che sul Mac di chi sviluppa non c'e'.  Quel file lo copre
-la CI, che gira su Windows e almeno lo parsifica.  Qui sta la meta'
-provabile: lo script `sh`/`bash`.
-
-⚠ Le prove di questo file eseguono processi veri (`bash`, `curl`) su porte
-locali.  Dove uno di quegli strumenti manca, la classe si salta invece di
-fallire: e' la stessa regola che questa suite applica gia' a Node.
+These tests run real processes (`bash`, `curl`) on local ports. Where one of
+those tools is missing, the class is skipped rather than failed, the same
+rule this suite already applies to Node.
 """
 
 from __future__ import annotations
@@ -37,7 +30,7 @@ def _serve(nome: str) -> str | None:
 
 
 class ServizioFinto:
-    """Un server HTTP che risponde quello che gli si dice, su una porta libera."""
+    """An HTTP server that replies whatever it's told to, on a free port."""
 
     def __init__(self, corpo: bytes | None, stato: int = 200) -> None:
         self.corpo = corpo
@@ -45,7 +38,7 @@ class ServizioFinto:
         finto = self
 
         class Gestore(http.server.BaseHTTPRequestHandler):
-            def do_GET(self) -> None:  # noqa: N802 - lo impone http.server
+            def do_GET(self) -> None:  # noqa: N802 - required by http.server
                 if finto.corpo is None:
                     self.send_error(404)
                     return
@@ -74,10 +67,10 @@ class ServizioFinto:
 
 @unittest.skipIf(_serve("bash") is None, "senza bash non si possono eseguire gli avvii per macOS")
 class GliScriptDiAvvioSiLeggono(unittest.TestCase):
-    """La prima cosa che deve reggere: che bash li sappia leggere.
+    """The first thing that must hold: that bash can parse them.
 
-    E' il gemello del passo che la CI fa su PowerShell.  Un errore di sintassi
-    qui vuol dire «il programma non parte», e non lo direbbe nessun'altra prova.
+    Mirrors the syntax check CI runs on PowerShell. A syntax error here means
+    the program won't start, and no other test would catch it.
     """
 
     def test_gli_script_non_hanno_errori_di_sintassi(self) -> None:
@@ -92,15 +85,16 @@ class GliScriptDiAvvioSiLeggono(unittest.TestCase):
 
 @unittest.skipIf(_serve("bash") is None, "senza bash non si può eseguire l'avvio per macOS")
 class IlFileInEsecuzioneNonSiFaRiscrivereSotto(unittest.TestCase):
-    """`avvia.command` sta DENTRO l'albero che `AVVIA_COMPARATORE.ps1` allinea
-    su Windows: sul Mac non fa `reset --hard` da solo, ma resta comunque un
-    file che un aggiornamento del repository puo' riscrivere mentre gira.
-    La difesa e' che tutto stia dentro una funzione — bash deve leggerne la
-    definizione per intero prima di poterla eseguire — e che dopo la chiamata
-    ci sia un `exit`, cosi' non torna a leggere il file cambiato.
+    """`avvia.command` lives inside the tree that `AVVIA_COMPARATORE.ps1`
+    keeps in sync on Windows: on macOS it doesn't run `reset --hard` itself,
+    but it's still a file a repository update can rewrite while it's running.
+    The safeguard is that the whole script sits inside one function — bash
+    must read the entire function definition before it can execute it — with
+    an `exit` right after the call, so it never goes back to read the
+    changed file.
 
-    Non e' una prova di stile: e' la sola cosa che tiene, e si rompe
-    silenziosamente se qualcuno aggiunge una riga in fondo.
+    This isn't a style check: it's the one thing that holds, and it breaks
+    silently if a line is added after the function.
     """
 
     def _righe_vere(self, nome: str) -> list[str]:
@@ -108,12 +102,12 @@ class IlFileInEsecuzioneNonSiFaRiscrivereSotto(unittest.TestCase):
         return [r.strip() for r in righe if r.strip() and not r.strip().startswith("#")]
 
     def test_tutto_sta_in_una_funzione_chiamata_alla_fine(self) -> None:
-        # ⚠ Non basta che `main` ci sia: deve essere l'UNICA cosa che c'e'.
-        # Una riga di codice prima della definizione viene eseguita mentre
-        # bash sta ancora leggendo il file, ed e' esattamente il caso da cui
-        # la funzione protegge.  La prima versione di questa prova cercava
-        # solo `main() {` fra le righe, e restava verde con del codice fuori:
-        # copertura dichiarata e non esistente.
+        # It's not enough for `main` to exist: it must be the only thing in
+        # the file. A line of code before the function definition runs while
+        # bash is still reading the file, exactly the case this guards
+        # against. A weaker version of this test that only checked for
+        # `main() {` among the lines would stay green with code outside the
+        # function: coverage that isn't there.
         righe = self._righe_vere("avvia.command")
         self.assertEqual(righe[0], "main() {", "prima della funzione c'è altro codice")
         self.assertEqual(righe[-3], "}", "dopo la funzione c'è altro codice")
@@ -126,13 +120,12 @@ class IlFileInEsecuzioneNonSiFaRiscrivereSotto(unittest.TestCase):
     "la sonda usa curl dentro bash",
 )
 class LaSondaChiedeChiRisponde(unittest.TestCase):
-    """La guardia che decide se allineare NON e' «la porta e' occupata».
+    """The guard that decides whether to sync isn't "is the port busy".
 
-    ⚠ E' la distinzione su cui questa guardia poteva nascere sbagliata, ed e'
-    il motivo per cui questa classe esiste.  Se dicesse «occupata» per un
-    programma qualsiasi, la cartella smetterebbe di ricevere aggiornamenti
-    finche' quel programma resta acceso — che e' lo stesso difetto per cui la
-    guardia sull'albero sporco era gia' stata scartata.
+    Checking only the port would make the same mistake already ruled out for
+    a "dirty tree" guard: it would call any program on that port a reason to
+    stop, and the folder would stop receiving updates as long as any program
+    stayed bound to it.
     """
 
     def _chiedi(self, porta: int) -> int:

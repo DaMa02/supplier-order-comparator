@@ -2,21 +2,22 @@
 import { test, expect } from "@playwright/test";
 
 /**
- * Il difetto del 6 settembre 2026 (R8 della revisione): scrivi 7 al posto di 3,
- * il salvataggio parte 450 ms dopo e non riesce, e in quella finestra aggiungi
- * un prodotto dal catalogo. La pagina rilegge il confronto dal servizio — che
- * ha ancora 3 — e sostituisce tutto quello che hai davanti; il salvataggio
- * successivo consolida il 3. Nessuna parola lo dice, e l'ordine parte sbagliato.
+ * Regression guard: type a new quantity, the save request starts 450 ms
+ * later and fails, and in that window a product is added from the catalog.
+ * The page re-reads the comparison from the service — which still has the
+ * old quantity — and replaces everything on screen with it; the next save
+ * then persists the stale value silently, and the order ships wrong.
  *
- * Perché sta qui e non in `tests/`: ci vogliono due chiamate di fila dalla
- * stessa pagina, con un salvataggio in mezzo che fallisce per davvero. È la
- * sequenza intera, non il pezzo.
+ * Why this lives here and not in `tests/`: it takes two requests in a row
+ * from the same page, with a save that genuinely fails in between. It's the
+ * whole sequence, not a single unit.
  *
- * ⚠ La ricerca e l'aggiunta si fingono con `page.route`. Il confronto finto
- * non ha listini su disco — `synthetic_review()` porta `files: []` — quindi il
- * catalogo del servizio è vuoto e non c'è niente da aggiungere. Il difetto però
- * sta tutto nella pagina: quello che conta è che il gesto non parta finché la
- * quantità non è al sicuro, e che il confronto riletto non se la porti via.
+ * Search and add are stubbed with `page.route`. The synthetic review has no
+ * price lists on disk — `synthetic_review()` ships `files: []` — so the
+ * service's catalog is empty and there's nothing to add. The bug lives
+ * entirely on the page side: what matters is that the add doesn't proceed
+ * until the quantity is safely saved, and that a re-read of the comparison
+ * doesn't wipe it out.
  */
 
 const PRODOTTO_DEL_CATALOGO = {
@@ -42,7 +43,7 @@ async function apriIlConfronto(page) {
     .toBeVisible({ timeout: 15_000 });
 }
 
-/** Apre il catalogo e aspetta che il prodotto da aggiungere ci sia davvero. */
+/** Open the catalog dialog and wait for the product to add to actually appear. */
 async function apriIlCatalogo(page) {
   await page.locator("[data-action='open-catalog']").click();
   await page.locator("#catalog-search").fill("PRODOTTO DEL CATALOGO");
@@ -61,16 +62,16 @@ test.describe("Aggiungere un prodotto dal catalogo", () => {
     await apriIlConfronto(page);
     const quantita = page.locator("[data-product-quantity='product-standard']");
 
-    // ⚠ Un valore di partenza SALVATO, e assoluto: le prove condividono lo
-    // stato sul disco, e senza questo il numero a cui la pagina tornerebbe
-    // indietro sarebbe quello lasciato da chi ha girato prima.
+    // Starting value must be SAVED, and absolute: tests share state on
+    // disk, so without this the value the page would fall back to depends
+    // on whichever test ran before it.
     let salvataggio = page.waitForResponse((r) =>
       r.url().includes("/api/state") && r.request().method() === "PUT");
     await quantita.fill("1");
     await quantita.blur();
     expect((await salvataggio).status(), "il valore di partenza non è stato salvato").toBeLessThan(400);
 
-    // Da qui il salvataggio non riesce: è la finestra in cui vive il difetto.
+    // From here on saving fails: this is the window the regression lives in.
     const salvataggioRotto = (rotta) => (rotta.request().method() === "PUT"
       ? rotta.fulfill(comeJson({ message: "Il servizio locale non risponde." }, 503))
       : rotta.continue());
@@ -85,23 +86,25 @@ test.describe("Aggiungere un prodotto dal catalogo", () => {
     await apriIlCatalogo(page);
     await page.locator("[data-action='add-catalog-product']").click();
 
-    // ⚠ La ricerca si svuota apposta: quando l'aggiunta va in fondo la pagina
-    // filtra l'elenco sul nome del prodotto aggiunto, e la scheda da guardare
-    // sparirebbe. Senza questa riga il rosso direbbe «non trovo il campo»
-    // invece di «c'è scritto 1 dove avevi scritto 7», e chi lo legge fra sei
-    // mesi penserebbe a un selettore invecchiato.
+    // The search field is cleared on purpose: once the add succeeds, the
+    // page filters the list by the added product's name, and the card under
+    // test would disappear. Without this line a failure would read "field
+    // not found" instead of "quantity shows 1 where 7 was typed", misleading
+    // a future reader into suspecting a stale selector.
     await page.locator("[data-filter='search']").fill("");
 
-    // ⚠ PRIMA il 7, che è il danno: è il numero che finisce sull'ordine. Con
-    // il difetto qui si legge 1 — il confronto riletto dal servizio ha
-    // sostituito quello in pagina — e la prova deve cadere su questo, non
-    // sulla frase che lo spiega.
+    // Check the 7 FIRST — that's the actual damage, the number that would
+    // ship on the order. When the bug is present this reads 1, because the
+    // re-read comparison overwrote what was on screen; the test must fail on
+    // that, not on the message that explains it.
     await expect(quantita).toHaveValue("7");
-    // Poi il perché, dove l'utente lo cerca: dentro il catalogo, non altrove.
+    // Then the explanation, where the user looks for it: inside the catalog
+    // dialog, nowhere else.
     await expect(page.locator(".catalog-dialog").getByText(/non sono ancora salvate/i)).toBeVisible();
     expect(aggiunte, "il prodotto è stato aggiunto con una quantità solo in pagina").toBe(0);
 
-    // Tolta l'intercettazione, lo stesso gesto arriva in fondo — e il 7 con lui.
+    // With the interception removed, the same action goes through — and the
+    // 7 survives with it.
     await page.unroute("**/api/state", salvataggioRotto);
     await page.locator("[data-action='close-catalog']").first().click();
     await quantita.fill("7");

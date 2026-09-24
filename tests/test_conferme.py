@@ -1,24 +1,23 @@
 #!/usr/bin/env python3
-"""Il magazzino delle conferme: quello che l'utente ha già risposto.
+"""Tests for the confirmation store: what the user has already answered.
 
-Che cosa si prova qui, e perché è metà del lavoro. Questo modulo è una memoria
-che sopravvive al ricalcolo settimanale, quindi i suoi difetti non si vedono il
-giorno in cui nascono: si vedono il lunedì dopo, quando una conferma vale su
-merce sbagliata oppure non vale più su merce giusta. Le prove sono scritte
-sulle due direzioni dell'errore, che non hanno lo stesso prezzo:
+This module is memory that survives the weekly recompute, so its bugs don't
+show up the day they're introduced. They show up the following week, when a
+confirmation applies to the wrong item or stops applying to the right one.
+Tests cover both directions of error, which don't cost the same:
 
-* **perdere una conferma** costa un clic all'utente. È il guasto tollerabile.
-* **applicarne una sbagliata** costa un ordine vero, e si ripete ogni settimana
-  in silenzio. È il guasto che non deve essere possibile.
+- losing a confirmation costs the user one click (tolerable).
+- applying a wrong one buys the wrong stock, silently, every week
+  (must never happen).
 
-I dati delle prove non sono inventati: vengono dai due export veri sul disco al
-15 agosto 2026 — il DOPLO che l'utente riconferma a mano, la DIXOR che compare
-due volte nello stesso elenco, e i codici articolo Noce che sono cambiati
-tutti insieme quando il listino è passato dal CSV del sito al loro `.xls`.
+Test data comes from real supplier exports: the DOPLO the user reconfirms by
+hand, the DIXOR that appears twice in the same list, and the Noce item codes
+that all changed at once when its price list moved from the site's CSV to
+their `.xls`.
 
-⚠ Nessuna prova legge `app/data/`: quei file il programma se li riscrive da
-solo, e una suite che ci poggia sopra passa o fallisce a seconda dell'ultima
-run. I valori veri stanno qui sotto come costanti.
+No test reads `app/data/`: the app rewrites those files itself, so a suite
+built on them would pass or fail depending on the last run. Real values are
+kept here as constants.
 """
 
 from __future__ import annotations
@@ -44,8 +43,8 @@ from conferme import (  # noqa: E402
 )
 
 
-# Il caso che ha originato il modulo: la riga del gestionale e la riga Noce
-# che l'utente ha confermato a mano, e che ogni lunedì tornava a chiedere.
+# The case that motivated this module: the management-software row and the
+# Noce offer the user confirmed by hand, which kept getting re-asked every week.
 PRODOTTO_DOPLO = {
     "id": "product:539",
     "ean": "8009721709065",
@@ -53,10 +52,9 @@ PRODOTTO_DOPLO = {
     "sourceRow": 539,
     "lastUnitPrice": 1.24,
 }
-# Lo stesso articolo Noce visto dai due listini: a sinistra il CSV del sito
-# (codice articolo vuoto), a destra il loro `.xls` (codice articolo pieno). Sono
-# la stessa merce e hanno due impronte diverse: è il caso su cui si decide che
-# cosa fa `cerca`.
+# The same Noce item as seen in two price lists: the site's CSV (empty item
+# code) and their `.xls` (item code filled in). Same item, two different
+# fingerprints — this is the case that decides what `cerca` has to do.
 OFFERTA_NOCE_CSV = {
     "supplierId": "noce",
     "ean": "8009721709065",
@@ -82,7 +80,7 @@ ANCORA_DOPO = "2026-08-29T09:30:00+00:00"
 
 
 class BaseMagazzino(unittest.TestCase):
-    """Un file nuovo per ogni prova, e la certezza che venga chiuso."""
+    """Gives each test a fresh store file and guarantees it gets closed."""
 
     def setUp(self) -> None:
         self.cartella = Path(tempfile.mkdtemp(prefix="conferme-"))
@@ -123,7 +121,7 @@ class BaseMagazzino(unittest.TestCase):
 
 
 class IdentitaDelProdotto(unittest.TestCase):
-    """L'impronta dell'articolo del gestionale: che cosa ci entra e che cosa no."""
+    """`impronta_prodotto`: what goes into the fingerprint and what doesn't."""
 
     def test_e_fatta_di_codice_a_barre_e_nome(self) -> None:
         self.assertEqual(
@@ -132,32 +130,32 @@ class IdentitaDelProdotto(unittest.TestCase):
         )
 
     def test_la_riga_e_il_prezzo_non_ci_entrano(self) -> None:
-        """La ragione per cui questo modulo esiste.
+        """The reason this module exists.
 
-        Sui due export veri, 449 identificativi `product:<riga>` su 457 portano
-        un articolo diverso da una settimana all'altra: se la riga entrasse
-        nell'impronta, la conferma seguirebbe la posizione e non la merce.
-        Il prezzo cambia ogni settimana sullo stesso articolo.
+        On real exports, 449 of 457 `product:<row>` ids carry a different item
+        from one week to the next: if the row were part of the fingerprint, a
+        confirmation would follow the position instead of the item. Price
+        also changes weekly on the same item.
         """
 
         settimana_dopo = dict(PRODOTTO_DOPLO, sourceRow=17, lastUnitPrice=1.31, id="product:17")
         self.assertEqual(impronta_prodotto(PRODOTTO_DOPLO), impronta_prodotto(settimana_dopo))
 
     def test_un_codice_a_barre_riusato_non_eredita_la_conferma(self) -> None:
-        """Il nome sta nell'impronta apposta: gli EAN qui sono scritti a mano.
-
-        Stesso codice e merce diversa deve dare impronte diverse, altrimenti la
-        conferma di ieri si aggancia da sola a un altro prodotto.
+        """The name is part of the fingerprint on purpose: barcodes here are
+        hand-typed. Same code, different item must give different
+        fingerprints, or yesterday's confirmation attaches itself to
+        something else.
         """
 
         altro = dict(PRODOTTO_DOPLO, name="DOPLO BICCHIERI 200CC 25PZ")
         self.assertNotEqual(impronta_prodotto(PRODOTTO_DOPLO), impronta_prodotto(altro))
 
     def test_due_righe_dello_stesso_articolo_hanno_la_stessa_impronta(self) -> None:
-        """Nell'export del 15 agosto la stessa DIXOR compare due volte.
+        """A real export lists the same DIXOR item twice.
 
-        Sono lo stesso articolo: la conferma data sull'una vale sull'altra, e
-        distinguerle vorrebbe dire chiedere due volte la stessa cosa.
+        Same item: a confirmation given on one row applies to the other, and
+        treating them as distinct would mean asking the same question twice.
         """
 
         prima = {"ean": "8019690600935", "name": "DIXOR POLVERE CLASSICO 40MISURINI", "sourceRow": 207}
@@ -174,7 +172,7 @@ class IdentitaDelProdotto(unittest.TestCase):
         self.assertEqual(impronta_prodotto(None), "")
 
     def test_senza_codice_a_barre_resta_il_nome(self) -> None:
-        """Sei prodotti dell'export vero non hanno EAN: non spariscono."""
+        """Six items in real exports have no EAN; they must not vanish."""
 
         self.assertEqual(impronta_prodotto({"name": "SCOTEX ASCIUGATUTTO"}), "|SCOTEX ASCIUGATUTTO")
 
@@ -193,7 +191,7 @@ class ScritturaERilettura(BaseMagazzino):
         self.assertTrue(trovata["in_vigore"])
 
     def test_la_data_e_quella_del_chiamante(self) -> None:
-        """Il magazzino non ha orologio: `quando` arriva da fuori e resta tale."""
+        """The store has no clock: `quando` comes from the caller and is kept as-is."""
 
         self.conferma(quando="2026-01-02T03:04:05+00:00")
         trovata = self.magazzino.cerca("noce", self.articolo())
@@ -201,10 +199,9 @@ class ScritturaERilettura(BaseMagazzino):
         self.assertEqual(trovata["valida_dal"], "2026-01-02T03:04:05+00:00")
 
     def test_dentro_il_magazzino_non_si_chiama_nessun_orologio(self) -> None:
-        """Difesa sul sorgente, perché è l'unico modo di provarne l'assenza.
+        """A source-level check, the only way to prove an absence.
 
-        Una memoria che si data da sola non si può provare in modo ripetibile, e
-        questo progetto ha già pagato quell'errore.
+        A store that timestamps itself can't be tested reproducibly.
         """
 
         sorgente = (RADICE / "app" / "conferme.py").read_text(encoding="utf-8")
@@ -212,7 +209,7 @@ class ScritturaERilettura(BaseMagazzino):
             self.assertNotIn(vietato, sorgente, f"il magazzino si data da solo con {vietato}")
 
     def test_un_no_e_una_memoria_come_le_altre(self) -> None:
-        """«Non è lo stesso prodotto» detto una volta non deve tornare ogni lunedì."""
+        """A "not the same item" answer given once must not be re-asked every week."""
 
         self.conferma(accettata=False, motivo="Il 17 cm non è il dessert.")
         trovata = self.magazzino.cerca("noce", self.articolo())
@@ -220,7 +217,7 @@ class ScritturaERilettura(BaseMagazzino):
         self.assertFalse(trovata["accettata"])
 
     def test_mai_visto_non_e_un_no(self) -> None:
-        """`None` vuol dire «non ho memoria», e porta a una schermata diversa."""
+        """`None` means "no memory of this", and leads to a different screen."""
 
         self.assertIsNone(self.magazzino.cerca("noce", self.articolo()))
         self.assertIsNone(self.magazzino.cerca("noce", "9999999999999|PRODOTTO MAI VISTO"))
@@ -231,10 +228,10 @@ class ScritturaERilettura(BaseMagazzino):
         self.assertFalse(risposta["accettata"])
 
     def test_il_fornitore_non_dipende_dalle_maiuscole(self) -> None:
-        """`NOCE` e `noce` sono lo stesso listino.
+        """`NOCE` and `noce` are the same price list.
 
-        Scrivere l'uno e cercare l'altro farebbe sparire la conferma senza un
-        errore: somiglierebbe a «non l'avevo mai confermato».
+        Writing one and searching for the other would make the confirmation
+        vanish with no error, looking like "never confirmed".
         """
 
         self.conferma(fornitore="NOCE")
@@ -242,7 +239,7 @@ class ScritturaERilettura(BaseMagazzino):
         self.assertIsNotNone(self.magazzino.cerca("  Noce ", self.articolo()))
 
     def test_impronte_vuote_rifiutate(self) -> None:
-        """Una conferma agganciata a `"|||"` tornerebbe su merce a caso."""
+        """A confirmation attached to `"|||"` would resurface on random items."""
 
         buona = impronta_articolo(OFFERTA_NOCE_XLS)
         with self.assertRaises(ValueError):
@@ -268,7 +265,7 @@ class ScritturaERilettura(BaseMagazzino):
         self.assertEqual(self.magazzino.esporta(), [])
 
     def test_una_conferma_senza_data_non_si_scrive(self) -> None:
-        """Senza `quando` non si può controllare un ordine sbagliato a posteriori."""
+        """Without `quando`, a wrong order can't be audited after the fact."""
 
         with self.assertRaises(ValueError):
             self.magazzino.ricorda(
@@ -292,10 +289,10 @@ class SostituzioneEStorico(BaseMagazzino):
         self.assertEqual(len(self.magazzino.tutte()), 1)
 
     def test_lo_storico_resta_e_dice_che_cosa_valeva_prima(self) -> None:
-        """«Cosa avevo deciso prima, e quando» deve avere una risposta.
+        """What did I decide before, and when: must have an answer.
 
-        A valle c'è un ordine vero: se una conferma sbagliata ha già comprato la
-        merce sbagliata, la riga che lo spiega non deve essere stata sovrascritta.
+        A real order sits downstream: if a wrong confirmation already bought
+        the wrong stock, the row that explains it must not be overwritten.
         """
 
         self.conferma(offerta=OFFERTA_NOCE_CSV, quando=ADESSO, motivo="Primo sì.")
@@ -309,10 +306,10 @@ class SostituzioneEStorico(BaseMagazzino):
         self.assertTrue(nuova["in_vigore"])
 
     def test_la_storia_non_ha_buchi(self) -> None:
-        """La riga di prima si chiude nell'istante in cui la nuova entra in vigore.
+        """The previous row closes exactly when the new one takes effect.
 
-        Se i due istanti non coincidessero, «che cosa valeva il 22 agosto»
-        avrebbe due risposte oppure nessuna.
+        If the two instants didn't match, a query for what was valid at a
+        given moment would have two answers or none.
         """
 
         self.conferma(offerta=OFFERTA_NOCE_CSV, quando=ADESSO)
@@ -323,12 +320,12 @@ class SostituzioneEStorico(BaseMagazzino):
         self.assertEqual([voce["valida_fino_a"] for voce in storia], [DOPO, ANCORA_DOPO, None])
 
     def test_riconfermare_la_stessa_identica_risposta_non_scrive_niente(self) -> None:
-        """Difesa contro il chiamante, non contro l'utente.
+        """A guard against the caller, not the user.
 
-        La pagina si autosalva ogni 450 ms: se ogni salvataggio riscrivesse la
-        conferma, una sola decisione diventerebbe centinaia di righe di storico
-        che raccontano decisioni mai prese. E `valida_dal` resta il primo,
-        perché è da allora che quella risposta vale.
+        The page autosaves every 450 ms: if every save rewrote the
+        confirmation, one decision would turn into hundreds of history rows
+        describing decisions that were never made. `valida_dal` stays the
+        first timestamp, since that's when the answer has held since.
         """
 
         self.conferma(quando=ADESSO)
@@ -339,7 +336,7 @@ class SostituzioneEStorico(BaseMagazzino):
         self.assertEqual(storia[0]["valida_dal"], ADESSO)
 
     def test_cambiare_solo_il_motivo_e_un_cambiamento(self) -> None:
-        """Il motivo è parte della risposta: è quello che si legge in un audit."""
+        """The reason is part of the answer: it's what an audit reads."""
 
         self.conferma(quando=ADESSO, motivo="Sì.")
         self.conferma(quando=DOPO, motivo="Sì, verificato sul catalogo cartaceo.")
@@ -362,11 +359,10 @@ class Dimenticare(BaseMagazzino):
         self.assertEqual(self.magazzino.tutte(), [])
 
     def test_la_riga_tolta_resta_nell_audit(self) -> None:
-        """Una conferma sbagliata si toglie, ma non si fa sparire.
+        """A wrong confirmation is removed, not erased.
 
-        Se ha già prodotto un ordine sbagliato, quella riga è l'unica cosa che
-        lo spiega: cancellarla vorrebbe dire correggere il futuro e rendere
-        illeggibile il passato.
+        If it already produced a wrong order, that row is the only thing
+        explaining it: deleting it would fix the future while erasing the past.
         """
 
         self.conferma(motivo="Sì, sbagliando.")
@@ -384,7 +380,7 @@ class Dimenticare(BaseMagazzino):
         self.assertFalse(self.magazzino.dimentica("noce", self.articolo()))
 
     def test_dopo_aver_dimenticato_si_puo_riconfermare(self) -> None:
-        """La coppia torna libera: l'invariante non deve murare la porta."""
+        """The pair is free again: the invariant must not lock the door shut."""
 
         self.conferma(quando=ADESSO)
         self.magazzino.dimentica("noce", self.articolo(), quando=DOPO)
@@ -397,7 +393,7 @@ class Dimenticare(BaseMagazzino):
 
 class DueFornitori(BaseMagazzino):
     def test_lo_stesso_articolo_ha_una_risposta_per_fornitore(self) -> None:
-        """Sì a Noce e no a Larice sullo stesso prodotto è normale."""
+        """Yes to one supplier and no to another, on the same item, is normal."""
 
         self.conferma(fornitore="noce", offerta=OFFERTA_NOCE_XLS, accettata=True)
         self.conferma(fornitore="larice", offerta=OFFERTA_LARICE, accettata=False, motivo="Loro hanno il 22 cm.")
@@ -426,17 +422,15 @@ class DueFornitori(BaseMagazzino):
 
 
 class OffertaCambiata(BaseMagazzino):
-    """La decisione su `cerca`, e il caso vero che la protegge."""
+    """The design decision behind `cerca`, and the real case that protects it."""
 
     def test_cerca_risponde_anche_se_l_articolo_del_fornitore_e_cambiato(self) -> None:
-        """Il caso Noce del 15 agosto 2026.
-
-        51 articoli identici — stesso codice a barre, stessa descrizione — hanno
-        cambiato impronta perché il listino è passato dal CSV del sito al loro
-        `.xls` e il codice articolo è passato da vuoto a pieno. Se `cerca` avesse
-        preteso l'impronta di oggi e risposto «scaduta», quella settimana la
-        memoria si sarebbe svuotata in blocco proprio mentre l'articolo era
-        rimasto lo stesso: cioè il difetto che questo magazzino chiude.
+        """A real Noce case: 51 identical items — same barcode, same
+        description — changed fingerprint because the price list moved from
+        the site's CSV to their `.xls` and the item code went from empty to
+        filled in. If `cerca` required today's fingerprint to match and
+        reported "expired" otherwise, memory would have emptied out that week
+        for items that hadn't actually changed. That's the bug this store closes.
         """
 
         self.conferma(offerta=OFFERTA_NOCE_CSV)
@@ -447,11 +441,11 @@ class OffertaCambiata(BaseMagazzino):
         self.assertNotEqual(trovata["offerta"], impronta_articolo(OFFERTA_NOCE_XLS))
 
     def test_il_chiamante_ha_in_mano_tutto_per_accorgersene(self) -> None:
-        """La conferma non si applica alla cieca: chi chiama confronta.
+        """A confirmation is never applied blindly: the caller compares.
 
-        `cerca` restituisce l'impronta esatta che era stata confermata, così il
-        confronto con quella di oggi è una riga sola e la differenza si può
-        mostrare all'utente invece di ricominciare da zero.
+        `cerca` returns the exact fingerprint that was confirmed, so the
+        comparison against today's is a one-line check, and the difference
+        can be shown to the user instead of starting over.
         """
 
         self.conferma(offerta=OFFERTA_NOCE_CSV, motivo="Confermato sul CSV.")
@@ -477,7 +471,7 @@ class ElencoEdEsportazione(BaseMagazzino):
         self.assertEqual(len(self.magazzino.esporta()), 3)
 
     def test_esporta_si_scrive_in_json(self) -> None:
-        """Un `.db` non si legge a occhio: l'utente deve poter guardare."""
+        """A `.db` file isn't human-readable; the user must be able to inspect it."""
 
         self.conferma(offerta=OFFERTA_NOCE_CSV, quando=ADESSO)
         self.conferma(offerta=OFFERTA_NOCE_XLS, quando=DOPO)
@@ -488,7 +482,7 @@ class ElencoEdEsportazione(BaseMagazzino):
         self.assertIsInstance(riletto[0]["accettata"], bool)
 
     def test_esporta_e_ripetibile(self) -> None:
-        """Due esportazioni dello stesso contenuto si possono confrontare."""
+        """Two exports of the same content must be comparable."""
 
         self.conferma(fornitore="larice", offerta=OFFERTA_LARICE, quando=DOPO)
         self.conferma(fornitore="noce", offerta=OFFERTA_NOCE_XLS, quando=ADESSO)
@@ -498,13 +492,13 @@ class ElencoEdEsportazione(BaseMagazzino):
         )
 
     def test_due_risposte_nello_stesso_istante_restano_in_ordine(self) -> None:
-        """Il caso in cui la sola data non basta a mettere in fila la storia.
+        """The case where the timestamp alone isn't enough to order history.
 
-        Non è teorico: se il chiamante data le conferme al secondo — come fa già
-        il registro degli abbinamenti del progetto — due risposte date di
-        seguito portano lo stesso `quando`, e la riga chiusa e quella nuova
-        hanno lo stesso `valida_dal`. In un audit «prima» e «dopo» devono
-        restare distinguibili.
+        Not theoretical: since callers timestamp confirmations to the second
+        (as the project's adapter registry already does), two answers given in
+        quick succession can carry the same `quando`, so the closed row and the
+        new one share the same `valida_dal`. An audit still needs "before" and
+        "after" to stay distinguishable.
         """
 
         self.conferma(quando=ADESSO, motivo="Primo sì.")
@@ -521,7 +515,7 @@ class ElencoEdEsportazione(BaseMagazzino):
 
 class Persistenza(BaseMagazzino):
     def test_le_conferme_sopravvivono_alla_chiusura(self) -> None:
-        """È tutto il punto: la memoria deve valere il lunedì dopo."""
+        """The whole point of the store: memory must still hold next week."""
 
         self.conferma(offerta=OFFERTA_NOCE_CSV, quando=ADESSO)
         self.conferma(offerta=OFFERTA_NOCE_XLS, quando=DOPO)
@@ -543,14 +537,14 @@ class Persistenza(BaseMagazzino):
         self.assertIsNotNone(riaperto.cerca("noce", self.articolo()))
 
     def test_il_giornale_e_wal(self) -> None:
-        """Il servizio è multi-thread: senza WAL una lettura blocca una scrittura."""
+        """The service is multi-threaded: without WAL, a read would block a write."""
 
         self.assertEqual(self.magazzino.giornale, "wal")
 
     def test_usare_il_magazzino_chiuso_lo_dice(self) -> None:
         self.conferma()
         self.magazzino.chiudi()
-        self.magazzino.chiudi()  # due volte non fa danno
+        self.magazzino.chiudi()  # closing twice is harmless
         with self.assertRaises(MagazzinoNonUtilizzabile):
             self.magazzino.cerca("noce", self.articolo())
         with self.assertRaises(MagazzinoNonUtilizzabile):
@@ -558,7 +552,7 @@ class Persistenza(BaseMagazzino):
 
 
 class FileGuasto(unittest.TestCase):
-    """Un file che non si apre non deve far esplodere il programma."""
+    """A file that won't open must not crash the app."""
 
     def setUp(self) -> None:
         self.cartella = Path(tempfile.mkdtemp(prefix="conferme-guasto-"))
@@ -571,7 +565,7 @@ class FileGuasto(unittest.TestCase):
         self.assertIn(str(percorso), str(caso.exception))
 
     def test_dopo_un_file_corrotto_il_programma_continua(self) -> None:
-        """La forma che il servizio userà: si intercetta e si va avanti senza memoria."""
+        """How the service actually uses this: catch it and carry on without memory."""
 
         rotto = self.cartella / "rotto.db"
         rotto.write_bytes(b"\x00\x01\x02 non sono SQLite \xff\xfe")
@@ -596,7 +590,7 @@ class FileGuasto(unittest.TestCase):
             buono.chiudi()
 
     def test_un_percorso_illeggibile_da_un_errore_dichiarato(self) -> None:
-        """Il percorso è una cartella: capita con un percorso sbagliato in configurazione."""
+        """The path is a directory: happens with a misconfigured path."""
 
         cartella = self.cartella / "sono-una-cartella"
         cartella.mkdir()
@@ -604,7 +598,7 @@ class FileGuasto(unittest.TestCase):
             MagazzinoConferme(cartella)
 
     def test_un_file_di_una_versione_futura_non_si_tocca(self) -> None:
-        """Un rollback del programma non deve riscrivere un file più nuovo di lui."""
+        """Rolling the app back must not rewrite a file newer than itself."""
 
         percorso = self.cartella / "futuro.db"
         conn = sqlite3.connect(str(percorso))
@@ -623,7 +617,7 @@ class FileGuasto(unittest.TestCase):
 
 
 class Concorrenza(unittest.TestCase):
-    """Due che scrivono: il servizio ha il polling della pagina e il filo della pipeline."""
+    """Two writers: the service has the page's polling and the pipeline's thread."""
 
     def setUp(self) -> None:
         self.cartella = Path(tempfile.mkdtemp(prefix="conferme-concorrenza-"))
@@ -651,11 +645,12 @@ class Concorrenza(unittest.TestCase):
         return errori
 
     def test_due_connessioni_scrivono_lo_stesso_articolo(self) -> None:
-        """La coppia contesa: alla fine una sola risposta in vigore, e la storia intera.
+        """The contested pair: exactly one answer ends up in effect, and the
+        full history survives.
 
-        È il caso che rompe le scritture SQLite fatte male: due transazioni che
-        cominciano in lettura e provano a diventare scritture si trovano già
-        bloccate a vicenda e nessuna delle due può più riprovare.
+        The case that breaks a poorly written SQLite write path: two
+        transactions that start in read mode and try to upgrade to a write can
+        end up deadlocked on each other with neither able to retry.
         """
 
         primo = MagazzinoConferme(self.percorso)
@@ -683,8 +678,8 @@ class Concorrenza(unittest.TestCase):
         self.assertEqual(len(in_vigore), 1)
         storia = primo.esporta()
         self.assertEqual(len(storia), 12)
-        # La catena si legge nell'ordine in cui le righe sono state scritte, non
-        # in quello degli orologi: due fili non si mettono d'accordo sull'ora.
+        # The chain reads in write order, not clock order: two threads don't
+        # agree on the time.
         per_scrittura = sorted(storia, key=lambda voce: voce["id"])
         for prima, dopo in zip(per_scrittura, per_scrittura[1:]):
             self.assertEqual(prima["valida_fino_a"], dopo["valida_dal"])
@@ -713,7 +708,7 @@ class Concorrenza(unittest.TestCase):
         self.assertEqual(len(primo.tutte()), 30)
 
     def test_lo_stesso_magazzino_da_piu_fili(self) -> None:
-        """Un oggetto solo, condiviso: è come lo userà il servizio."""
+        """A single shared object, the way the service actually uses it."""
 
         magazzino = MagazzinoConferme(self.percorso)
         self.addCleanup(magazzino.chiudi)
@@ -737,10 +732,10 @@ class Concorrenza(unittest.TestCase):
         self.assertEqual(len(magazzino.tutte()), 36)
 
     def test_il_database_impedisce_due_risposte_in_vigore(self) -> None:
-        """L'invariante non è affidata al mio codice: la tiene l'indice unico.
+        """The invariant isn't left to application code: a unique index holds it.
 
-        Se un giorno una transazione qui dentro sbaglia, il file non si riempie
-        di due risposte contemporanee sulla stessa coppia: la scrittura fallisce.
+        If a transaction here ever gets it wrong, the file won't end up with
+        two simultaneous answers for the same pair: the write just fails.
         """
 
         magazzino = MagazzinoConferme(self.percorso)
@@ -762,17 +757,17 @@ class Concorrenza(unittest.TestCase):
             )
 
 
-# --- Le uguaglianze fra codici a barre --------------------------------------
+# --- Barcode equalities -----------------------------------------------------
 #
-# Il caso vero, misurato il 17 agosto 2026 sul confronto `2026-08-17_1746`:
-# `LUXA SAPONE LIQ. EROG.250ML` sta nel gestionale col codice 4009428623194, che
-# solo CIPRESSO usa (1,28 €/pz); NOCE, LARICE e BETULLA hanno lo stesso
-# articolo sotto 8729721830575, a 1,15, 1,1625 e 1,19. Nessun punteggio puo'
-# dedurlo: nel nome del gestionale la variante — ORIGINAL contro SETA — non c'e'
-# affatto, e infatti la shortlist di BETULLA aveva la riga giusta **seconda**.
-# Da qui in giu' si prova la memoria che chiude quel buco, e il prezzo dei suoi
-# errori: un'uguaglianza sbagliata non rovina un prodotto presso un fornitore,
-# li rovina tutti, e ogni settimana.
+# A real, measured case: "LUXA SAPONE LIQ. EROG.250ML" sits in the
+# management software under code 4009428623194, which only one supplier uses
+# (at 1.28 EUR/pc); three other suppliers list the same item under
+# 8729721830575, at different prices. No scoring can infer this: the variant
+# (ORIGINAL vs SETA) isn't in the management-software name at all, and one
+# supplier's shortlist had the correct row ranked second, not first. What
+# follows tests the memory that closes that gap, and the cost of getting it
+# wrong: a bad equality doesn't spoil one item at one supplier, it spoils it
+# at every supplier, every week.
 
 DOVE_GESTIONALE = "4009428623194"
 DOVE_FORNITORI = "8729721830575"
@@ -798,11 +793,11 @@ class UguaglianzeFraCodiciTests(unittest.TestCase):
         )
 
     def test_l_uguaglianza_non_ha_un_verso(self) -> None:
-        """Dichiararla al contrario e' la stessa dichiarazione, e si toglie uguale.
+        """Declaring it in reverse is the same declaration, and removes the same way.
 
-        Senza l'ordine fisso l'indice unico non fermerebbe la seconda scrittura,
-        e `separa` cercherebbe una coppia scritta nell'altro senso: cioe'
-        un'uguaglianza sbagliata che non si riesce a togliere.
+        Without a fixed order, the unique index wouldn't stop the second
+        write, and `separa` would look for a pair stored the other way round:
+        a wrong equality that can't be removed.
         """
 
         self.magazzino.unisci(DOVE_GESTIONALE, DOVE_FORNITORI, quando=ADESSO)
@@ -813,7 +808,7 @@ class UguaglianzeFraCodiciTests(unittest.TestCase):
         self.assertEqual(self.magazzino.uguaglianze(), [])
 
     def test_le_dichiarazioni_si_incatenano(self) -> None:
-        """A≡B e B≡C fanno un gruppo di tre: chi cerca A trova anche C."""
+        """A≡B and B≡C form a group of three: looking up A also finds C."""
 
         self.magazzino.unisci("111", "222", quando=ADESSO)
         self.magazzino.unisci("222", "333", quando=DOPO)
@@ -822,11 +817,10 @@ class UguaglianzeFraCodiciTests(unittest.TestCase):
         self.assertEqual(self.magazzino.classe("333"), ["111", "222", "333"])
 
     def test_togliendo_l_anello_di_mezzo_restano_due_gruppi_separati(self) -> None:
-        """Si scrive quello che qualcuno ha detto, non quello che se ne deduce.
+        """Only what was declared gets stored, never what can be inferred from it.
 
-        Se `unisci` avesse salvato anche A≡C — che nessuno ha mai dichiarato —
-        togliere A≡B lascerebbe in piedi un'uguaglianza di cui nessuno saprebbe
-        dire da dove è arrivata.
+        If `unisci` also stored the implied A≡C, removing A≡B would leave an
+        equality standing that nobody could trace back to a declaration.
         """
 
         self.magazzino.unisci("111", "222", quando=ADESSO)
@@ -837,15 +831,15 @@ class UguaglianzeFraCodiciTests(unittest.TestCase):
         self.assertEqual(self.magazzino.classe("333"), ["333"])
 
     def test_un_codice_senza_uguaglianze_e_se_stesso(self) -> None:
-        """Chi interroga l'indice per EAN non deve avere un caso in meno."""
+        """A caller querying the index by EAN must not have one fewer case to handle."""
 
         self.assertEqual(self.magazzino.classe(DOVE_GESTIONALE), [DOVE_GESTIONALE])
         self.assertEqual(self.magazzino.classe(""), [])
 
     def test_lo_stesso_codice_scritto_in_modi_diversi_e_lo_stesso_codice(self) -> None:
-        """Nel gestionale gli EAN sono scritti a mano, e il foglio li rilegge
-        come numeri: senza questa riduzione un'uguaglianza dichiarata lunedi'
-        non si ritroverebbe martedi', **senza dare nessun errore**."""
+        """EANs in the management software are hand-typed, and the spreadsheet
+        reads them back as numbers: without this normalization, an equality
+        declared one day wouldn't be found the next, with no error raised."""
 
         self.magazzino.unisci(4009428623194.0, f"'{DOVE_FORNITORI}", quando=ADESSO)
 
@@ -861,8 +855,8 @@ class UguaglianzeFraCodiciTests(unittest.TestCase):
             self.magazzino.unisci(DOVE_GESTIONALE, DOVE_FORNITORI, quando="")
 
     def test_niente_si_cancella_mai(self) -> None:
-        """Se ha gia' prodotto un ordine sbagliato, la riga e' l'unica traccia
-        che lo spiega: `separa` la chiude, non la butta."""
+        """If it already produced a wrong order, the row is the only trace
+        that explains it: `separa` closes it, it doesn't discard it."""
 
         self.magazzino.unisci(
             DOVE_GESTIONALE, DOVE_FORNITORI,
@@ -882,7 +876,7 @@ class UguaglianzeFraCodiciTests(unittest.TestCase):
         self.assertIn("LUXA SAPONE EROGATORE", storia[0]["offerta"])
 
     def test_il_database_impedisce_due_dichiarazioni_contemporanee(self) -> None:
-        """L'invariante la tiene l'indice unico, non il mio codice."""
+        """The unique index holds the invariant, not application code."""
 
         self.magazzino.unisci(DOVE_GESTIONALE, DOVE_FORNITORI, quando=ADESSO)
         intruso = sqlite3.connect(str(self.magazzino.percorso))
@@ -895,9 +889,9 @@ class UguaglianzeFraCodiciTests(unittest.TestCase):
             )
 
     def test_le_classi_sono_stabili(self) -> None:
-        """E' l'artefatto che la catena riceve: due letture dello stesso
-        contenuto devono dare lo stesso documento, altrimenti confrontare la run
-        di questa settimana con quella di prima non vuol dire niente."""
+        """This is the artifact the pipeline consumes downstream: two reads of
+        the same content must produce the same document, or comparing this
+        week's run against last week's is meaningless."""
 
         self.magazzino.unisci("333", "111", quando=ADESSO)
         self.magazzino.unisci("222", "444", quando=ADESSO)

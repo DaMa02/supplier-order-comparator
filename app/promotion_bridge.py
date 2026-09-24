@@ -29,41 +29,33 @@ from promotions import (
 )
 
 
-# Che cosa sia un'intestazione di soglia lo decide il motore, non questo
-# ponte: la copia che stava qui riconosceva «ACQUISTANDO» ma non «ACQUISTANO»,
-# e nel listino del 3-6 agosto quella sola lettera mancante faceva sparire per
-# intero la condizione «ACQUISTANO 5 CT TRA ... IN OMAGGIO 1 CT DI DENT.
-# SENSODENT 15 ML», righe di merce comprese.
+# What counts as a threshold heading is decided by the engine, not this
+# bridge: recognizing the wrong subset of heading variants can make an entire
+# gift-threshold condition disappear from a supplier's price list, order rows
+# included, on a single missed word form.
 e_intestazione_di_soglia = looks_like_threshold_heading
 e_riga_premio = looks_like_reward
 
 
 # ---------------------------------------------------------------------------
-# Il vocabolario del registro: dove un fornitore scrive le sue condizioni
+# Adapter registry vocabulary: where a supplier writes its commercial terms
 # ---------------------------------------------------------------------------
 #
-# ⚠ Fino al 15 agosto 2026 questo lettore conosceva un fornitore solo.  Andava
-# a prendere `larice_v1` per nome, scriveva «LARICE» nei messaggi e leggeva il
-# documento di `paths["larice"]`: le condizioni di chiunque altro non le
-# guardava nessuno, e non c'era modo di dichiararle senza rimettere mano al
-# codice.  Adesso la domanda che il ponte fa al registro e' un'altra — «quali
-# fornitori dichiarano dove tengono le loro condizioni commerciali?» — e la
-# risposta la scrive `references/adapters.json`, non questo file.
+# The bridge asks the registry a general question — "which suppliers declare
+# where they keep their commercial conditions?" — and `references/adapters.json`
+# holds the answer, not this file. That keeps the reader from being hardwired
+# to a single supplier, with no way to declare another one's conditions
+# without a code change.
 #
-# Misura del 15 agosto 2026 sui quattro listini veri della settimana, che e' il
-# motivo per cui oggi lo dichiara **soltanto** LARICE: LARICE 13 intestazioni
-# di soglia e 13 righe premio in colonna G; BETULLA 12 testi con una parola
-# promozionale dentro la descrizione, di cui 7 sono la parola «Ogni» di «Ogni
-# Superficie»; CIPRESSO 1, ed e' un nome di prodotto che contiene «offerta»;
-# NOCE la colonna `descrizione_offerta` vuota su tutte e 18.074 le righe e
-# la colonna `offerta` che dice `NO` su tutte e 17.148 quelle compilate.
-# Dichiararle per gli altri tre vorrebbe dire inventare offerte che non
-# esistono, che e' peggio del difetto.
+# Checked column by column against real price lists: only `larice` has
+# threshold headings and reward rows (13 of each). The other suppliers show
+# no such structure, at most an occasional promotional word inside a product
+# description. Declaring conditions for those would mean inventing offers
+# that don't exist, which is worse than not reading them.
 
-# I ruoli che un lettore di condizioni sa usare, e la parola con cui li chiama
-# chi usa il programma: la seconda serve a dire quale manca senza nominare una
-# colonna di foglio elettronico.  L'ordine e' quello in cui compaiono nel
-# messaggio.
+# The roles a condition reader knows how to use, and the word the operator
+# knows them by: the label is what says which one is missing without naming a
+# spreadsheet column. Order matches how they appear in the message.
 _RUOLI_DEL_LETTORE = {
     "text": "le descrizioni",
     "reward": "il nome dell'articolo in omaggio",
@@ -71,26 +63,22 @@ _RUOLI_DEL_LETTORE = {
     "row_code": "i codici delle righe",
 }
 
-# Le due forme in cui i listini veri scrivono una condizione commerciale.
+# The two layouts real price lists use for a commercial condition.
 #
-# `blocchi`: la condizione occupa piu' righe — l'intestazione con la quantita'
-# da acquistare, poi la merce ammessa, poi la riga con l'omaggio.  E' come
-# scrive LARICE, ed e' l'unica forma misurata su un listino vero.
+# `blocchi` (blocks): the condition spans several rows — the heading with the
+# quantity to buy, then the eligible items, then the reward row.
 #
-# `riga`: una riga porta per intero la sua condizione, in una colonna sola.
-# E' come scriverebbero BETULLA («LINDA SETA ... 11+1 Gratis Pz», dentro la
-# descrizione) e NOCE (la colonna `descrizione_offerta`, oggi vuota): non
-# la dichiara nessuno, ma senza questa forma quei due non si potrebbero
-# accendere con una riga di registro il giorno che scrivono qualcosa — e
-# «funziona senza toccare il codice» sarebbe falso proprio per loro.
+# `riga` (row): a single row carries the whole condition in one column. No
+# supplier currently declares this layout, but without it a supplier whose
+# price list writes conditions this way could never be turned on with just a
+# registry entry.
 LAYOUT_BLOCCHI = "blocchi"
 LAYOUT_RIGA = "riga"
 
-# Che cosa pretende ciascuna forma.  Una soglia a blocchi ha bisogno di tutte
-# e quattro le colonne: senza il nome del premio la condizione si ricompone lo
-# stesso ma esce «da verificare» invece che confermata, e l'utente perde
-# l'omaggio in un altro modo.  Una condizione scritta per intero dentro una
-# riga sola ha bisogno soltanto della colonna dove sta scritta.
+# What each layout requires. A block-form threshold needs all four columns:
+# without the reward name the condition still gets reconstructed, but comes
+# out "to be checked" instead of confirmed. A single-row condition needs only
+# the column it's written in.
 _COLONNE_RICHIESTE = {
     LAYOUT_BLOCCHI: ("text", "reward", "ean", "row_code"),
     LAYOUT_RIGA: ("text",),
@@ -98,38 +86,36 @@ _COLONNE_RICHIESTE = {
 
 
 def colonne_richieste_dal_layout(forma: Any) -> tuple[str, ...] | None:
-    """Che cosa pretende una forma di scrittura, o `None` se non la conosciamo.
+    """Return the columns a layout requires, or `None` if the layout is unknown.
 
-    Serve a chi raccoglie la dichiarazione **prima** che arrivi qui: la
-    mappatura guidata deve poter rifiutare subito una forma senza le sue
-    colonne, invece di lasciar scrivere nel registro una dichiarazione che poi
-    ogni settimana produce «non so piu' dove il listino tiene …».  La tabella
-    resta una sola: due elenchi da tenere allineati divergono, e quello che si
-    dimentica e' sempre quello che fa sparire le soglie con omaggio.
+    Used by whoever collects the declaration, before it reaches this module:
+    the guided mapping step can reject a layout missing its columns
+    immediately, instead of letting the registry save a declaration that
+    later produces "non so più dove il listino tiene …" (the declared columns
+    can't be found) on every run.
     """
 
     return _COLONNE_RICHIESTE.get(str(forma or "").strip().casefold())
 
 
 def nomi_dei_ruoli() -> dict[str, str]:
-    """I ruoli del lettore col nome che ne ha l'utente, per chi deve chiederli."""
+    """Return the reader's roles keyed by the label the operator sees, for whoever prompts for them."""
 
     return dict(_RUOLI_DEL_LETTORE)
 
-# Oltre questa distanza dall'intestazione un blocco non e' piu' credibile: le
-# righe che seguono appartengono ad altro. Il numero e' una difesa contro un
-# listino malformato, non una regola commerciale, e il registro puo' dirne un
-# altro con `max_block_rows`.
+# Beyond this distance from the heading a block is no longer credible: the
+# following rows belong to something else. A defense against a malformed
+# price list, not a commercial rule; the registry can override it per adapter
+# with `max_block_rows`.
 _RIGHE_MASSIME_DI_UN_BLOCCO = 500
 
-# I primi otto byte di un documento Excel 97-2003.  Il formato lo decidono i
-# byte e non l'estensione — lo dichiara anche il registro, nella nota
-# dell'adattatore Noce — e chi sa leggerli e' `app/xls_reader.py`.
+# The first eight bytes of an Excel 97-2003 document. Format is decided by
+# these bytes, not the extension; `app/xls_reader.py` reads that format.
 _FIRMA_XLS = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
 
 def _codici_non_ordinabili(adattatore: dict[str, Any]) -> set[str]:
-    """I codici che il registro dichiara non acquistabili, per quel listino."""
+    """Return the codes the registry declares non-purchasable for that price list."""
 
     codici = registro.codici_di_riga(adattatore)
     return {
@@ -140,19 +126,17 @@ def _codici_non_ordinabili(adattatore: dict[str, Any]) -> set[str]:
 
 
 def _fornitori_con_promozione_inclusa() -> set[str]:
-    """I fornitori che dichiarano il di piu' gia' compreso nel prezzo di listino.
+    """Return the suppliers who declare their extra goods as already included in the list price.
 
-    Da BETULLA «11+1» non e' uno sconto da applicare: il prezzo che manda lo
-    contiene gia'.  E' una convenzione del rapporto con quel fornitore, non
-    una proprieta' del programma, e finche' stava scritta qui come
-    `supplier == "betulla"` il giorno che un altro fornitore avesse fatto lo
-    stesso patto non c'era modo di dichiararlo senza rimettere mano al codice
-    — e chi ci avesse provato dal registro non avrebbe visto succedere niente.
+    A "buy N get M" deal that a supplier's stated price already reflects is
+    not a discount to apply on top; it's a term of the commercial
+    relationship with that supplier, declared by the registry rather than
+    hardcoded, so a new supplier can adopt the same arrangement without a
+    code change.
 
-    Il fornitore si cerca per `supplier_id`: andare a prendere l'adattatore
-    per nome («betulla_v1») sarebbe lo stesso confronto con un altro vestito.
-    Uno stesso fornitore puo' avere piu' di un adattatore — Noce ne ha uno
-    per il .xls e uno per il CSV — e basta che uno lo dichiari.
+    Looked up by `supplier_id`, not by adapter name: a supplier can have more
+    than one adapter (one per file format), and it's enough that one of them
+    declares it.
     """
 
     fornitori: set[str] = set()
@@ -167,15 +151,15 @@ def _fornitori_con_promozione_inclusa() -> set[str]:
 
 
 def fornitori_con_condizioni_dichiarate() -> dict[str, list[dict[str, Any]]]:
-    """Per ogni fornitore, gli adattatori che dicono dove tiene le condizioni.
+    """Return, per supplier, the adapters that declare where its conditions live.
 
-    Un fornitore che non lo dichiara non viene letto e non produce nessun
-    avviso: e' la differenza fra «non ha condizioni commerciali» e «non so
-    leggerle», e confonderle riempirebbe la pagina di righe che non chiedono
-    di fare niente.
+    A supplier that doesn't declare this is not read and produces no warning:
+    that's the difference between "has no commercial conditions" and "can't
+    read them", and conflating the two would fill the page with rows asking
+    for no action.
 
-    Lo stesso fornitore puo' avere piu' di un adattatore, uno per formato di
-    documento: si tengono tutti, e quale usare lo decide il documento vero.
+    A supplier can have more than one adapter, one per document format; all
+    are kept, and the actual document decides which one to use.
     """
 
     dichiarati: dict[str, list[dict[str, Any]]] = {}
@@ -191,25 +175,18 @@ def fornitori_con_condizioni_dichiarate() -> dict[str, list[dict[str, Any]]]:
 def _adattatore_per_il_documento(
     voci: list[dict[str, Any]], path: Path | None, adapter_id: str | None = None
 ) -> dict[str, Any]:
-    """Fra gli adattatori di un fornitore, quello del documento che si ha in mano.
+    """Among a supplier's adapters, return the one matching the document at hand.
 
-    Noce ne ha due, uno per il `.xls` e uno per il CSV: leggere le
-    condizioni con la dichiarazione dell'altro formato vorrebbe dire cercare
-    una colonna dove non c'e'.
+    A supplier can have two adapters for the same file extension (e.g. an old
+    layout without headers and a new one with a header row): the extension
+    alone can't disambiguate them. Which adapter recognized the document is
+    recorded by the review (`adapterId`), matched through
+    `registro.adattatore_base` because a learned adapter carries the same id
+    with `__locale` appended.
 
-    ⚠ **L'estensione da sola non basta piu'.**  Dal 4 settembre 2026 LARICE ha
-    due adattatori dello **stesso** formato — il canvass vecchio senza
-    intestazioni e quello nuovo con l'intestazione alla riga 11 — e la vecchia
-    regola avrebbe restituito sempre il primo dei due, cioe' avrebbe letto le
-    soglie del listino nuovo nelle colonne del vecchio.  Non sarebbe uscito un
-    errore: sarebbero uscite zero condizioni, in silenzio.  Chi ha riconosciuto
-    il documento lo dice la review (`adapterId`), e si passa da
-    `registro.adattatore_base` perche' quello imparato porta lo stesso id con
-    `__locale` in coda.
-
-    Se l'identificativo c'e' ma non e' fra questi, e i candidati sono piu' di
-    uno, non si indovina: meglio nessuna condizione che le condizioni di un
-    altro documento.
+    If the id is present but not among the candidates, and there is more than
+    one candidate, this doesn't guess: no condition is safer than reading the
+    condition of a different document.
     """
 
     if adapter_id:
@@ -229,14 +206,13 @@ def _adattatore_per_il_documento(
 
 
 def _indice_di_colonna(dichiarata: Any) -> int | None:
-    """La colonna dichiarata dal registro, come numero a partire da 1.
+    """Return the registry's declared column as a 1-based index.
 
-    Il listino Larice non ha nessuna riga di intestazione: li' una colonna si
-    puo' indicare solo per lettera («R») o per numero (18).  Una stringa di
-    cifre non vale come numero, ed e' la stessa regola che applica il registro:
-    altrove quella e' il nome di un'intestazione, e rispondere «colonna 9» a
-    una dichiarazione che nessun altro lettore interpreta cosi' vorrebbe dire
-    leggere la colonna sbagliata in silenzio.
+    Some price lists have no header row, so a column can only be given by
+    letter ("R") or by number (18). A digit string is not accepted as a
+    number, matching the rule the registry itself applies: elsewhere a digit
+    string is a header name, and reading it as "column 9" here would silently
+    pick the wrong column.
     """
 
     if isinstance(dichiarata, bool):
@@ -253,15 +229,14 @@ def _indice_di_colonna(dichiarata: Any) -> int | None:
 
 
 def _dove_sta_la_colonna(adattatore: dict[str, Any], campo: Any) -> int | None:
-    """Dove l'adattatore dice che sta la colonna che chiama cosi'.
+    """Return where the adapter says the named column is.
 
-    Si guarda nelle stesse dichiarazioni che segue il lettore dei prezzi —
-    `column_map` per chi indica le colonne per lettera, le posizioni della
-    firma per chi le indica per nome di intestazione.  Due idee diverse di
-    dove sta una colonna vorrebbero dire prezzi giusti e condizioni sparite,
-    senza niente che le colleghi; e quando l'utente conferma una variazione di
-    schema il registro riscrive quelle, non altro, quindi le condizioni
-    seguono i prezzi invece di restare indietro di una settimana.
+    Reads the same declarations the price reader follows — `column_map` for
+    adapters that give columns by letter, the header signature's positions for
+    those that give them by header name. This keeps prices and conditions
+    pointed at the same columns: when the operator confirms a schema change,
+    the registry rewrites those declarations, so conditions track prices
+    instead of silently falling behind.
     """
 
     nome = str(campo or "").strip()
@@ -283,17 +258,16 @@ def _dove_sta_la_colonna(adattatore: dict[str, Any], campo: Any) -> int | None:
 def _colonne_delle_condizioni(
     adattatore: dict[str, Any], dichiarazione: dict[str, Any]
 ) -> tuple[str, dict[str, int], list[str]]:
-    """La forma di scrittura, le colonne che servono e quelle che mancano.
+    """Return the layout, the resolved columns, and the ones still missing.
 
-    Prima queste posizioni stavano scritte nel codice.  Il giorno che il
-    fornitore ne sposta una — o che l'utente conferma una variazione di
-    schema, e il registro impara la mappatura nuova — il lettore continuava a
-    guardare la colonna di prima: nessun errore, nessun blocco, e le soglie
-    con omaggio sparivano dal riepilogo senza una parola.  Chi ordina 4
-    cartoni invece di 5 perde il cartone in omaggio e non lo sa.
+    Column positions are read from the registry rather than hardcoded, so
+    that when a supplier moves a column — or the operator confirms a schema
+    change and the registry learns the new mapping — the reader follows it
+    instead of silently reading the old column and dropping gift thresholds
+    from the summary.
 
-    Una colonna che il registro non dichiara non si indovina: finisce
-    nell'elenco che torna di fianco, e chi legge si ferma e lo dice.
+    A column the registry doesn't declare is never guessed: it's returned in
+    the missing-columns list instead, so the caller can report it.
     """
 
     forma = str(dichiarazione.get("layout") or "").strip().casefold()
@@ -314,12 +288,12 @@ def _colonne_delle_condizioni(
 
 
 def _firma_del_registro() -> int:
-    """Quando il registro e' cambiato l'ultima volta.
+    """Return when the registry file was last modified.
 
-    Entra nella firma della lettura perche' adesso le colonne vengono di li':
-    se l'utente conferma una variazione di schema e il listino resta lo stesso
-    file, senza questo il servizio continuerebbe a mostrare fino al riavvio i
-    blocchi letti con la mappatura vecchia.
+    Part of the read cache key: columns are resolved from the registry, so if
+    the operator confirms a schema change while the price list file itself is
+    unchanged, the cache must still invalidate — otherwise it would keep
+    serving blocks read with the old mapping until restart.
     """
 
     try:
@@ -329,12 +303,11 @@ def _firma_del_registro() -> int:
 
 
 def _cella(row: tuple[Any, ...], colonna: int | None) -> str:
-    """Il testo di una cella, indicata come la indica il registro (1 = A).
+    """Return a cell's text, indexed the way the registry indexes columns (1 = A).
 
-    Il lettore del `.xls` consegna ogni cella come coppia `(valore,
-    grassetto)`: il grassetto qui non serve, e senza toglierlo il testo di una
-    condizione diventerebbe la stringa «('ACQUISTANDO 5 CT TRA', False)», che
-    nessun rilevatore riconosce.
+    The `.xls` reader hands back each cell as a `(value, bold)` pair; without
+    unwrapping it, a condition's text would become the literal string
+    `"('ACQUISTANDO 5 CT TRA', False)"`, which no detector recognizes.
     """
 
     if colonna is None or len(row) < colonna:
@@ -346,7 +319,7 @@ def _cella(row: tuple[Any, ...], colonna: int | None) -> str:
 
 
 def _elenco_in_italiano(voci: list[str]) -> str:
-    """«le descrizioni e il codice a barre», non «['description', 'ean']»."""
+    """Join items as a natural-language list ("the descriptions and the barcode"), not a Python repr."""
 
     if len(voci) < 2:
         return voci[0] if voci else ""
@@ -354,15 +327,14 @@ def _elenco_in_italiano(voci: list[str]) -> str:
 
 
 def _errore_di_lettura(fornitore: str, motivo: str) -> dict[str, str]:
-    """Il modo in cui l'utente viene a sapere che le condizioni mancano.
+    """Build the message the operator sees when a supplier's conditions can't be read.
 
-    La pagina ne fa un avviso «Offerte non lette» e ci aggiunge da se' che
-    prezzi e confronto restano validi: qui va detto soltanto che cosa e'
-    successo, in una riga, senza nominare colonne, file o funzioni.
+    The page turns this into an "offers not read" warning and adds on its own
+    that prices and the comparison remain valid; this function states only
+    what happened, in one line, without naming columns, files or functions.
 
-    Come si chiama il fornitore lo dice il registro.  Quando stava scritto qui
-    («LARICE», maiuscolo, accanto a `supplier="larice"`) un fornitore
-    imparato sarebbe comparso nei messaggi con il suo identificativo tecnico.
+    The supplier's display name comes from the registry, so a learned
+    supplier shows its proper name instead of its internal id.
     """
 
     nome = registro.nome_del_fornitore(fornitore)
@@ -374,7 +346,7 @@ def _errore_di_lettura(fornitore: str, motivo: str) -> dict[str, str]:
 
 
 def _errore_di_documento(fornitore: str, path: Path, motivo: str) -> dict[str, str]:
-    """Il documento c'è ma non si è riusciti a leggerlo, o non fino in fondo."""
+    """Build the message for a document that exists but couldn't be read fully."""
 
     nome = registro.nome_del_fornitore(fornitore)
     return {
@@ -388,24 +360,24 @@ def _errore_di_documento(fornitore: str, path: Path, motivo: str) -> dict[str, s
 
 
 def _source_paths(review: dict[str, Any]) -> tuple[dict[str, Path], set[str], dict[str, str]]:
-    """I listini dichiarati dalla review, e quelli che non si aprono piu'.
+    """Return the price lists the review declares, and the ones no longer reachable.
 
-    Un fornitore dichiarato dalla review il cui documento non si risolve non
-    e' la stessa cosa di un fornitore che in questa run non c'e': il primo
-    aveva delle condizioni commerciali e adesso non le ha piu', e va detto.
-    Senza questa distinzione «il listino non c'e' piu'» e «questo fornitore
-    non fa offerte» arrivavano all'utente nello stesso modo, cioe' in silenzio.
+    A supplier the review declares whose document can't be resolved is not
+    the same as a supplier absent from this run: the former had commercial
+    conditions and lost them, and that's worth reporting. Without this
+    distinction, "the price list is gone" and "this supplier makes no offers"
+    would both surface as silence.
 
-    Il fornitore che la review non dichiara affatto resta fuori: avvisare che
-    mancano le soglie di chi non e' nel confronto vorrebbe dire un avviso a
-    ogni ricalcolo, e un avviso che c'e' sempre non lo legge piu' nessuno.
+    A supplier the review doesn't declare at all is excluded: warning about
+    missing thresholds for suppliers outside the comparison would fire on
+    every recompute, and a warning that's always present stops being read.
     """
 
     result: dict[str, Path] = {}
     senza_documento: set[str] = set()
-    # Quale adattatore ha riconosciuto quel documento: serve quando un
-    # fornitore ne ha piu' d'uno dello stesso formato, e la sola estensione non
-    # basta piu' a dire quale delle due dichiarazioni vale.
+    # Which adapter recognized that document: needed when a supplier has more
+    # than one adapter for the same format, where the extension alone can't
+    # say which declaration applies.
     adattatori: dict[str, str] = {}
     for item in review.get("files") or []:
         supplier = str(item.get("supplierId") or "").casefold()
@@ -420,8 +392,8 @@ def _source_paths(review: dict[str, Any]) -> tuple[dict[str, Path], set[str], di
                 adattatori[supplier] = riconosciuto
         else:
             senza_documento.add(supplier)
-    # Lo stesso fornitore puo' avere piu' di una voce: se almeno un documento
-    # si apre, non manca niente.
+    # A supplier can have more than one entry: if at least one document
+    # resolves, nothing is missing.
     return result, senza_documento - set(result), adattatori
 
 
@@ -430,11 +402,11 @@ def _row_ref(supplier: str, offer: dict[str, Any]) -> str:
 
 
 def _foglio_scelto(nomi: list[str], dichiarato: Any) -> str | None:
-    """Quale foglio, fra quelli del documento, dice di leggere il registro.
+    """Return which of the document's sheets the registry declares to read.
 
-    «FIRST» e' la parola che il registro usa gia' altrove per dire «il primo
-    foglio»; un nome vero si confronta come lo confronta il registro, cioe'
-    senza badare a punti, spazi e maiuscole.
+    `"FIRST"` is the sentinel the registry already uses elsewhere for "the
+    first sheet"; a real sheet name is compared the way the registry compares
+    them, ignoring dots, spaces and case.
     """
 
     if not nomi:
@@ -453,12 +425,11 @@ def _foglio_scelto(nomi: list[str], dichiarato: Any) -> str | None:
 def _righe_del_documento(
     path: Path, foglio_dichiarato: Any
 ) -> Iterator[tuple[str, Iterator[tuple[int, tuple[Any, ...]]]]]:
-    """Il foglio dichiarato dal registro, riga per riga, qualunque sia il formato.
+    """Yield the registry-declared sheet row by row, regardless of file format.
 
-    Un fornitore che manda un Excel 97-2003 non e' meno leggibile di uno che
-    manda un `.xlsx`: Noce manda **solo** quel formato, e un motore che
-    dicesse «dichiara pure dove tieni le condizioni, tanto il tuo documento non
-    lo apro» sarebbe un altro cablaggio, solo meno visibile.
+    A supplier sending an Excel 97-2003 file is not less readable than one
+    sending `.xlsx`; refusing that format would just be another
+    single-supplier assumption, less visible than the last one.
     """
 
     with path.open("rb") as documento:
@@ -485,12 +456,12 @@ def _righe_del_documento(
 def _riferimento(
     colonne: dict[str, int], foglio: str, prima_riga: int, ultima_riga: int
 ) -> str:
-    """Dove sta il blocco dentro il listino, con le lettere di colonna vere.
+    """Return where the block sits in the price list, using real column letters.
 
-    E' l'unico appiglio che ha l'utente per ritrovare la condizione nel file
-    del fornitore, ed entra anche nell'identificativo della promozione: se le
-    colonne si spostano deve spostarsi anche lui, altrimenti manda a guardare
-    una colonna dove non c'e' niente.
+    This is the operator's only way to find the condition back in the
+    supplier's file, and it also feeds into the promotion's id: if columns
+    move, this reference must move with them, or it points at an empty
+    column.
     """
 
     prima = get_column_letter(colonne["text"])
@@ -507,13 +478,12 @@ def _condizione_da_leggere(
     righe_ammesse: list[int],
     motivo: str,
 ) -> dict[str, Any]:
-    """Una condizione dichiarata dal fornitore che il programma non ricompone.
+    """Build a promotion for a supplier-declared condition the program can't reconstruct.
 
-    Non e' un errore di lettura del file: le righe ci sono e la merce si
-    ordina, ma il patto commerciale non diventa un calcolo. Diventa allora una
-    «offerta ambigua», cioe' l'unico esito che la pagina mostra senza usarlo
-    per nessun conto: cosi' l'utente la vede e la conta, invece di non sapere
-    che c'era.
+    Not a file-reading error: the rows exist and the items can be ordered,
+    but the commercial deal doesn't reduce to a calculation. It becomes an
+    "ambiguous offer" — shown to the operator but excluded from any total —
+    so it's visible and counted instead of silently dropped.
     """
 
     return make_promotion(
@@ -537,26 +507,25 @@ def _condizione_da_leggere(
 class PromotionService:
     def __init__(self) -> None:
         self.lock = threading.RLock()
-        # Lo stato della lettura, per fornitore.  Prima erano quattro campi con
-        # «larice» nel nome: bastava quello per raccontare che il programma
-        # sapeva leggere le condizioni di un fornitore solo.
+        # Read state, keyed by supplier: cache key, parsed conditions, and any
+        # read error, so a price list is only re-read when its signature
+        # changes.
         self.firme_dei_listini: dict[str, tuple[str, int, int]] = {}
         self.condizioni_lette: dict[str, list[dict[str, Any]]] = {}
         self.errori_dei_listini: dict[str, dict[str, str]] = {}
-        # Quante condizioni l'ultima lettura ha dichiarato senza riuscire a
-        # ricomporle, fornitore per fornitore: sono nella pagina come «da
-        # verificare», e questo numero permette di accorgersene senza contarle
-        # a mano.
+        # How many conditions the last read declared but couldn't reconstruct,
+        # per supplier: shown on the page as "to be checked"; this count lets
+        # that be reported without counting them by hand.
         self.condizioni_da_verificare: dict[str, int] = {}
-        # Come per il catalogo: i fornitori rimasti fuori dall'ultima lettura,
-        # con il motivo in italiano.  Il server li mostra all'utente.
+        # Suppliers left out of the last read, with the reason. Shown to the
+        # operator by the server, same pattern as the catalog's load errors.
         self.load_errors: list[dict[str, str]] = []
-        # Quanti sconti gia' compresi nel prezzo l'ultima lettura ha tolto
-        # dall'elenco: non si mostrano (sono rumore, uno per riga di listino) ma
-        # il numero resta a disposizione di chi voglia dirlo in una riga sola.
+        # How many discounts already included in the price the last read
+        # dropped from the list: not shown (one per price-list row, pure
+        # noise), but kept available as a single-line count.
         self.sconti_gia_nel_prezzo: int = 0
 
-    # -- la lettura di un fornitore ----------------------------------------
+    # -- reading a single supplier --------------------------------------
 
     def _condizioni_del_fornitore(
         self,
@@ -568,10 +537,9 @@ class PromotionService:
     ) -> list[dict[str, Any]]:
         if path is None:
             if documento_sparito:
-                # «Nessuna promozione» e «il listino non c'e' piu'» erano la
-                # stessa identica cosa: le soglie sparivano dal riepilogo e
-                # nessun avviso lo diceva.  Chi ordina 4 cartoni invece di 5
-                # perde il cartone in omaggio senza che niente glielo dica.
+                # Without this, "no promotions" and "the price list is gone"
+                # would be indistinguishable: thresholds vanish from the
+                # summary with no warning to explain why.
                 self.load_errors.append(
                     _errore_di_lettura(fornitore, "il listino non è fra i documenti caricati")
                 )
@@ -584,8 +552,8 @@ class PromotionService:
                 return []
             firma = (str(path), path.stat().st_mtime_ns, _firma_del_registro())
         except OSError as exc:
-            # Un percorso di rete caduto o i permessi negati fanno fallire gia'
-            # `stat`: anche quello e' un avviso, non una pagina che non si apre.
+            # A dropped network path or a permission error already fails at
+            # `stat`; that's a warning too, not a page that refuses to open.
             nome = registro.nome_del_fornitore(fornitore)
             self.load_errors.append({
                 "supplier": fornitore,
@@ -612,7 +580,7 @@ class PromotionService:
     def condizioni_di(
         self, fornitore: str, path: Path, adapter_id: str | None = None
     ) -> tuple[list[dict[str, Any]], dict[str, str] | None]:
-        """Le condizioni commerciali di un fornitore, lette dal suo documento."""
+        """Return a supplier's commercial conditions, read from its document."""
 
         voci = fornitori_con_condizioni_dichiarate().get(str(fornitore).casefold()) or []
         return self._leggi_condizioni(
@@ -622,17 +590,16 @@ class PromotionService:
     def _leggi_condizioni(
         self, fornitore: str, adattatore: dict[str, Any], path: Path
     ) -> tuple[list[dict[str, Any]], dict[str, str] | None]:
-        """Le condizioni commerciali di un listino, o il motivo per cui mancano.
+        """Return a price list's commercial conditions, or the reason they're missing.
 
-        Un listino illeggibile costa le sue condizioni commerciali, non la
-        pagina intera: prima di questa guardia un file rovinato faceva fallire
-        `GET /api/review`, e all'utente non si apriva piu' niente.
+        An unreadable price list costs only its own commercial conditions,
+        not the whole page: without this being isolated, a corrupted file
+        would fail `GET /api/review` and leave the operator with nothing to
+        open.
 
-        Dove stanno le colonne e come sono disposte lo dice il registro degli
-        adattatori, che e' la stessa dichiarazione seguita dal lettore dei
-        prezzi: due idee diverse di dove sta la colonna dello sconto
-        vorrebbero dire prezzi giusti e soglie sparite, senza niente che le
-        colleghi.
+        Column positions and layout come from the same adapter registry the
+        price reader follows, keeping prices and conditions pointed at the
+        same columns.
         """
 
         dichiarazione = adattatore.get("commercial_conditions")
@@ -655,11 +622,11 @@ class PromotionService:
                     promozioni = self._righe(
                         fornitore, adattatore, dichiarazione, colonne, titolo, righe
                     )
-        except Exception as exc:  # noqa: BLE001 - il motivo lo legge l'utente
+        except Exception as exc:  # noqa: BLE001 - the reason is surfaced to the operator
             return [], _errore_di_documento(fornitore, path, str(exc))
         return promozioni, None
 
-    # -- le due forme di scrittura -----------------------------------------
+    # -- the two layouts -----------------------------------------------
 
     def _righe(
         self,
@@ -670,7 +637,7 @@ class PromotionService:
         titolo: str,
         righe: Iterator[tuple[int, tuple[Any, ...]]],
     ) -> list[dict[str, Any]]:
-        """Una riga, una condizione scritta per intero in una colonna sola."""
+        """Parse the "row" layout: one row carries a whole condition in a single column."""
 
         prima_riga = _numero_o(dichiarazione.get("data_start_row"), 1)
         non_ordinabili = _codici_non_ordinabili(adattatore)
@@ -706,13 +673,13 @@ class PromotionService:
         titolo: str,
         righe: Iterator[tuple[int, tuple[Any, ...]]],
     ) -> list[dict[str, Any]]:
-        """Una condizione su più righe: intestazione, merce ammessa, omaggio."""
+        """Parse the "blocks" layout: heading, eligible items, then the reward row."""
 
         prima_riga = _numero_o(dichiarazione.get("data_start_row"), 1)
         massimo = _numero_o(dichiarazione.get("max_block_rows"), _RIGHE_MASSIME_DI_UN_BLOCCO)
-        # Quali codici marchino una riga non acquistabile lo dice il registro
-        # degli adattatori: qui serve per non contare il premio fra i prodotti
-        # che fanno raggiungere la soglia.
+        # Which codes mark a row as non-purchasable comes from the adapter
+        # registry; needed here so the reward row isn't counted among the
+        # items that reach the threshold.
         non_ordinabili = _codici_non_ordinabili(adattatore)
 
         promozioni: list[dict[str, Any]] = []
@@ -725,14 +692,12 @@ class PromotionService:
                 continue
             ultima_riga = row_number
             descrizione = _cella(row, colonne["text"])
-            # ⚠ Quando il fornitore scrive il nome del premio dentro la riga
-            # stessa, il registro dichiara la stessa colonna per i due ruoli, e
-            # leggerla due volte la fa uscire scritta due volte: sul canvass
-            # nuovo di LARICE — testo e premio tutt'e due in colonna E — la
-            # frase diventava «SH. A/ERBAR. 250ML LAVANDA IN OMAGGIO 1CT SH.
-            # A/ERBAR. 250ML LAVANDA».  La soglia usciva giusta lo stesso: e' la
-            # frase che l'utente legge a sporcarsi, che e' la malattia del §17.
-            # Dove le colonne sono due (LARICE vecchio, G e J) non cambia nulla.
+            # When a supplier writes the reward name in the same column as
+            # the description, the registry declares the same column for both
+            # roles; reading it twice would duplicate it in the assembled
+            # text. The threshold itself still comes out correct — only the
+            # operator-facing text would get noisy. Where the two roles use
+            # separate columns, this has no effect.
             nome_del_premio = (
                 "" if colonne["reward"] == colonne["text"] else _cella(row, colonne["reward"])
             )
@@ -741,8 +706,8 @@ class PromotionService:
 
             if e_intestazione_di_soglia(descrizione):
                 if heading_row is not None:
-                    # Una seconda intestazione senza riga premio in mezzo:
-                    # la prima condizione non si ricompone piu'.
+                    # A second heading with no reward row in between: the
+                    # first condition can no longer be reconstructed.
                     promozioni.append(_condizione_da_leggere(
                         fornitore,
                         _riferimento(colonne, titolo, heading_row, row_number - 1),
@@ -755,8 +720,8 @@ class PromotionService:
                 continue
             if heading_row is None:
                 if e_riga_premio(descrizione):
-                    # Un premio senza intestazione: la soglia che lo
-                    # governa non e' stata riconosciuta, ma la merce c'e'.
+                    # A reward row with no heading: the threshold governing it
+                    # wasn't recognized, but the item is real.
                     promozioni.append(_condizione_da_leggere(
                         fornitore,
                         _riferimento(colonne, titolo, row_number, row_number),
@@ -773,17 +738,17 @@ class PromotionService:
                     source_reference=_riferimento(colonne, titolo, heading_row, row_number),
                     source_text=source_text,
                     eligible={"source_rows": eligible_rows, "mix_allowed": True},
-                    # L'EAN della riga premio e' gia' qui: senza, il
-                    # contratto della promozione esce con reward.ean nullo
-                    # e nessuno puo' risalire all'articolo regalato.
+                    # The reward row's EAN is available right here; without
+                    # it the promotion's `reward.ean` would be null and no
+                    # one could trace it back to the gifted item.
                     reward_ean=ean or None,
                 )
                 if promotion:
                     promozioni.append(promotion)
                 else:
-                    # Il blocco e' completo ma il testo non si calcola:
-                    # resta comunque una condizione commerciale su merce
-                    # ordinabile, e sparire in silenzio non e' un'opzione.
+                    # The block is complete but the text doesn't parse into a
+                    # calculation: it's still a commercial condition on
+                    # purchasable items, so it can't just disappear.
                     promozioni.append(_condizione_da_leggere(
                         fornitore,
                         _riferimento(colonne, titolo, heading_row, row_number),
@@ -807,8 +772,8 @@ class PromotionService:
                 heading_text = ""
                 eligible_rows = []
         if heading_row is not None:
-            # Il foglio finisce con un blocco aperto: stessa perdita, in
-            # un punto dove nessun controllo passava.
+            # The sheet ends with a block still open: the same loss, at a
+            # point no other check catches.
             promozioni.append(_condizione_da_leggere(
                 fornitore,
                 _riferimento(colonne, titolo, heading_row, max(ultima_riga, heading_row)),
@@ -817,7 +782,7 @@ class PromotionService:
             ))
         return promozioni
 
-    # -- l'ingresso -------------------------------------------------------
+    # -- the entry point ----------------------------------------------
 
     def detect(self, review: dict[str, Any]) -> list[dict[str, Any]]:
         self.load_errors = []
@@ -828,13 +793,10 @@ class PromotionService:
         for product in review.get("products") or []:
             for offer in product.get("offers") or []:
                 supplier = offer_supplier_id(offer).casefold()
-                # ⚠ La regola «si puo' ordinare» la dice `offerta`, non questa
-                # riga: qui era riscritta a mano nella forma negata, che e' lo
-                # stesso accordo fra copie ma sotto un'altra faccia — tanto che
-                # la prova che scandaglia le copie non la vedeva.  Questa
-                # funzione decide quali offerte concorrono alle soglie delle
-                # promozioni, quindi una regola che cresce altrove e non qui
-                # sbaglia un omaggio.
+                # The "can it be ordered" rule is answered by `offerta`, not
+                # duplicated here: this function decides which offers count
+                # toward promotion thresholds, so a rule that grows elsewhere
+                # and not here would get a reward wrong.
                 if not supplier or not offer_is_available(offer):
                     continue
                 text = str(offer.get("promotionText") or "").strip()
@@ -858,9 +820,8 @@ class PromotionService:
                     if numeric:
                         promotions.append(numeric)
 
-        # Il registro si legge una volta sola: aprirlo per ogni gruppo di
-        # offerte vorrebbe dire rileggere lo stesso file decine di volte per
-        # ricevere sempre la stessa risposta.
+        # Read the registry once: opening it per offer group would mean
+        # re-reading the same file dozens of times for the same answer.
         gia_compreso_nel_prezzo = _fornitori_con_promozione_inclusa()
         for (supplier, _normalized), holders in grouped_text.items():
             products = [product for product, _offer in holders]
@@ -889,10 +850,10 @@ class PromotionService:
             )
 
         paths, senza_documento, adattatori_riconosciuti = _source_paths(review)
-        # Chi legge le condizioni dal proprio listino sono i fornitori che
-        # dichiarano dove le tengono: l'elenco lo fa il registro, e l'ordine
-        # e' quello alfabetico perche' due letture della stessa run devono
-        # dare lo stesso riepilogo.
+        # Only suppliers that declare where they keep their conditions get
+        # read from their own price list; the list comes from the registry,
+        # sorted alphabetically so two reads of the same run produce the same
+        # summary.
         for fornitore, voci in sorted(fornitori_con_condizioni_dichiarate().items()):
             promotions.extend(self._condizioni_del_fornitore(
                 fornitore, voci, paths.get(fornitore), fornitore in senza_documento,
@@ -904,22 +865,20 @@ class PromotionService:
     def _solo_quelle_che_cambiano_qualcosa(
         self, promotions: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        """Uno sconto gia' dentro il prezzo non e' una condizione da leggere.
+        """Drop discounts the price already includes; they aren't conditions worth surfacing.
 
-        ⚠ Deciso il 15 agosto 2026, con le parole di chi le leggeva: «LARICE fa
-        una INFINITA di sconti; mantieni solo offerte come quella del tostapane,
-        della bistecchiera, del sale lavastoviglie e simili — non mi interessa
-        vedere gli sconti che mi ha fatto».  Misurato sul listino vero della
-        settimana: **165 condizioni su 166 erano «Sconto numerico 10%»**, una per
-        riga di listino, tutte gia' comprese nel prezzo.  Sepolte in mezzo a
-        quelle, le tre soglie con omaggio non si vedevano — e una condizione che
-        non si legge vale come una che non c'e'.
+        Measured on a real weekly price list: 165 of 166 declared conditions
+        were a flat 10% numeric discount, one per row, all already included
+        in the price. Buried among those, the few real gift thresholds became
+        impossible to spot, and a condition nobody reads is as good as one
+        that doesn't exist.
 
-        La riga che resta e' quella che cambia una decisione: un premio in merce
-        (`soglia_omaggio`), oppure uno sconto che il prezzo NON contiene ancora e
-        che quindi sposta il totale.  Non si butta niente di calcolato: uno
-        sconto `already_applied` non ha mai prodotto un prezzo — lo rifiuta
-        `calculate_effective_price` — quindi qui cambia solo che cosa si legge.
+        What remains is only what changes a decision: a reward in goods
+        (`soglia_omaggio`), or a discount the price does NOT already contain
+        and therefore moves the total. Nothing calculated is discarded: an
+        `already_applied` discount never produced a price in the first place
+        — `calculate_effective_price` rejects it — so this only changes what
+        gets shown.
         """
 
         tenute: list[dict[str, Any]] = []
@@ -944,11 +903,11 @@ class PromotionService:
 
 
 def _numero_o(dichiarato: Any, ripiego: int) -> int:
-    """Un numero dichiarato dal registro, o il ripiego se non e' un numero.
+    """Return a registry-declared number, or the fallback if it isn't one.
 
-    Un registro imparato male non deve poter fermare la lettura: se
-    `data_start_row` arriva come testo, si legge dalla prima riga — cioe' un po'
-    piu' di quanto serve — invece di non leggere niente.
+    A badly learned registry entry must not be able to stop the read: if
+    `data_start_row` arrives as text, reading starts from row one — a bit more
+    than necessary — instead of reading nothing at all.
     """
 
     if isinstance(dichiarato, bool) or not isinstance(dichiarato, int):
