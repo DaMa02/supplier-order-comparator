@@ -436,7 +436,7 @@ class ProvaClientAI(unittest.TestCase):
 
     # ------------------------------------------------------------------ 18
     def test_18_la_chiave_non_esce_mai_dal_client(self):
-        segreta = "chiave-segretissima-di-daniele-0123456789"
+        segreta = "chiave-segretissima-di-esempio-0123456789"
         # The 401 echoes the header, straddling the 300-character point where the
         # message gets truncated: if truncation happened before the key is
         # masked, the first part of it would leak.

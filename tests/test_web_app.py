@@ -7747,7 +7747,7 @@ class CominciareUnaComparazioneNuova(unittest.TestCase):
     def test_il_documento_collegato_da_fuori_non_si_cancella(self) -> None:
         """Input documents are read-only: only the application's own copies are removed, never the original."""
 
-        esterno = self.root / "fuori" / "listino_di_daniele.xlsx"
+        esterno = self.root / "fuori" / "listino_esterno.xlsx"
         esterno.parent.mkdir(parents=True, exist_ok=True)
         esterno.write_bytes(b"il file vero di chi ordina")
         review = json.loads(self.review_path.read_text(encoding="utf-8"))

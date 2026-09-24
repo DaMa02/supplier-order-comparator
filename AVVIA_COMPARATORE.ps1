@@ -254,7 +254,7 @@ function Sync-DaGitHub {
     }
 
     if ($copiaRegistro) {
-        Write-Host "[SYNC] Gli adattatori imparati qui sono stati riportati alla versione di Daniele." -ForegroundColor Yellow
+        Write-Host "[SYNC] Gli adattatori imparati qui sono stati riportati alla versione spedita." -ForegroundColor Yellow
         Write-Host "       La copia di prima e' in $copiaRegistro" -ForegroundColor Yellow
     }
 }

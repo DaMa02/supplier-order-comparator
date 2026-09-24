@@ -59,8 +59,7 @@ LISTINO_XLS = Path(
 LISTINO_XLSX = Path(
     os.environ.get(
         "LISTINO_XLSX_DI_PARAGONE",
-        r"C:\Users\HP\AppData\Local\Temp\claude\C--Users-HP-Desktop-ChatGPT"
-        r"\41e85a3c-f814-42e2-94b2-a314e1cd0bcf\scratchpad\noce\formattato_104233.xlsx",
+        str(RADICE / "listini-storici" / "formattato_104233.xlsx"),
     )
 )
 
